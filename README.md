@@ -71,11 +71,16 @@ Docker Compose (`Deployment/docker-compose.yml`) creates the `noteassistant` dat
 
 ### Step 1 — Create the database
 
-Docker Compose handles this via the `POSTGRES_DB` environment variable. If you're provisioning manually (e.g. Azure Flexible Server), run:
+Docker Compose handles this via the `POSTGRES_DB` environment variable. If you're provisioning manually (e.g. Azure Flexible Server), use a failsafe command that creates the database only when it does not already exist:
 
 ```sql
-CREATE DATABASE noteassistant;
+SELECT 'CREATE DATABASE noteassistant'
+WHERE NOT EXISTS (
+    SELECT 1 FROM pg_database WHERE datname = 'noteassistant'
+)\gexec
 ```
+
+> `CREATE DATABASE IF NOT EXISTS` is not supported in PostgreSQL, so the `\gexec` pattern is the safe equivalent in `psql`.
 
 ### Step 2 — Enable extensions
 
