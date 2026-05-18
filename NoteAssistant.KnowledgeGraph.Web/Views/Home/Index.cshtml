@@ -1,0 +1,247 @@
+@{
+    ViewData["Title"] = "Knowledge Graph Workbench";
+    var backendBaseUrl = (string?)ViewData["BackendBaseUrl"] ?? "https://localhost:7010";
+}
+
+<div class="container py-3">
+    <h1 class="mb-4">Knowledge Graph Workbench</h1>
+
+    <div class="alert alert-info">
+        Backend endpoint: <code id="backendBaseUrl">@backendBaseUrl</code>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">1) Upload markdown document</div>
+        <div class="card-body">
+            <div class="input-group">
+                <input class="form-control" type="file" id="markdownFile" accept=".md" />
+                <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+            </div>
+            <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">2) Decomposition & ingestion status</div>
+        <div class="card-body">
+            <button class="btn btn-outline-secondary mb-3" id="refreshStatusBtn">Refresh Status</button>
+            <div id="statusOutput" class="mb-3"></div>
+            <h5>Chunks</h5>
+            <ul id="chunksOutput"></ul>
+            <h5>Entities</h5>
+            <ul id="entitiesOutput"></ul>
+            <h5>Chunk → Entity links</h5>
+            <ul id="mentionsOutput"></ul>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">3) Query editor + assistant</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
+                <div class="input-group">
+                    <input class="form-control" id="assistantPrompt" placeholder="e.g. show all chunks and mentioned entities" />
+                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                </div>
+                <small class="text-muted" id="assistExplanation"></small>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="queryInput">SQL query</label>
+                <textarea id="queryInput" class="form-control" rows="7"></textarea>
+            </div>
+            <button class="btn btn-success" id="runQueryBtn">Run query</button>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">4) Query result + graph explorer</div>
+        <div class="card-body">
+            <div id="queryError" class="text-danger mb-2"></div>
+            <div class="table-responsive mb-3">
+                <table class="table table-sm table-bordered" id="resultsTable"></table>
+            </div>
+            <div id="graphView" style="height: 420px; border: 1px solid #ddd;"></div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script>
+        const backendBaseUrl = document.getElementById('backendBaseUrl').innerText.trim().replace(/\/$/, '');
+        let currentDocumentId = null;
+
+        const uploadBtn = document.getElementById('uploadBtn');
+        const refreshStatusBtn = document.getElementById('refreshStatusBtn');
+        const assistBtn = document.getElementById('assistBtn');
+        const runQueryBtn = document.getElementById('runQueryBtn');
+
+        uploadBtn.addEventListener('click', uploadFile);
+        refreshStatusBtn.addEventListener('click', refreshStatus);
+        assistBtn.addEventListener('click', assistQuery);
+        runQueryBtn.addEventListener('click', runQuery);
+
+        document.getElementById('queryInput').value = `SELECT * FROM cypher('knowledge_graph', $$\n    MATCH p=(n)-[r]->(m)\n    RETURN n, r, m\n    LIMIT 50\n$$) AS (n agtype, r agtype, m agtype);`;
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('markdownFile');
+            const file = fileInput.files[0];
+            if (!file) {
+                setMessage('uploadMessage', 'Please select a .md file first.', 'text-danger');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch(`${backendBaseUrl}/api/documents/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                setMessage('uploadMessage', payload.error || 'Upload failed.', 'text-danger');
+                return;
+            }
+
+            currentDocumentId = payload.documentId;
+            setMessage('uploadMessage', `Document ${payload.documentId} analyzed (${payload.status.state}).`, 'text-success');
+            renderDecomposition(payload);
+            renderStatus(payload.status);
+        }
+
+        async function refreshStatus() {
+            if (!currentDocumentId) {
+                return;
+            }
+
+            const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/status`);
+            const payload = await response.json();
+            if (response.ok) {
+                renderStatus(payload);
+            }
+        }
+
+        async function assistQuery() {
+            const prompt = document.getElementById('assistantPrompt').value;
+            const response = await fetch(`${backendBaseUrl}/api/query/assist`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt })
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                document.getElementById('assistExplanation').innerText = payload.error || 'Assistant failed.';
+                return;
+            }
+
+            document.getElementById('queryInput').value = payload.suggestedCypher;
+            document.getElementById('assistExplanation').innerText = payload.explanation;
+        }
+
+        async function runQuery() {
+            const query = document.getElementById('queryInput').value;
+            const response = await fetch(`${backendBaseUrl}/api/query`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, graphName: 'knowledge_graph' })
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                document.getElementById('queryError').innerText = payload.error || 'Query failed.';
+                renderResults([]);
+                renderGraph([], []);
+                return;
+            }
+
+            document.getElementById('queryError').innerText = '';
+            renderResults(payload.rows || []);
+            renderGraph(payload.nodes || [], payload.edges || []);
+        }
+
+        function renderDecomposition(payload) {
+            renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
+            renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
+            renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
+        }
+
+        function renderStatus(status) {
+            document.getElementById('statusOutput').innerText =
+                `Document ${status.documentId}: ${status.state} | ${status.message} | Updated: ${status.updatedAt}`;
+        }
+
+        function renderList(elementId, items) {
+            const list = document.getElementById(elementId);
+            list.innerHTML = '';
+            for (const item of items) {
+                const li = document.createElement('li');
+                li.innerText = item;
+                list.appendChild(li);
+            }
+        }
+
+        function renderResults(rows) {
+            const table = document.getElementById('resultsTable');
+            table.innerHTML = '';
+            if (!rows.length) {
+                return;
+            }
+
+            const keys = Object.keys(rows[0]);
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            keys.forEach(k => {
+                const th = document.createElement('th');
+                th.innerText = k;
+                headRow.appendChild(th);
+            });
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                keys.forEach(key => {
+                    const td = document.createElement('td');
+                    td.innerText = row[key] ?? '';
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+        }
+
+        function renderGraph(nodes, edges) {
+            const container = document.getElementById('graphView');
+            container.innerHTML = '';
+
+            if (!nodes.length) {
+                container.innerText = 'No graph primitives returned. Use a query that returns vertices/edges.';
+                return;
+            }
+
+            if (!window.vis || !window.vis.Network) {
+                container.innerText = 'vis-network failed to load. Check internet access or bundle the library locally.';
+                return;
+            }
+
+            const visNodes = new vis.DataSet(nodes.map(node => ({ id: node.id, label: node.title, group: node.label })));
+            const visEdges = new vis.DataSet(edges.map(edge => ({ from: edge.source, to: edge.target, label: edge.label, arrows: 'to' })));
+
+            new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+                interaction: { hover: true, navigationButtons: true },
+                physics: { stabilization: false }
+            });
+        }
+
+        function setMessage(id, text, cssClass) {
+            const el = document.getElementById(id);
+            el.className = cssClass;
+            el.innerText = text;
+        }
+    </script>
+}

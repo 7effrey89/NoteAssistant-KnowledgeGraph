@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="NoteAssistant.KnowledgeGraph.Backend/NoteAssistant.KnowledgeGraph.Backend.csproj" />
+  <Project Path="NoteAssistant.KnowledgeGraph.Web/NoteAssistant.KnowledgeGraph.Web.csproj" />
+</Solution>

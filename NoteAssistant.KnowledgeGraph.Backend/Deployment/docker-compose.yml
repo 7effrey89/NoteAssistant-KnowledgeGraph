@@ -1,0 +1,12 @@
+services:
+  postgres-age:
+    image: apache/age:PG16_latest
+    container_name: noteassistant-postgres-age
+    environment:
+      POSTGRES_DB: noteassistant
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d
