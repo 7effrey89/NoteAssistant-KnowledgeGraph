@@ -49,9 +49,15 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
             return new GraphQueryResponse(false, "ConnectionStrings:AgeDatabase is not configured in backend settings.", [], [], []);
         }
 
-        if (string.IsNullOrWhiteSpace(request.Query) || !request.Query.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(request.Cypher))
         {
-            return new GraphQueryResponse(false, "Only SELECT queries are allowed from the web interface.", [], [], []);
+            return new GraphQueryResponse(false, "Cypher query text is required.", [], [], []);
+        }
+
+        var normalized = request.Cypher.Trim();
+        if (Regex.IsMatch(normalized, @"\b(create|merge|delete|set|drop|remove|call)\b", RegexOptions.IgnoreCase))
+        {
+            return new GraphQueryResponse(false, "Query editor is read-only. Use MATCH/RETURN style Cypher.", [], [], []);
         }
 
         try
@@ -63,10 +69,13 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
             await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
 
-            await using var command = new NpgsqlCommand(request.Query, connection)
+            const string sql = "SELECT * FROM cypher(@graph_name, @cypher_query) AS (result agtype);";
+            await using var command = new NpgsqlCommand(sql, connection)
             {
                 CommandType = CommandType.Text
             };
+            command.Parameters.AddWithValue("graph_name", request.GraphName);
+            command.Parameters.AddWithValue("cypher_query", normalized);
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))

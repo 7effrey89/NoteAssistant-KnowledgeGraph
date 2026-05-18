@@ -11,19 +11,19 @@ public sealed class QueryAssistantService
         if (value.Contains("document", StringComparison.OrdinalIgnoreCase) && value.Contains("chunk", StringComparison.OrdinalIgnoreCase))
         {
             return new QueryAssistantResponse(
-                "SELECT * FROM cypher('knowledge_graph', $$ MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk) RETURN d.title, c.id, c.text ORDER BY c.id $$) AS (title agtype, chunk_id agtype, chunk_text agtype);",
+                "MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)\nRETURN d.title, c.id, c.text\nORDER BY c.id",
                 "Returns documents with their chunk sequence.");
         }
 
         if (value.Contains("entity", StringComparison.OrdinalIgnoreCase) || value.Contains("mentions", StringComparison.OrdinalIgnoreCase))
         {
             return new QueryAssistantResponse(
-                "SELECT * FROM cypher('knowledge_graph', $$ MATCH (c:Chunk)-[:MENTIONS]->(e) RETURN c.id, labels(e), e.name ORDER BY c.id $$) AS (chunk_id agtype, labels agtype, entity_name agtype);",
+                "MATCH (c:Chunk)-[:MENTIONS]->(e)\nRETURN c.id, labels(e), e.name\nORDER BY c.id",
                 "Shows which entities are mentioned by each chunk.");
         }
 
         return new QueryAssistantResponse(
-            "SELECT * FROM cypher('knowledge_graph', $$ MATCH p=(n)-[r]->(m) RETURN n, r, m LIMIT 50 $$) AS (n agtype, r agtype, m agtype);",
+            "MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50",
             "General-purpose graph exploration query that powers the visual explorer.");
     }
 }

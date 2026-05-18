@@ -47,7 +47,7 @@
                 <small class="text-muted" id="assistExplanation"></small>
             </div>
             <div class="mb-3">
-                <label class="form-label" for="queryInput">SQL query</label>
+                <label class="form-label" for="queryInput">Cypher query</label>
                 <textarea id="queryInput" class="form-control" rows="7"></textarea>
             </div>
             <button class="btn btn-success" id="runQueryBtn">Run query</button>
@@ -82,7 +82,7 @@
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
 
-        document.getElementById('queryInput').value = `SELECT * FROM cypher('knowledge_graph', $$\n    MATCH p=(n)-[r]->(m)\n    RETURN n, r, m\n    LIMIT 50\n$$) AS (n agtype, r agtype, m agtype);`;
+        document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
 
         async function uploadFile() {
             const fileInput = document.getElementById('markdownFile');
@@ -147,7 +147,7 @@
             const response = await fetch(`${backendBaseUrl}/api/query`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, graphName: 'knowledge_graph' })
+                body: JSON.stringify({ cypher: query, graphName: 'knowledge_graph' })
             });
 
             const payload = await response.json();

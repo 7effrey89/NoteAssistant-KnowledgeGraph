@@ -18,7 +18,7 @@ public sealed record GraphIngestionPlan(
     IReadOnlyList<string> SqlStatements,
     IngestionStatusDto Status);
 
-public sealed record GraphQueryRequest(string Query, string GraphName = "knowledge_graph");
+public sealed record GraphQueryRequest(string Cypher, string GraphName = "knowledge_graph");
 
 public sealed record GraphQueryResponse(
     bool Success,

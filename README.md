@@ -23,7 +23,7 @@ C# solution for a PostgreSQL + Apache AGE knowledge graph with:
 ## Run PostgreSQL + Apache AGE
 
 ```bash
-cd /home/runner/work/NoteAssistant-KnowledgeGraph/NoteAssistant-KnowledgeGraph/NoteAssistant.KnowledgeGraph.Backend/Deployment
+cd NoteAssistant.KnowledgeGraph.Backend/Deployment
 docker compose up -d
 ```
 
@@ -36,7 +36,7 @@ This provisions:
 ## Run backend API
 
 ```bash
-cd /home/runner/work/NoteAssistant-KnowledgeGraph/NoteAssistant-KnowledgeGraph/NoteAssistant.KnowledgeGraph.Backend
+cd NoteAssistant.KnowledgeGraph.Backend
 dotnet run
 ```
 
@@ -55,19 +55,16 @@ Backend launch profile exposes Swagger and APIs like:
 ## Run web app
 
 ```bash
-cd /home/runner/work/NoteAssistant-KnowledgeGraph/NoteAssistant-KnowledgeGraph/NoteAssistant.KnowledgeGraph.Web
+cd NoteAssistant.KnowledgeGraph.Web
 dotnet run
 ```
 
 Open the web URL, upload a markdown file, inspect chunks/entities/status, and execute graph queries.
 
-## Example AGE query
+## Example Cypher query for the web query editor
 
-```sql
-SELECT *
-FROM cypher('knowledge_graph', $$
-    MATCH p=(n)-[r]->(m)
-    RETURN n, r, m
-    LIMIT 50
-$$) AS (n agtype, r agtype, m agtype);
+```cypher
+MATCH p=(n)-[r]->(m)
+RETURN n, r, m
+LIMIT 50
 ```
