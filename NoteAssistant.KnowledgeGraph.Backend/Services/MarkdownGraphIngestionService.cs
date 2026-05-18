@@ -7,7 +7,7 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionService
 {
     private const int MaxChunkSize = 280;
-    private static int _documentSeed;
+    private static int _documentSeed = (int)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 1_000_000);
 
     public GraphIngestionPlan CreateGraphPlan(string fileName, string markdownContent)
     {
@@ -166,9 +166,25 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MATCH (d:Document {{id:{documentId}}}), (c:Chunk) WHERE c.id >= {documentId * 1000} AND c.id < {(documentId + 1) * 1000} MERGE (d)-[:HAS_CHUNK]->(c) $$) as (v agtype);");
 
-        statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (o:Company {name:\"OpenAI\"}) MERGE (m)-[:PARTNERED_WITH]->(o) $$) as (v agtype);");
-        statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (t:Topic {name:\"AI infrastructure\"}) MERGE (m)-[:INVESTS_IN]->(t) $$) as (v agtype);");
-        statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (p:Platform {name:\"Azure\"}) MERGE (m)-[:EXPANDS]->(p) $$) as (v agtype);");
+        var hasMicrosoft = entities.Any(e => e.Label == "Company" && e.Name.Equals("Microsoft", StringComparison.OrdinalIgnoreCase));
+        var hasOpenAi = entities.Any(e => e.Label == "Company" && e.Name.Equals("OpenAI", StringComparison.OrdinalIgnoreCase));
+        var hasAzure = entities.Any(e => e.Label == "Platform" && e.Name.Equals("Azure", StringComparison.OrdinalIgnoreCase));
+        var hasAiInfrastructure = entities.Any(e => e.Label == "Topic" && e.Name.Equals("AI infrastructure", StringComparison.OrdinalIgnoreCase));
+
+        if (hasMicrosoft && hasOpenAi)
+        {
+            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (o:Company {name:\"OpenAI\"}) MERGE (m)-[:PARTNERED_WITH]->(o) $$) as (v agtype);");
+        }
+
+        if (hasMicrosoft && hasAiInfrastructure)
+        {
+            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (t:Topic {name:\"AI infrastructure\"}) MERGE (m)-[:INVESTS_IN]->(t) $$) as (v agtype);");
+        }
+
+        if (hasMicrosoft && hasAzure)
+        {
+            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (p:Platform {name:\"Azure\"}) MERGE (m)-[:EXPANDS]->(p) $$) as (v agtype);");
+        }
 
         return statements;
     }
