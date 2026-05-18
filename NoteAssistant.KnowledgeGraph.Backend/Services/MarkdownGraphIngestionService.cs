@@ -6,8 +6,8 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionService
 {
-    private const int MaxChunkSize = 280;
-    private static int _documentSeed = (int)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 1_000_000);
+    private const int MaxChunkCharacters = 280;
+    private static int _documentSeed = CreateInitialDocumentSeed();
 
     public GraphIngestionPlan CreateGraphPlan(string fileName, string markdownContent)
     {
@@ -46,7 +46,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var chunkIndex = 1;
         foreach (var block in blocks)
         {
-            if (block.Length <= MaxChunkSize)
+            if (block.Length <= MaxChunkCharacters)
             {
                 yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, block);
                 continue;
@@ -63,7 +63,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
                     continue;
                 }
 
-                if (current.Length > 0 && current.Length + candidate.Length + 1 > MaxChunkSize)
+                if (current.Length > 0 && current.Length + candidate.Length + 1 > MaxChunkCharacters)
                 {
                     yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, current.ToString());
                     current.Clear();
@@ -240,4 +240,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         return candidate is null ? string.Empty : candidate.ToLowerInvariant();
     }
+
+    private static int CreateInitialDocumentSeed()
+        => (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1_000_000);
 }

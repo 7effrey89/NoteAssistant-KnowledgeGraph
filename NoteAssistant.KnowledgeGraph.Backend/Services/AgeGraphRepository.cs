@@ -8,6 +8,8 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<AgeGraphRepository> logger)
 {
+    private const int MaxTraversalHops = 3;
+    private const int MaxVectorResultLimit = 50;
     private readonly string? _connectionString = configuration.GetConnectionString("AgeDatabase");
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_connectionString);
@@ -185,7 +187,7 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
             return [];
         }
 
-        var maxHops = Math.Clamp(hops, 1, 3);
+        var maxHops = Math.Clamp(hops, 1, MaxTraversalHops);
         var expanded = new HashSet<string>(seedEntities, StringComparer.OrdinalIgnoreCase);
 
         foreach (var seed in seedEntities)
@@ -235,7 +237,7 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
             return [];
         }
 
-        var constrainedLimit = Math.Clamp(limit, 1, 50);
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
         var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
         const string sql = """
                            SELECT c.id,
