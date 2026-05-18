@@ -64,6 +64,26 @@
             <div id="graphView" style="height: 420px; border: 1px solid #ddd;"></div>
         </div>
     </div>
+
+    <div class="card mb-4">
+        <div class="card-header">5) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <label class="form-label" for="hybridQuestion">Question</label>
+                <div class="input-group">
+                    <input class="form-control" id="hybridQuestion" value="What did Microsoft do with OpenAI?" />
+                    <button class="btn btn-primary" id="runHybridBtn">Run Hybrid Retrieval</button>
+                </div>
+            </div>
+            <div id="hybridError" class="text-danger mb-2"></div>
+            <div class="mb-2"><strong>Detected entities:</strong> <span id="detectedEntitiesOutput"></span></div>
+            <div class="mb-2"><strong>Graph-expanded entities:</strong> <span id="graphEntitiesOutput"></span></div>
+            <h6>Vector-ranked chunks (graph-filtered)</h6>
+            <ul id="hybridChunksOutput"></ul>
+            <h6>Prompt context sent to answering LLM</h6>
+            <pre id="hybridPromptOutput" class="p-2 bg-light border rounded"></pre>
+        </div>
+    </div>
 </div>
 
 @section Scripts {
@@ -76,11 +96,13 @@
         const refreshStatusBtn = document.getElementById('refreshStatusBtn');
         const assistBtn = document.getElementById('assistBtn');
         const runQueryBtn = document.getElementById('runQueryBtn');
+        const runHybridBtn = document.getElementById('runHybridBtn');
 
         uploadBtn.addEventListener('click', uploadFile);
         refreshStatusBtn.addEventListener('click', refreshStatus);
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
+        runHybridBtn.addEventListener('click', runHybridRetrieval);
 
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
 
@@ -161,6 +183,41 @@
             document.getElementById('queryError').innerText = '';
             renderResults(payload.rows || []);
             renderGraph(payload.nodes || [], payload.edges || []);
+        }
+
+        async function runHybridRetrieval() {
+            const question = document.getElementById('hybridQuestion').value.trim();
+            if (!question) {
+                document.getElementById('hybridError').innerText = 'Question is required.';
+                return;
+            }
+
+            const response = await fetch(`${backendBaseUrl}/api/retrieval/hybrid`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: question,
+                    graphName: 'knowledge_graph',
+                    maxHops: 2,
+                    limit: 10
+                })
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                document.getElementById('hybridError').innerText = payload.error || 'Hybrid retrieval failed.';
+                document.getElementById('detectedEntitiesOutput').innerText = '';
+                document.getElementById('graphEntitiesOutput').innerText = '';
+                renderList('hybridChunksOutput', []);
+                document.getElementById('hybridPromptOutput').innerText = '';
+                return;
+            }
+
+            document.getElementById('hybridError').innerText = '';
+            document.getElementById('detectedEntitiesOutput').innerText = (payload.detectedEntities || []).join(', ');
+            document.getElementById('graphEntitiesOutput').innerText = (payload.graphEntities || []).join(', ');
+            renderList('hybridChunksOutput', (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`));
+            document.getElementById('hybridPromptOutput').innerText = payload.promptContext || '';
         }
 
         function renderDecomposition(payload) {

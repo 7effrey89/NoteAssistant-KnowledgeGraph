@@ -4,8 +4,10 @@ C# solution for a PostgreSQL + Apache AGE knowledge graph with:
 
 1. **`NoteAssistant.KnowledgeGraph.Backend`**
    - Deployment assets for PostgreSQL + AGE
-   - Markdown ingestion into graph structures (`Document`, `Chunk`, entities)
-   - Query API + Cypher query assistant
+   - Markdown ingestion into hybrid GraphRAG model:
+     - relational tables for `chunks` (+ embedding), `entities`, and `chunk_entities`
+     - AGE graph for entity relationships
+   - Query API + Cypher query assistant + hybrid retrieval pipeline
 2. **`NoteAssistant.KnowledgeGraph.Web`**
    - Upload UI for `.md` documents
    - Decomposition/status view
@@ -32,6 +34,7 @@ This provisions:
 - User: `postgres`
 - Password: `postgres`
 - Graph: `knowledge_graph`
+- Extensions (when available): `age`, `vector`, `pg_diskann`
 
 ## Run backend API
 
@@ -51,6 +54,7 @@ Backend launch profile exposes Swagger and APIs like:
 - `GET /api/documents/{documentId}/status`
 - `POST /api/query`
 - `POST /api/query/assist`
+- `POST /api/retrieval/hybrid`
 
 ## Run web app
 
@@ -60,6 +64,19 @@ dotnet run
 ```
 
 Open the web URL, upload a markdown file, inspect chunks/entities/status, and execute graph queries.
+
+## Hybrid retrieval flow (GraphRAG)
+
+1. **Entity detection** from question text
+2. **Graph traversal in AGE** to expand relevant entities
+3. **Graph-filtered vector search** over relational `chunks` table
+4. **Prompt context assembly** for final LLM answer
+
+Order is intentionally:
+
+`Graph -> Vector -> LLM`
+
+and not `Vector -> Graph`.
 
 ## Example Cypher query for the web query editor
 

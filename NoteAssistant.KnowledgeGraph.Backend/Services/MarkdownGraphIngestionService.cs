@@ -17,7 +17,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var entities = ExtractEntities(markdownContent, chunks).ToList();
         var mentions = BuildMentions(chunks, entities).ToList();
 
-        var sql = BuildSql(documentId, title, chunks, entities, mentions);
+        var sql = BuildSql(documentId, fileName, title, chunks, entities, mentions);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
         return new GraphIngestionPlan(documentId, "knowledge_graph", title, chunks, entities, mentions, sql, status);
@@ -39,7 +39,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         if (blocks.Count == 0)
         {
-            yield return new ChunkDto(documentId * 1000 + 1, CleanText(normalized));
+            yield return new ChunkDto(documentId * 1000 + 1, 1, CleanText(normalized));
             yield break;
         }
 
@@ -48,7 +48,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         {
             if (block.Length <= MaxChunkSize)
             {
-                yield return new ChunkDto(documentId * 1000 + chunkIndex++, block);
+                yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, block);
                 continue;
             }
 
@@ -65,7 +65,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
                 if (current.Length > 0 && current.Length + candidate.Length + 1 > MaxChunkSize)
                 {
-                    yield return new ChunkDto(documentId * 1000 + chunkIndex++, current.ToString());
+                    yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, current.ToString());
                     current.Clear();
                 }
 
@@ -78,7 +78,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
             if (current.Length > 0)
             {
-                yield return new ChunkDto(documentId * 1000 + chunkIndex++, current.ToString());
+                yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, current.ToString());
             }
         }
     }
@@ -134,59 +134,72 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private static List<string> BuildSql(int documentId, string title, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions)
+    private static List<string> BuildSql(int documentId, string fileName, string title, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions)
     {
         var statements = new List<string>
         {
             "LOAD 'age';",
             "SET search_path = ag_catalog, \"$user\", public;",
+            "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS vector; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'vector extension not available in this environment.'; END $$;",
+            "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS pg_diskann; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'pg_diskann extension not available in this environment.'; END $$;",
             "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ag_catalog.ag_graph WHERE name = 'knowledge_graph') THEN create_graph('knowledge_graph') END;",
-            $"SELECT * FROM cypher('knowledge_graph', $$ CREATE (d:Document {{id: {documentId}, title: \"{Escape(title)}\"}}) $$) as (d agtype);"
+            "CREATE TABLE IF NOT EXISTS documents (id BIGINT PRIMARY KEY, title TEXT NOT NULL, file_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+            "CREATE TABLE IF NOT EXISTS entities (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+            "CREATE TABLE IF NOT EXISTS chunks (id BIGSERIAL PRIMARY KEY, document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, embedding vector(1536), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(document_id, chunk_index));",
+            "CREATE TABLE IF NOT EXISTS chunk_entities (chunk_id BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, PRIMARY KEY(chunk_id, entity_id));",
+            "CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id, chunk_index);",
+            "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);",
+            "DO $$ BEGIN CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING diskann (embedding vector_cosine_ops); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'diskann index creation skipped.'; END $$;",
+            "CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON chunk_entities(entity_id);",
+            $"INSERT INTO documents(id, title, file_name) VALUES ({documentId}, '{EscapeSql(title)}', '{EscapeSql(fileName)}') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, file_name = EXCLUDED.file_name;"
         };
 
         foreach (var chunk in chunks)
         {
-            statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ CREATE (c:Chunk {{id: {chunk.Id}, text: \"{Escape(chunk.Text)}\"}}) $$) as (c agtype);");
-        }
-
-        for (var i = 0; i < chunks.Count - 1; i++)
-        {
-            statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MATCH (c1:Chunk {{id:{chunks[i].Id}}}), (c2:Chunk {{id:{chunks[i + 1].Id}}}) CREATE (c1)-[:NEXT]->(c2) $$) as (v agtype);");
+            statements.Add($"INSERT INTO chunks(document_id, chunk_index, content, embedding) VALUES ({documentId}, {chunk.ChunkIndex}, '{EscapeSql(chunk.Text)}', NULL) ON CONFLICT (document_id, chunk_index) DO UPDATE SET content = EXCLUDED.content;");
         }
 
         foreach (var entity in entities)
         {
+            statements.Add($"INSERT INTO entities(label, name) VALUES ('{EscapeSql(entity.Label)}', '{EscapeSql(entity.Name)}') ON CONFLICT (name) DO UPDATE SET label = EXCLUDED.label;");
             statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MERGE (e:{entity.Label} {{name:\"{Escape(entity.Name)}\"}}) $$) as (e agtype);");
         }
 
+        var chunkIndexLookup = chunks.ToDictionary(c => c.Id, c => c.ChunkIndex);
         foreach (var mention in mentions)
         {
-            statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MATCH (c:Chunk {{id:{mention.ChunkId}}}), (e:{mention.EntityLabel} {{name:\"{Escape(mention.EntityName)}\"}}) MERGE (c)-[:MENTIONS]->(e) $$) as (v agtype);");
+            if (!chunkIndexLookup.TryGetValue(mention.ChunkId, out var chunkIndex))
+            {
+                continue;
+            }
+
+            statements.Add($"INSERT INTO chunk_entities(chunk_id, entity_id) SELECT c.id, e.id FROM chunks c JOIN entities e ON e.name = '{EscapeSql(mention.EntityName)}' WHERE c.document_id = {documentId} AND c.chunk_index = {chunkIndex} ON CONFLICT DO NOTHING;");
         }
 
-        statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MATCH (d:Document {{id:{documentId}}}), (c:Chunk) WHERE c.id >= {documentId * 1000} AND c.id < {(documentId + 1) * 1000} MERGE (d)-[:HAS_CHUNK]->(c) $$) as (v agtype);");
-
-        var hasMicrosoft = entities.Any(e => e.Label == "Company" && e.Name.Equals("Microsoft", StringComparison.OrdinalIgnoreCase));
-        var hasOpenAi = entities.Any(e => e.Label == "Company" && e.Name.Equals("OpenAI", StringComparison.OrdinalIgnoreCase));
-        var hasAzure = entities.Any(e => e.Label == "Platform" && e.Name.Equals("Azure", StringComparison.OrdinalIgnoreCase));
-        var hasAiInfrastructure = entities.Any(e => e.Label == "Topic" && e.Name.Equals("AI infrastructure", StringComparison.OrdinalIgnoreCase));
-
-        if (hasMicrosoft && hasOpenAi)
+        foreach (var pair in BuildEntityPairsByChunk(mentions))
         {
-            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (o:Company {name:\"OpenAI\"}) MERGE (m)-[:PARTNERED_WITH]->(o) $$) as (v agtype);");
-        }
-
-        if (hasMicrosoft && hasAiInfrastructure)
-        {
-            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (t:Topic {name:\"AI infrastructure\"}) MERGE (m)-[:INVESTS_IN]->(t) $$) as (v agtype);");
-        }
-
-        if (hasMicrosoft && hasAzure)
-        {
-            statements.Add("SELECT * FROM cypher('knowledge_graph', $$ MATCH (m:Company {name:\"Microsoft\"}), (p:Platform {name:\"Azure\"}) MERGE (m)-[:EXPANDS]->(p) $$) as (v agtype);");
+            statements.Add($"SELECT * FROM cypher('knowledge_graph', $$ MATCH (a {{name:\"{Escape(pair.Left)}\"}}), (b {{name:\"{Escape(pair.Right)}\"}}) MERGE (a)-[:RELATED_TO]->(b) $$) as (v agtype);");
         }
 
         return statements;
+    }
+
+    private static IEnumerable<(string Left, string Right)> BuildEntityPairsByChunk(IEnumerable<ChunkEntityLinkDto> mentions)
+    {
+        var grouped = mentions
+            .GroupBy(m => m.ChunkId)
+            .Select(g => g.Select(x => x.EntityName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
+
+        foreach (var entities in grouped)
+        {
+            for (var i = 0; i < entities.Count; i++)
+            {
+                for (var j = i + 1; j < entities.Count; j++)
+                {
+                    yield return (entities[i], entities[j]);
+                }
+            }
+        }
     }
 
     private static string Escape(string value)
@@ -196,6 +209,9 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal)
             .Replace("\t", "\\t", StringComparison.Ordinal);
+
+    private static string EscapeSql(string value)
+        => value.Replace("'", "''", StringComparison.Ordinal);
 
     private static string CleanText(string value)
     {

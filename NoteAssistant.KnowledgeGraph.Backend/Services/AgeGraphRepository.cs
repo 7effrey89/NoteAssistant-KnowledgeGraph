@@ -100,6 +100,39 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
         }
     }
 
+    public async Task<HybridRetrievalResponse> ExecuteHybridRetrievalAsync(HybridRetrievalRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new HybridRetrievalResponse(false, "ConnectionStrings:AgeDatabase is not configured in backend settings.", [], [], [], string.Empty, "Graph -> Vector -> LLM");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Query))
+        {
+            return new HybridRetrievalResponse(false, "Query is required.", [], [], [], string.Empty, "Graph -> Vector -> LLM");
+        }
+
+        var detectedEntities = DetectEntities(request.Query);
+
+        try
+        {
+            await using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+
+            var graphEntities = await ExpandEntitiesByGraphAsync(connection, request.GraphName, detectedEntities, request.MaxHops, cancellationToken);
+            var vector = request.QueryEmbedding is { Length: > 0 } ? request.QueryEmbedding : CreatePseudoEmbedding(request.Query, 1536);
+            var chunks = await QueryChunksByEntitiesAndVectorAsync(connection, graphEntities, vector, request.Limit, cancellationToken);
+            var prompt = BuildPromptContext(graphEntities, chunks);
+
+            return new HybridRetrievalResponse(true, null, detectedEntities, graphEntities, chunks, prompt, "Graph -> Vector -> LLM");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Hybrid retrieval pipeline failed.");
+            return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], string.Empty, "Graph -> Vector -> LLM");
+        }
+    }
+
     private static bool IsReadOnlyCypher(string query)
     {
         if (query.Contains(';', StringComparison.Ordinal) || query.Contains("--", StringComparison.Ordinal) || query.Contains("/*", StringComparison.Ordinal))
@@ -114,6 +147,194 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
 
         return !Regex.IsMatch(query, @"\b(create|merge|delete|set|drop|remove|call|load)\b", RegexOptions.IgnoreCase);
     }
+
+    private static List<string> DetectEntities(string query)
+    {
+        var known = new[] { "Microsoft", "OpenAI", "Azure", "PostgreSQL", "Apache AGE", "DiskANN", "pgvector" };
+        var entities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in known)
+        {
+            if (query.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+            {
+                entities.Add(candidate);
+            }
+        }
+
+        foreach (Match match in Regex.Matches(query, @"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)?\b"))
+        {
+            var value = match.Value.Trim();
+            if (value.Length is >= 3 and <= 80)
+            {
+                entities.Add(value);
+            }
+        }
+
+        return entities.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).Take(8).ToList();
+    }
+
+    private static async Task<List<string>> ExpandEntitiesByGraphAsync(
+        NpgsqlConnection connection,
+        string graphName,
+        IReadOnlyCollection<string> seedEntities,
+        int hops,
+        CancellationToken cancellationToken)
+    {
+        if (seedEntities.Count == 0)
+        {
+            return [];
+        }
+
+        var maxHops = Math.Clamp(hops, 1, 3);
+        var expanded = new HashSet<string>(seedEntities, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in seedEntities)
+        {
+            if (!Regex.IsMatch(seed, @"^[a-zA-Z0-9\s._-]{1,80}$"))
+            {
+                continue;
+            }
+
+            var cypher = $"MATCH (a {{name:\"{EscapeCypherLiteral(seed)}\"}})-[*1..{maxHops}]-(b) RETURN DISTINCT b LIMIT 50";
+            const string sql = "SELECT * FROM cypher(@graph_name, @cypher_query) AS (node agtype);";
+
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("graph_name", graphName);
+            command.Parameters.AddWithValue("cypher_query", cypher);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.IsDBNull(0))
+                {
+                    continue;
+                }
+
+                var value = reader.GetString(0);
+                if (TryExtractVertexName(value, out var name) && !string.IsNullOrWhiteSpace(name))
+                {
+                    expanded.Add(name);
+                }
+            }
+
+            await reader.CloseAsync();
+        }
+
+        return expanded.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static async Task<List<HybridChunkResultDto>> QueryChunksByEntitiesAndVectorAsync(
+        NpgsqlConnection connection,
+        IReadOnlyCollection<string> entities,
+        float[] queryEmbedding,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (entities.Count == 0)
+        {
+            return [];
+        }
+
+        var constrainedLimit = Math.Clamp(limit, 1, 50);
+        var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
+        const string sql = """
+                           SELECT c.id,
+                                  c.document_id,
+                                  c.chunk_index,
+                                  c.content,
+                                  c.embedding <=> CAST(@query_vector AS vector) AS distance
+                           FROM chunks c
+                           JOIN chunk_entities ce ON ce.chunk_id = c.id
+                           JOIN entities e ON e.id = ce.entity_id
+                           WHERE e.name = ANY(@entity_names)
+                             AND c.embedding IS NOT NULL
+                           ORDER BY c.embedding <=> CAST(@query_vector AS vector)
+                           LIMIT @limit;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("entity_names", entities.ToArray());
+        command.Parameters.AddWithValue("query_vector", vectorLiteral);
+        command.Parameters.AddWithValue("limit", constrainedLimit);
+
+        var chunks = new List<HybridChunkResultDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetInt64(0);
+            var documentId = checked((int)reader.GetInt64(1));
+            var chunkIndex = reader.GetInt32(2);
+            var content = reader.GetString(3);
+            double? distance = reader.IsDBNull(4) ? null : reader.GetDouble(4);
+            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance));
+        }
+
+        await reader.CloseAsync();
+        return chunks;
+    }
+
+    private static string BuildPromptContext(IReadOnlyCollection<string> graphEntities, IReadOnlyCollection<HybridChunkResultDto> chunks)
+    {
+        var graphFactSection = graphEntities.Count == 0
+            ? "No graph entities found."
+            : $"Graph entities ({graphEntities.Count}): {string.Join(", ", graphEntities)}";
+
+        var chunkSection = chunks.Count == 0
+            ? "No vector-ranked chunks found (ensure embeddings are populated in chunks.embedding)."
+            : string.Join(Environment.NewLine, chunks.Select(c => $"- [doc:{c.DocumentId} chunk:{c.ChunkIndex}] {c.Content}"));
+
+        return $"{graphFactSection}{Environment.NewLine}Relevant chunks:{Environment.NewLine}{chunkSection}";
+    }
+
+    private static float[] CreatePseudoEmbedding(string text, int dimension)
+    {
+        var hash = text.Aggregate(17, (current, c) => current * 31 + c);
+        var random = new Random(hash);
+        var vector = new float[dimension];
+        for (var i = 0; i < dimension; i++)
+        {
+            vector[i] = (float)(random.NextDouble() * 2d - 1d);
+        }
+
+        return vector;
+    }
+
+    private static string ToVectorLiteral(float[] input, int dimension)
+    {
+        var vector = new float[dimension];
+        var length = Math.Min(input.Length, dimension);
+        Array.Copy(input, vector, length);
+        return $"[{string.Join(",", vector.Select(v => v.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)))}]";
+    }
+
+    private static bool TryExtractVertexName(string value, out string name)
+    {
+        name = string.Empty;
+
+        if (!value.Contains("::vertex", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var json = value.Replace("::vertex", string.Empty, StringComparison.Ordinal).Trim();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object
+            && properties.TryGetProperty("name", out var nameValue))
+        {
+            name = nameValue.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(name);
+        }
+
+        return false;
+    }
+
+    private static string EscapeCypherLiteral(string value)
+        => value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static void AddGraphPrimitives(string? agTypeValue, IDictionary<string, GraphNodeDto> nodes, ICollection<GraphEdgeDto> edges)
     {

@@ -111,6 +111,12 @@ app.MapPost("/api/query/assist", (QueryAssistantRequest request, QueryAssistantS
     return Results.Ok(assistant.Suggest(request.Prompt));
 });
 
+app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.ExecuteHybridRetrievalAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapGet("/api/deployment", () =>
 {
     return Results.Ok(new
