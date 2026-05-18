@@ -2,13 +2,20 @@ using NoteAssistant.KnowledgeGraph.Backend.Models;
 using NoteAssistant.KnowledgeGraph.Backend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("Open", policy =>
-        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+    options.AddPolicy("Frontend", policy =>
+    {
+        var origins = allowedOrigins is { Length: > 0 }
+            ? allowedOrigins
+            : ["http://localhost:5272", "https://localhost:7260"];
+
+        policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+    });
 });
 
 builder.Services.AddSingleton<IngestionStore>();
@@ -24,7 +31,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors("Open");
+app.UseCors("Frontend");
 app.UseHttpsRedirection();
 
 app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>

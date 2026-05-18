@@ -55,9 +55,9 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
         }
 
         var normalized = request.Cypher.Trim();
-        if (Regex.IsMatch(normalized, @"\b(create|merge|delete|set|drop|remove|call)\b", RegexOptions.IgnoreCase))
+        if (!IsReadOnlyCypher(normalized))
         {
-            return new GraphQueryResponse(false, "Query editor is read-only. Use MATCH/RETURN style Cypher.", [], [], []);
+            return new GraphQueryResponse(false, "Only read-only Cypher is allowed (MATCH/OPTIONAL MATCH/WITH/UNWIND/RETURN/ORDER BY/LIMIT/SKIP/WHERE).", [], [], []);
         }
 
         try
@@ -98,6 +98,21 @@ public sealed class AgeGraphRepository(IConfiguration configuration, ILogger<Age
             logger.LogError(ex, "Query execution failed.");
             return new GraphQueryResponse(false, ex.Message, [], [], []);
         }
+    }
+
+    private static bool IsReadOnlyCypher(string query)
+    {
+        if (query.Contains(';', StringComparison.Ordinal) || query.Contains("--", StringComparison.Ordinal) || query.Contains("/*", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!Regex.IsMatch(query, @"^(MATCH|OPTIONAL MATCH|WITH|UNWIND)\b", RegexOptions.IgnoreCase))
+        {
+            return false;
+        }
+
+        return !Regex.IsMatch(query, @"\b(create|merge|delete|set|drop|remove|call|load)\b", RegexOptions.IgnoreCase);
     }
 
     private static void AddGraphPrimitives(string? agTypeValue, IDictionary<string, GraphNodeDto> nodes, ICollection<GraphEdgeDto> edges)

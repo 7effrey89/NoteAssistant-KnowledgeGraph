@@ -6,6 +6,7 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionService
 {
+    private const int MaxChunkSize = 280;
     private static int _documentSeed;
 
     public GraphIngestionPlan CreateGraphPlan(string fileName, string markdownContent)
@@ -45,7 +46,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var chunkIndex = 1;
         foreach (var block in blocks)
         {
-            if (block.Length <= 280)
+            if (block.Length <= MaxChunkSize)
             {
                 yield return new ChunkDto(documentId * 1000 + chunkIndex++, block);
                 continue;
@@ -62,7 +63,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
                     continue;
                 }
 
-                if (current.Length > 0 && current.Length + candidate.Length + 1 > 280)
+                if (current.Length > 0 && current.Length + candidate.Length + 1 > MaxChunkSize)
                 {
                     yield return new ChunkDto(documentId * 1000 + chunkIndex++, current.ToString());
                     current.Clear();
@@ -172,7 +173,13 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         return statements;
     }
 
-    private static string Escape(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
+    private static string Escape(string value)
+        => value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
 
     private static string CleanText(string value)
     {
