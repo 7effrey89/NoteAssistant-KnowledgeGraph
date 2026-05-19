@@ -1,0 +1,97 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "stop-backend",
+      "type": "shell",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "Get-Process -Name NoteAssistant.KnowledgeGraph.Backend -ErrorAction SilentlyContinue | Stop-Process -Force; Get-NetTCPConnection -LocalPort 5070 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 300; Write-Host backend stopped"
+      ],
+      "presentation": { "reveal": "silent", "panel": "dedicated", "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "stop-web",
+      "type": "shell",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "Get-Process -Name NoteAssistant.KnowledgeGraph.Web -ErrorAction SilentlyContinue | Stop-Process -Force; Get-NetTCPConnection -LocalPort 5272 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 300; Write-Host web stopped"
+      ],
+      "presentation": { "reveal": "silent", "panel": "dedicated", "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "stop-all",
+      "dependsOn": ["stop-backend", "stop-web"],
+      "problemMatcher": []
+    },
+    {
+      "label": "build-backend",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend/NoteAssistant.KnowledgeGraph.Backend.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "build-web",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Web/NoteAssistant.KnowledgeGraph.Web.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "build-tests",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend.Tests/NoteAssistant.KnowledgeGraph.Backend.Tests.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "prep-backend",
+      "dependsOrder": "sequence",
+      "dependsOn": ["stop-backend", "build-backend"],
+      "problemMatcher": []
+    },
+    {
+      "label": "prep-web",
+      "dependsOrder": "sequence",
+      "dependsOn": ["stop-web", "build-web"],
+      "problemMatcher": []
+    },
+    {
+      "label": "test-backend-watch",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend.Tests/NoteAssistant.KnowledgeGraph.Backend.Tests.csproj",
+        "--watch"
+      ],
+      "isBackground": true,
+      "problemMatcher": ["$msCompile"]
+    }
+  ]
+}

@@ -4,5 +4,6 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public interface IMarkdownGraphIngestionService
 {
-    GraphIngestionPlan CreateGraphPlan(string fileName, string markdownContent);
+    Task<GraphIngestionPlan> CreateGraphPlanAsync(string fileName, string markdownContent, CancellationToken cancellationToken);
+    GraphIngestionPlan RefreshSql(GraphIngestionPlan plan);
 }

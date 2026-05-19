@@ -20,3 +20,73 @@ html {
 body {
   margin-bottom: 60px;
 }
+
+.status-lamp {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #adb5bd;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.status-lamp-online {
+  background: #198754;
+}
+
+.status-lamp-offline {
+  background: #dc3545;
+}
+
+.status-lamp-warning {
+  background: #ffc107;
+}
+
+.process-map {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.process-bubble {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 14px;
+  padding: 8px 12px;
+}
+
+.process-bubble-title {
+  font-weight: 600;
+}
+
+.process-bubble-body {
+  font-size: 0.9rem;
+  color: #495057;
+  white-space: pre-wrap;
+}
+
+.process-connector {
+  width: 2px;
+  height: 12px;
+  background: #dee2e6;
+  margin-left: 14px;
+}
+
+.process-bubble-indent {
+  margin-left: 22px;
+  border-color: #e9ecef;
+  background: #ffffff;
+}
+
+.process-connector-indent {
+  margin-left: 36px;
+}
+
+.process-bubble-scroll {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.btn.btn-sm.btn-outline-secondary {
+  white-space: nowrap;
+}

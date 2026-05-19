@@ -8,7 +8,7 @@ public class HomeController(IConfiguration configuration) : Controller
 {
     public IActionResult Index()
     {
-        ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "https://localhost:7010";
+        ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";
         return View();
     }
 

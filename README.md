@@ -24,17 +24,25 @@ C# solution for a PostgreSQL + Apache AGE knowledge graph with:
 
 ## Run PostgreSQL + Apache AGE
 
+Skip this step if you already have PostgreSQL with the required extensions installed; configure the `Database` section in `appsettings.json` instead.
+
 ```bash
 cd NoteAssistant.KnowledgeGraph.Backend/Deployment
 docker compose up -d
 ```
 
-This provisions:
+This command starts the PostgreSQL + Apache AGE container in the background using the local [NoteAssistant.KnowledgeGraph.Backend/Deployment/docker-compose.yml](NoteAssistant.KnowledgeGraph.Backend/Deployment/docker-compose.yml). It creates the database, enables extensions, and runs the initialization SQL in [NoteAssistant.KnowledgeGraph.Backend/Deployment/init/01-age-init.sql](NoteAssistant.KnowledgeGraph.Backend/Deployment/init/01-age-init.sql).
+
+If you already have a PostgreSQL instance with the required extensions installed, you can skip Docker and point the backend at your database using the `Database` section in `appsettings.json` instead.
+
+This provisions (Docker defaults):
 - Database: `noteassistant`
 - User: `postgres`
 - Password: `postgres`
 - Graph: `knowledge_graph`
 - Extensions (when available): `age`, `vector`, `pg_diskann`
+
+These Docker defaults are defined in [NoteAssistant.KnowledgeGraph.Backend/Deployment/docker-compose.yml](NoteAssistant.KnowledgeGraph.Backend/Deployment/docker-compose.yml). The backend can point to any database using the `Database` section in `appsettings.json`, but that does not change what Docker provisions.
 
 ## Run backend API
 
@@ -49,12 +57,54 @@ Optional (if your database is not local default):
 ConnectionStrings__AgeDatabase="Host=<host>;Port=5432;Database=noteassistant;Username=<user>;Password=<password>" dotnet run
 ```
 
+You can also configure the database in `appsettings.json`/`appsettings.Development.json`:
+
+```json
+"Database": {
+    "Host": "localhost",
+    "Port": 5432,
+    "Database": "noteassistant",
+    "Username": "postgres",
+    "Password": "postgres",
+    "GraphName": "knowledge_graph",
+    "Extensions": ["age", "vector", "pg_diskann"],
+    "Auth": {
+        "Mode": "Password",
+        "EntraScope": "https://ossrdbms-aad.database.windows.net/.default",
+        "TenantId": ""
+    }
+}
+```
+
+Auth modes:
+- `Password`: use the configured username/password.
+- `EntraId`: use Microsoft Entra ID with `DefaultAzureCredential` to fetch a token for Azure PostgreSQL (scope can be overridden). Set `TenantId` if you need to force a specific tenant. This does not work with the local Docker container.
+
+Entra ID quick notes:
+- Set `Database.Auth.Mode` to `EntraId` and leave `Password` empty.
+- `Database.Username` should match the Entra principal that has been granted access in PostgreSQL.
+- Ensure `DefaultAzureCredential` can get a token (for example, run `az login` in a terminal).
+
 Backend launch profile exposes Swagger and APIs like:
 - `POST /api/documents/upload`
 - `GET /api/documents/{documentId}/status`
 - `POST /api/query`
 - `POST /api/query/assist`
 - `POST /api/retrieval/hybrid`
+- `GET /api/health/foundry`
+- `GET /api/health/db`
+
+Use the Foundry health endpoint to validate that embedding calls can reach the configured deployment:
+
+```bash
+curl https://localhost:<port>/api/health/foundry
+```
+
+Use the database health endpoint to validate connectivity/auth:
+
+```bash
+curl https://localhost:<port>/api/health/db
+```
 
 ## Run web app
 
