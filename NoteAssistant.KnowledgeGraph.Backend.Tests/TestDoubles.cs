@@ -26,6 +26,21 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
 
     public Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken)
         => Task.FromResult(Entities);
+
+    public string AnswerSystemPrompt => "test-answer-system-prompt";
+
+    public string AnalysisSystemPrompt => "test-analysis-system-prompt";
+
+    public Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
+        => Task.FromResult(new AnswerResult("(fake answer)", null));
+
+    public Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken)
+        => Task.FromResult(new QuestionAnalysisResult(
+            Array.Empty<string>(),
+            null,
+            question,
+            AnalysisSystemPrompt,
+            $"Question: {question}"));
 }
 
 public sealed class StubAgeDatabaseConnectionFactory : IAgeDatabaseConnectionFactory

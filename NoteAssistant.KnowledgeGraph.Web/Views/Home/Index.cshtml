@@ -753,23 +753,59 @@
 
             const trace = payload.trace;
             const mapItems = [];
+
+            // Helpers ------------------------------------------------------
+            const analysisSystemPrompt = payload.analysisSystemPrompt || '(not available)';
+            const answerSystemPrompt = payload.systemPrompt || '(not available)';
+            const entityLlmStep = getTraceStep(trace, 'entity-llm');
+            const answerStep = getTraceStep(trace, 'llm-answer');
+            const matchStep = getTraceStep(trace, 'entity-match');
+            const expansionStep = getTraceStep(trace, 'graph-expansion');
+            const embeddingStep = getTraceStep(trace, 'embedding');
+            const vectorStep = getTraceStep(trace, 'vector-search');
+            const fallbackStep = getTraceStep(trace, 'entity-fallback');
+
+            function buildAgentBubble(title, role, systemPrompt, step) {
+                return {
+                    title,
+                    variant: 'agent',
+                    role,
+                    systemPrompt,
+                    tokenUsage: step && step.tokenUsage ? step.tokenUsage : null
+                };
+            }
+
+            function buildSqlBubble(title, detail, indent = true) {
+                const sql = parseSqlSections(detail);
+                if (sql) {
+                    return {
+                        title,
+                        indent,
+                        bodyHtml: buildSqlToggleHtml(sql.parameterized, sql.executable)
+                    };
+                }
+                return {
+                    title,
+                    indent,
+                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`
+                };
+            }
+
+            // Phase 0: User question (only on initial call, not on clarification resubmits)
             if (!isClarification) {
                 mapItems.push({ title: 'User question received', body: question });
             }
 
+            // Phase 1: Clarification required path -------------------------
             if (payload.clarificationQuestion) {
-                if (isClarification && window.lastClarificationResponse) {
-                    mapItems.push({ title: 'Clarification received', body: window.lastClarificationResponse });
-                }
-                const clarificationPrompt = payload.analysisSystemPrompt || '(not available)';
-                mapItems.push({
-                    title: 'Clarification prompt',
-                    indent: true,
-                    scroll: true,
-                    body: `LLM generated the clarification question.\n\nSystem prompt:\n${clarificationPrompt}`
-                });
+                mapItems.push(buildAgentBubble(
+                    'Clarification Agent',
+                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    analysisSystemPrompt,
+                    entityLlmStep));
                 mapItems.push({
                     title: 'Clarification needed',
+                    indent: true,
                     body: `${payload.clarificationQuestion} (attempt ${hybridClarificationAttempts + 1} of 3)`,
                     clarification: true,
                     baseQuestion: payload.rewrittenQuestion || question
@@ -780,87 +816,55 @@
                 return;
             }
 
+            // Phase 2: Clarification received + question rewrite ----------
             if (isClarification && window.lastClarificationResponse) {
-                mapItems.push({ title: 'Clarification received', body: window.lastClarificationResponse });
+                mapItems.push(buildAgentBubble(
+                    'Clarification Agent',
+                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    analysisSystemPrompt,
+                    entityLlmStep));
+                mapItems.push({
+                    title: 'Clarification received',
+                    indent: true,
+                    body: window.lastClarificationResponse
+                });
+                if (payload.rewrittenQuestion) {
+                    mapItems.push({
+                        title: 'Question rewrite',
+                        indent: true,
+                        body: payload.rewrittenQuestion
+                    });
+                }
             }
 
             const effectiveQuestion = payload.rewrittenQuestion || question;
-            if (payload.rewrittenQuestion && (payload.rewrittenQuestion !== question || (window.lastClarificationResponse && window.lastClarificationResponse.length > 0))) {
-                mapItems.push({
-                    title: 'Question rewrite',
-                    indent: true,
-                    body: payload.rewrittenQuestion
-                });
-            }
 
-            const rewriteStep = getTraceStep(trace, 'question-rewrite');
-            const rewriteDetail = includeTrace && rewriteStep?.detail ? rewriteStep.detail : null;
-            if (rewriteDetail) {
-                mapItems.push({
-                    title: 'Question rewrite prompt',
-                    indent: true,
-                    scroll: true,
-                    body: rewriteDetail
-                });
-            }
+            // Phase 3: Entity detection -----------------------------------
+            mapItems.push(buildAgentBubble(
+                'Entity detection Agent',
+                'Extract entities from the user question. Falls back to a heuristic detector if the agent fails.',
+                analysisSystemPrompt,
+                entityLlmStep));
 
-            mapItems.push({ title: 'Entity detection input', body: effectiveQuestion, indent: true });
-            const analysisPrompt = payload.analysisSystemPrompt || '(not available)';
+            const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
             mapItems.push({
-                title: 'Entity detection logic',
-                bodyHtml: `LLM extracts entities and flags ambiguous pronouns; heuristic is fallback if LLM fails.<br><em>LLM System prompt: ${escapeHtml(analysisPrompt)}</em>`
-            });
-            const llmStep = getTraceStep(trace, 'entity-llm');
-            const detectionStep = getTraceStep(trace, 'entity-detection');
-            const detectionDetail = includeTrace && detectionStep?.detail
-                ? detectionStep.detail
-                : null;
-            mapItems.push({
-                title: 'Entity detection output',
+                title: 'Entity detected',
                 indent: true,
-                body: (() => {
-                    const fallbackStep = getTraceStep(trace, 'entity-fallback');
-                    const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
-                    const detectedText = detectedList.length ? detectedList.join(', ') : '(none)';
-                    const detailText = detectionDetail ? detectionDetail.trim() : '';
-                    const showDetail = detailText
-                        && detailText !== detectedText
-                        && !detailText.includes(detectedText);
-                    const lines = [detectedText];
-                    if (showDetail) {
-                        lines.push(truncateText(detailText, 500));
-                    }
-                    return lines.join('\n');
-                })()
+                body: detectedList.length ? detectedList.join(', ') : '(none)'
             });
 
-            const entityPromptDetail = includeTrace && llmStep?.detail ? llmStep.detail : null;
-            if (entityPromptDetail) {
+            if (matchStep || (payload.matchedEntities && payload.matchedEntities.length)) {
+                const matchDetail = includeTrace && matchStep?.detail ? matchStep.detail : '(trace disabled)';
+                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true));
                 mapItems.push({
-                    title: 'Entity detection prompt',
+                    title: 'Entity match output',
                     indent: true,
-                    scroll: true,
-                    body: entityPromptDetail
+                    body: (payload.matchedEntities || []).join(', ') || '(none)'
                 });
             }
 
-            const detectionSteps = includeTrace && detectionStep?.detail ? detectionStep.detail : null;
-            if (detectionSteps && detectionSteps.includes('Step 1:')) {
-                mapItems.push({
-                    title: 'Entity detection steps',
-                    indent: true,
-                    scroll: true,
-                    body: detectionSteps
-                });
-            }
-
-            const fallbackStep = getTraceStep(trace, 'entity-fallback');
             if (fallbackStep) {
                 const fallbackDetail = includeTrace && fallbackStep.detail ? fallbackStep.detail : '(trace disabled)';
-                mapItems.push({
-                    title: 'Fallback rule',
-                    body: 'If no entities are detected, load the most recent entities from the database.'
-                });
                 mapItems.push({
                     title: 'Entity fallback output',
                     indent: true,
@@ -868,76 +872,85 @@
                 });
             }
 
-            const matchStep = getTraceStep(trace, 'entity-match');
-            const matched = (payload.matchedEntities || []).join(', ');
-            if (matchStep || matched) {
-                const matchDetail = includeTrace && matchStep?.detail
-                    ? matchStep.detail
-                    : null;
-                if (matchDetail) {
-                    mapItems.push({
-                        title: 'Entity match trace',
-                        indent: true,
-                        scroll: true,
-                        body: matchDetail
-                    });
-                }
-                mapItems.push({
-                    title: 'Entity match output',
-                    indent: true,
-                    body: matched || '(none)'
-                });
-            }
-
-            const expansionStep = getTraceStep(trace, 'graph-expansion');
+            // Phase 4: Graph-expanded entities ----------------------------
+            mapItems.push({
+                title: 'Graph-expanded entities',
+                variant: 'purpose',
+                purpose: 'Traverse the knowledge graph from matched entities to discover related entities to broaden retrieval.'
+            });
             const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
-            mapItems.push({ title: 'Graph expansion query', body: truncateText(expansionDetail, 600), indent: true });
-            mapItems.push({ title: 'Graph-expanded entities', body: (payload.graphEntities || []).join(', ') || '(none)' });
+            mapItems.push({
+                title: 'Graph expansion query',
+                indent: true,
+                scroll: true,
+                body: truncateText(expansionDetail, 1200)
+            });
+            mapItems.push({
+                title: 'Graph-expanded entities',
+                indent: true,
+                body: (payload.graphEntities || []).join(', ') || '(none)'
+            });
 
-            const embeddingStep = getTraceStep(trace, 'embedding');
-            const embeddingDetail = includeTrace && embeddingStep?.detail ? embeddingStep.detail : null;
-            if (embeddingDetail) {
-                mapItems.push({
-                    title: 'Embedding prompt',
-                    indent: true,
-                    scroll: true,
-                    body: embeddingDetail
-                });
-            }
+            // Phase 5: Question Embedding ---------------------------------
+            mapItems.push({
+                title: 'Question Embedding',
+                variant: 'purpose',
+                purpose: 'Vectorize the question for similarity search.',
+                inputText: effectiveQuestion
+            });
+            const embeddingDetail = includeTrace && embeddingStep?.detail ? embeddingStep.detail : '';
+            const embeddingOutputText = (() => {
+                if (!embeddingDetail) {
+                    return '(trace disabled)';
+                }
+                const outputIdx = embeddingDetail.indexOf('Output:');
+                const tail = outputIdx >= 0 ? embeddingDetail.slice(outputIdx + 'Output:'.length).trim() : embeddingDetail;
+                return truncateText(tail, 600);
+            })();
+            mapItems.push({
+                title: 'Question Embedding Output',
+                indent: true,
+                scroll: true,
+                body: embeddingOutputText
+            });
 
-            const vectorStep = getTraceStep(trace, 'vector-search');
+            // Phase 6: Vector Search --------------------------------------
             const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
             const vectorSql = parseSqlSections(vectorDetail);
+            const vectorBubble = {
+                title: 'Vector Search',
+                variant: 'purpose',
+                purpose: 'Find relevant chunks filtered by relevant entities to answer the user question.'
+            };
             if (vectorSql) {
-                mapItems.push({
-                    title: 'Vector search input',
-                    bodyHtml: buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable),
-                    indent: true
-                });
+                vectorBubble.bodyHtml = buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable);
             } else {
-                mapItems.push({
-                    title: 'Vector search input',
-                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`,
-                    indent: true
-                });
+                vectorBubble.bodyHtml = `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`;
             }
+            mapItems.push(vectorBubble);
 
             const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`);
             mapItems.push({
-                title: 'Vector search output',
+                title: 'Vector Search Output',
                 indent: true,
                 scroll: true,
                 body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
             });
 
-            mapItems.push({ title: 'System prompt', body: payload.systemPrompt || '(none)', indent: true, scroll: true });
-            mapItems.push({ title: 'Prompt context', body: payload.promptContext || '(empty)', indent: true, scroll: true });
-            const answerStep = getTraceStep(trace, 'llm-answer');
-            const answerDetail = includeTrace && answerStep?.detail ? answerStep.detail : null;
-            if (answerDetail) {
-                mapItems.push({ title: 'LLM answer prompt', body: answerDetail, indent: true, scroll: true });
+            // Phase 7: Answer Agent ---------------------------------------
+            if (includeAnswer) {
+                mapItems.push(buildAgentBubble(
+                    'Answer Agent',
+                    'Synthesize an answer for the user question using the retrieved chunks. Falls back to a heuristic response if the agent fails.',
+                    answerSystemPrompt,
+                    answerStep));
+                mapItems.push({
+                    title: 'Agent Answer',
+                    indent: true,
+                    scroll: true,
+                    body: payload.answer || '(no answer returned)'
+                });
             }
-            mapItems.push({ title: 'LLM answer', body: payload.answer || (includeAnswer ? '(no answer returned)' : '(answer disabled)'), indent: true });
 
             appendProcessMap(mapItems);
 
@@ -1019,11 +1032,37 @@
             if (item.scroll) {
                 bubble.classList.add('process-bubble-scroll');
             }
+            if (item.variant === 'agent') {
+                bubble.classList.add('process-bubble-agent');
+            } else if (item.variant === 'purpose') {
+                bubble.classList.add('process-bubble-purpose');
+            }
 
             const title = document.createElement('div');
             title.className = 'process-bubble-title';
             title.innerText = item.title || 'Step';
             bubble.appendChild(title);
+
+            if (item.role) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Role:</span> ${escapeHtml(item.role)}`;
+                bubble.appendChild(section);
+            }
+
+            if (item.purpose) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Purpose:</span> ${escapeHtml(item.purpose)}`;
+                bubble.appendChild(section);
+            }
+
+            if (item.inputText) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Input:</span> ${escapeHtml(item.inputText)}`;
+                bubble.appendChild(section);
+            }
 
             if (item.body || item.bodyHtml) {
                 const body = document.createElement('div');
@@ -1034,6 +1073,29 @@
                     body.innerText = item.body;
                 }
                 bubble.appendChild(body);
+            }
+
+            if (item.systemPrompt) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = 'System Prompt';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.systemPrompt;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.tokenUsage) {
+                const tokens = document.createElement('div');
+                tokens.className = 'process-bubble-tokens';
+                const p = item.tokenUsage.promptTokens;
+                const c = item.tokenUsage.completionTokens;
+                const promptText = (p === null || p === undefined) ? 'n/a' : p;
+                const completionText = (c === null || c === undefined) ? 'n/a' : c;
+                tokens.innerText = `Token usage: prompt: ${promptText} | completion: ${completionText}`;
+                bubble.appendChild(tokens);
             }
 
             if (item.clarification) {

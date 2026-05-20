@@ -116,6 +116,62 @@ body {
   color: #fff;
 }
 
+.process-bubble-section {
+  font-size: 0.9rem;
+  color: #495057;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+.process-bubble-section .label {
+  font-weight: 600;
+}
+
+.process-bubble-systemprompt {
+  margin-top: 4px;
+  font-size: 0.9rem;
+}
+
+.process-bubble-systemprompt > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: revert;
+  color: #495057;
+}
+
+.process-bubble-systemprompt > summary::marker {
+  color: #6c757d;
+}
+
+.process-bubble-systemprompt > pre {
+  margin: 6px 0 0 0;
+  padding: 8px 10px;
+  background: #f1f3f5;
+  border: 1px solid #dee2e6;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.process-bubble-tokens {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: #6c757d;
+}
+
+.process-bubble-agent {
+  background: #eef4ff;
+  border-color: #b6cdf2;
+}
+
+.process-bubble-purpose {
+  background: #fff8e6;
+  border-color: #ffd97a;
+}
+
 .btn.btn-sm.btn-outline-secondary {
   white-space: nowrap;
 }

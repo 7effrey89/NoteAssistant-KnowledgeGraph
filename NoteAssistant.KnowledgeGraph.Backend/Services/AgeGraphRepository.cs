@@ -291,14 +291,17 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
 
         var steps = request.IncludeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
-        void AddStep(string name, string summary, string detail, int? durationMs = null)
+        void AddStep(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
         {
             if (steps is null)
             {
                 return;
             }
 
-            steps.Add(new HybridRetrievalTraceStepDto(name, summary, detail, durationMs));
+            HybridTokenUsageDto? usageDto = tokenUsage is null
+                ? null
+                : new HybridTokenUsageDto(tokenUsage.PromptTokens, tokenUsage.CompletionTokens);
+            steps.Add(new HybridRetrievalTraceStepDto(name, summary, detail, durationMs, usageDto));
         }
 
         AddStep("question", "User question received", request.Query);
@@ -342,12 +345,15 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                         analysisUserPrompt,
                         "Entities",
                         FormatEntityList(detectedEntities, 12)),
-                    (int)analysisTimer.ElapsedMilliseconds);
+                    (int)analysisTimer.ElapsedMilliseconds,
+                    analysis.TokenUsage);
 
                 AddStep(
                     "question-rewrite",
                     "LLM rephrased the question",
-                    BuildPromptDetailSystemOnly(analysisSystemPrompt));
+                    BuildPromptDetailSystemOnly(analysisSystemPrompt),
+                    null,
+                    analysis.TokenUsage);
 
                 if (!string.IsNullOrWhiteSpace(request.ClarificationResponse))
                 {
@@ -529,14 +535,16 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var answerTimer = Stopwatch.StartNew();
                 try
                 {
-                    answer = await _foundry.AnswerQuestionAsync(rewrittenQuestion, prompt, cancellationToken);
+                    var answerResult = await _foundry.AnswerQuestionAsync(rewrittenQuestion, prompt, cancellationToken);
+                    answer = answerResult.Answer;
                     answerTimer.Stop();
                     var answerPrompt = BuildAnswerUserPrompt(prompt, rewrittenQuestion);
                     AddStep(
                         "llm-answer",
                         "LLM answer generated",
                         BuildPromptDetailPromptsOnly(_foundry.AnswerSystemPrompt, answerPrompt),
-                        (int)answerTimer.ElapsedMilliseconds);
+                        (int)answerTimer.ElapsedMilliseconds,
+                        answerResult.TokenUsage);
                 }
                 catch (Exception ex)
                 {

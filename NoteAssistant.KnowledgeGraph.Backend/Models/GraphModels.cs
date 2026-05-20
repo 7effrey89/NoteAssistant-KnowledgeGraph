@@ -61,7 +61,14 @@ public sealed record HybridRetrievalRequest(
 
 public sealed record HybridChunkResultDto(long Id, int DocumentId, int ChunkIndex, string Content, double? Distance);
 
-public sealed record HybridRetrievalTraceStepDto(string Name, string Summary, string Detail, int? DurationMs = null);
+public sealed record HybridTokenUsageDto(int? PromptTokens, int? CompletionTokens);
+
+public sealed record HybridRetrievalTraceStepDto(
+    string Name,
+    string Summary,
+    string Detail,
+    int? DurationMs = null,
+    HybridTokenUsageDto? TokenUsage = null);
 
 public sealed record HybridRetrievalTraceDto(string Question, IReadOnlyList<HybridRetrievalTraceStepDto> Steps);
 

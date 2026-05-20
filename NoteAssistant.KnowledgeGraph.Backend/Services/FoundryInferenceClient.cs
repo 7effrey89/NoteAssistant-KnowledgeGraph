@@ -29,18 +29,23 @@ public interface IFoundryInferenceClient
     Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken);
     Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken);
     Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken);
-    Task<string> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken);
+    Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken);
     Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken);
     string AnswerSystemPrompt { get; }
     string AnalysisSystemPrompt { get; }
 }
+
+public sealed record LlmTokenUsage(int? PromptTokens, int? CompletionTokens);
+
+public sealed record AnswerResult(string Answer, LlmTokenUsage? TokenUsage);
 
 public sealed record QuestionAnalysisResult(
     IReadOnlyList<string> Entities,
     string? ClarificationQuestion,
     string RewrittenQuestion,
     string SystemPrompt,
-    string UserPrompt);
+    string UserPrompt,
+    LlmTokenUsage? TokenUsage = null);
 
 public sealed class FoundryInferenceClient : IFoundryInferenceClient
 {
@@ -157,7 +162,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         return entities;
     }
 
-    public async Task<string> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
+    public async Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
     {
         if (_chatClient is null)
         {
@@ -171,7 +176,8 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         };
 
         var response = await _chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
-        return response.Value.Content.Count > 0 ? response.Value.Content[0].Text ?? string.Empty : string.Empty;
+        var answer = response.Value.Content.Count > 0 ? response.Value.Content[0].Text ?? string.Empty : string.Empty;
+        return new AnswerResult(answer, ExtractTokenUsage(response.Value.Usage));
     }
 
     public async Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken)
@@ -191,18 +197,30 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var response = await _chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var content = response.Value.Content.Count > 0 ? response.Value.Content[0].Text : string.Empty;
+        var tokenUsage = ExtractTokenUsage(response.Value.Usage);
 
         if (!TryParseQuestionAnalysis(content ?? string.Empty, out var result))
         {
             _logger.LogWarning("Failed to parse question analysis JSON from Foundry response.");
-            return new QuestionAnalysisResult([], null, question, DefaultAnalysisSystemPrompt, userPrompt);
+            return new QuestionAnalysisResult([], null, question, DefaultAnalysisSystemPrompt, userPrompt, tokenUsage);
         }
 
         return result with
         {
             SystemPrompt = DefaultAnalysisSystemPrompt,
-            UserPrompt = userPrompt
+            UserPrompt = userPrompt,
+            TokenUsage = tokenUsage
         };
+    }
+
+    private static LlmTokenUsage? ExtractTokenUsage(OpenAI.Chat.ChatTokenUsage? usage)
+    {
+        if (usage is null)
+        {
+            return null;
+        }
+
+        return new LlmTokenUsage(usage.InputTokenCount, usage.OutputTokenCount);
     }
 
     private bool TryBuildEndpoint(out Uri endpoint)
