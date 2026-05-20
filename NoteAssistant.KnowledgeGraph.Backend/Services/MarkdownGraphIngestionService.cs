@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
@@ -18,7 +19,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         _databaseOptions = databaseOptions.Value;
     }
 
-    public async Task<GraphIngestionPlan> CreateGraphPlanAsync(string fileName, string markdownContent, CancellationToken cancellationToken)
+    public async Task<GraphIngestionPlan> CreateGraphPlanAsync(string fileName, string markdownContent, DocumentMetadata? metadata, CancellationToken cancellationToken)
     {
         if (!_foundry.IsConfigured)
         {
@@ -34,16 +35,17 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var entities = await ExtractEntitiesAsync(markdownContent, enrichedChunks, cancellationToken);
         var mentions = BuildMentions(enrichedChunks, entities).ToList();
 
-        var sql = BuildSql(documentId, fileName, title, enrichedChunks, entities, mentions);
+        var normalizedMetadata = NormalizeMetadata(metadata);
+        var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, enrichedChunks, entities, mentions, normalizedMetadata);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
-        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty);
+        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty);
     }
 
     public GraphIngestionPlan RefreshSql(GraphIngestionPlan plan)
     {
         var fileName = plan.Status.FileName;
-        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.Chunks, plan.Entities, plan.Mentions);
+        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.Chunks, plan.Entities, plan.Mentions, NormalizeMetadata(plan.Metadata));
         return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql };
     }
 
@@ -198,11 +200,16 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private List<string> BuildSql(int documentId, string fileName, string title, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions)
+    private List<string> BuildSql(int documentId, string fileName, string title, string rawContent, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions, DocumentMetadata metadata)
     {
         var graphName = _databaseOptions.GraphName;
         var extensions = _databaseOptions.Extensions;
         var schema = NormalizeSchemaName(_databaseOptions.SchemaName);
+        var docTypeLiteral = string.IsNullOrWhiteSpace(metadata.DocumentType) ? "NULL" : $"'{EscapeSql(metadata.DocumentType)}'";
+        var docDateLiteral = metadata.DocumentDate.HasValue ? $"DATE '{metadata.DocumentDate.Value:yyyy-MM-dd}'" : "NULL";
+        var contentLiteral = string.IsNullOrWhiteSpace(rawContent) ? "NULL" : $"'{EscapeSql(rawContent)}'";
+        var tagsJsonLiteral = BuildTagsJsonLiteral(metadata.Tags);
+        var cypherTagsLiteral = BuildCypherTagsLiteral(metadata.Tags);
         var statements = new List<string>
         {
             BuildExtensionStatement(extensions, "age"),
@@ -211,6 +218,11 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             $"CREATE SCHEMA IF NOT EXISTS {schema};",
             $"SET search_path = {schema}, public, ag_catalog;",
             "CREATE TABLE IF NOT EXISTS documents (id BIGINT PRIMARY KEY, title TEXT NOT NULL, file_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_type TEXT;",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_date DATE;",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS content TEXT;",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags JSONB;",
+            "ALTER TABLE documents DROP COLUMN IF EXISTS source_created_at;",
             "CREATE TABLE IF NOT EXISTS entities (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
             "CREATE TABLE IF NOT EXISTS chunks (id BIGSERIAL PRIMARY KEY, document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, embedding vector(1536), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(document_id, chunk_index));",
             "CREATE TABLE IF NOT EXISTS chunk_entities (chunk_id BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, PRIMARY KEY(chunk_id, entity_id));",
@@ -218,9 +230,21 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);",
             BuildDiskAnnIndexStatement(extensions),
             "CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON chunk_entities(entity_id);",
-            $"INSERT INTO documents(id, title, file_name) VALUES ({documentId}, '{EscapeSql(title)}', '{EscapeSql(fileName)}') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, file_name = EXCLUDED.file_name;",
-            $"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (d:Document {{id:{documentId}}}) SET d.title=\"{Escape(title)}\", d.file_name=\"{Escape(fileName)}\" RETURN d $$) as (d agtype);"
+            "CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);",
+            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'summary') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'content') THEN ALTER TABLE documents RENAME COLUMN summary TO content; END IF; END $$;",
+            $"INSERT INTO documents(id, title, file_name, document_type, document_date, content, tags) VALUES ({documentId}, '{EscapeSql(title)}', '{EscapeSql(fileName)}', {docTypeLiteral}, {docDateLiteral}, {contentLiteral}, {tagsJsonLiteral}) ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, file_name = EXCLUDED.file_name, document_type = EXCLUDED.document_type, document_date = EXCLUDED.document_date, content = EXCLUDED.content, tags = EXCLUDED.tags;",
+            $"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (d:Document {{id:{documentId}}}) SET d.title=\"{Escape(title)}\", d.file_name=\"{Escape(fileName)}\", d.document_type={(string.IsNullOrWhiteSpace(metadata.DocumentType) ? "null" : $"\"{Escape(metadata.DocumentType)}\"")}, d.document_date={(metadata.DocumentDate.HasValue ? $"\"{metadata.DocumentDate.Value:yyyy-MM-dd}\"" : "null")}, d.content={(string.IsNullOrWhiteSpace(rawContent) ? "null" : $"\"{Escape(rawContent)}\"")}, d.tags={cypherTagsLiteral} RETURN d $$) as (d agtype);"
         };
+
+        if (metadata.Tags is { Count: > 0 })
+        {
+            foreach (var tag in metadata.Tags)
+            {
+                statements.Add($"INSERT INTO entities(label, name) VALUES ('Tag', '{EscapeSql(tag)}') ON CONFLICT (name) DO NOTHING;");
+                statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (t:Tag {{name:\"{Escape(tag)}\"}}) RETURN t $$) as (t agtype);");
+                statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MATCH (d:Document {{id:{documentId}}}), (t:Tag {{name:\"{Escape(tag)}\"}}) MERGE (d)-[r:TAGGED_WITH]->(t) RETURN r $$) as (r agtype);");
+            }
+        }
 
         foreach (var chunk in chunks)
         {
@@ -275,6 +299,27 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
 
         return trimmed;
+    }
+
+    private static DocumentMetadata NormalizeMetadata(DocumentMetadata? metadata)
+    {
+        if (metadata is null)
+        {
+            return new DocumentMetadata(null, null, Array.Empty<string>());
+        }
+
+        var documentType = string.IsNullOrWhiteSpace(metadata.DocumentType) ? null : metadata.DocumentType.Trim();
+        var tags = metadata.Tags?
+            .Select(tag => tag?.Trim())
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>();
+
+        return metadata with
+        {
+            DocumentType = documentType,
+            Tags = tags
+        };
     }
 
     private static IEnumerable<(string Left, string Right)> BuildEntityPairsByChunk(IEnumerable<ChunkEntityLinkDto> mentions)
@@ -346,6 +391,27 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         => extensions.Any(name => string.Equals(name, "pg_diskann", StringComparison.OrdinalIgnoreCase))
             ? "DO $$ BEGIN CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING diskann (embedding vector_cosine_ops); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'diskann index creation skipped.'; END $$;"
             : "DO $$ BEGIN RAISE NOTICE 'diskann index creation disabled by configuration.'; END $$;";
+
+    private static string BuildTagsJsonLiteral(IReadOnlyList<string>? tags)
+    {
+        if (tags is null || tags.Count == 0)
+        {
+            return "NULL";
+        }
+
+        var json = JsonSerializer.Serialize(tags);
+        return $"'{EscapeSql(json)}'::jsonb";
+    }
+
+    private static string BuildCypherTagsLiteral(IReadOnlyList<string>? tags)
+    {
+        if (tags is null || tags.Count == 0)
+        {
+            return "null";
+        }
+
+        return JsonSerializer.Serialize(tags);
+    }
 
     private static IReadOnlyList<ChunkDto> MergeEmbeddings(IReadOnlyList<ChunkDto> chunks, IReadOnlyList<float[]> embeddings)
     {

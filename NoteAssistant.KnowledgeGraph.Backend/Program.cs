@@ -63,6 +63,44 @@ static string NormalizeSchemaName(string? value)
     return trimmed;
 }
 
+static string? NormalizeOptional(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    var trimmed = value.Trim();
+    return trimmed.Length == 0 ? null : trimmed;
+}
+
+static DateOnly? ParseDateOnly(string? value)
+    => DateOnly.TryParse(value, out var date) ? date : null;
+
+static IReadOnlyList<string> ParseTags(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return Array.Empty<string>();
+    }
+
+    return value
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(tag => tag.Trim())
+        .Where(tag => !string.IsNullOrWhiteSpace(tag))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
+static DocumentMetadata ParseMetadata(IFormCollection form)
+{
+    var documentType = NormalizeOptional(form["documentType"].ToString());
+    var documentDate = ParseDateOnly(form["documentDate"].ToString());
+    var tags = ParseTags(form["tags"].ToString());
+
+    return new DocumentMetadata(documentType, documentDate, tags);
+}
+
 app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
@@ -89,13 +127,14 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
         markdown = await reader.ReadToEndAsync(cancellationToken);
     }
 
+    var metadata = ParseMetadata(form);
     var contentHash = cache.ComputeHash(markdown);
     var cached = await cache.TryGetAsync(contentHash, cancellationToken);
     GraphIngestionPlan plan;
     if (cached is not null)
     {
         var title = Path.GetFileNameWithoutExtension(file.FileName);
-        var refreshed = ingestionService.RefreshSql(cached);
+        var refreshed = ingestionService.RefreshSql(cached with { Metadata = metadata });
         plan = refreshed with
         {
             Cached = true,
@@ -105,7 +144,7 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
                 FileName = file.FileName,
                 State = "Cached",
                 UpdatedAt = DateTimeOffset.UtcNow,
-                Message = "Loaded from local analysis cache (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
+                Message = "Loaded from local cache for document-to-entity breakdown (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
             }
         };
         store.Upsert(plan.Status);
@@ -113,7 +152,7 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
         return Results.Ok(plan);
     }
 
-    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, cancellationToken);
+    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, metadata, cancellationToken);
     var analyzed = plan.Status with
     {
         State = "Analyzed",

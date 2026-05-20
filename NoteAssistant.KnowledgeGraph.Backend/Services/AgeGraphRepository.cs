@@ -1,5 +1,6 @@
 using System.Data;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -307,6 +308,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         var matchedEntities = new List<string>();
         string? clarificationQuestion = null;
         var rewrittenQuestion = request.Query;
+        var analysisSystemPrompt = _foundry.IsConfigured ? _foundry.AnalysisSystemPrompt : null;
+        var analysisUserPrompt = BuildAnalysisUserPrompt(request.Query, request.ClarificationResponse);
 
         if (_foundry.IsConfigured)
         {
@@ -317,6 +320,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 analysisTimer.Stop();
 
                 detectedEntities = analysis.Entities.ToList();
+                analysisSystemPrompt = analysis.SystemPrompt;
+                analysisUserPrompt = string.IsNullOrWhiteSpace(analysis.UserPrompt) ? analysisUserPrompt : analysis.UserPrompt;
                 clarificationQuestion = analysis.ClarificationQuestion;
                 if (!string.IsNullOrWhiteSpace(analysis.RewrittenQuestion))
                 {
@@ -332,13 +337,17 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 AddStep(
                     "entity-llm",
                     $"LLM extracted {detectedEntities.Count} entities",
-                    detectedEntities.Count == 0 ? "No entities detected by LLM." : string.Join(", ", detectedEntities),
+                    BuildPromptDetail(
+                        analysisSystemPrompt,
+                        analysisUserPrompt,
+                        "Entities",
+                        FormatEntityList(detectedEntities, 12)),
                     (int)analysisTimer.ElapsedMilliseconds);
 
                 AddStep(
                     "question-rewrite",
                     "LLM rephrased the question",
-                    rewrittenQuestion);
+                    BuildPromptDetailSystemOnly(analysisSystemPrompt));
 
                 if (!string.IsNullOrWhiteSpace(request.ClarificationResponse))
                 {
@@ -359,19 +368,28 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             catch (Exception ex)
             {
                 analysisTimer.Stop();
-                AddStep("entity-llm", "LLM entity extraction failed; falling back to heuristic", ex.Message, (int)analysisTimer.ElapsedMilliseconds);
+                AddStep(
+                    "entity-llm",
+                    "LLM entity extraction failed; falling back to heuristic",
+                    BuildPromptDetail(
+                        analysisSystemPrompt,
+                        analysisUserPrompt,
+                        "Error",
+                        ex.Message),
+                    (int)analysisTimer.ElapsedMilliseconds);
             }
         }
 
         if (detectedEntities.Count == 0)
         {
             var detectionTimer = Stopwatch.StartNew();
-            detectedEntities = DetectEntities(request.Query);
+            var detection = DetectEntitiesWithDetail(request.Query);
+            detectedEntities = detection.Entities;
             detectionTimer.Stop();
             AddStep(
                 "entity-detection",
                 $"Detected {detectedEntities.Count} entities (heuristic)",
-                detectedEntities.Count == 0 ? "No entities detected from the query text." : string.Join(", ", detectedEntities),
+                detection.Detail,
                 (int)detectionTimer.ElapsedMilliseconds);
         }
 
@@ -397,7 +415,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                         traceSnapshot,
                         clarificationQuestion,
                         rewrittenQuestion,
-                        _foundry.AnswerSystemPrompt);
+                        _foundry.AnswerSystemPrompt,
+                        analysisSystemPrompt);
                 }
 
                 AddStep(
@@ -410,7 +429,9 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             if (detectedEntities.Count > 0)
             {
                 var matchTimer = Stopwatch.StartNew();
-                matchedEntities = await MatchEntitiesAsync(connection, detectedEntities, cancellationToken);
+                var matchResult = await MatchEntitiesAsync(connection, detectedEntities, cancellationToken);
+                matchedEntities = matchResult.Matched;
+                var matchCandidates = matchResult.ExpandedCandidates;
                 matchTimer.Stop();
                 if (matchedEntities.Count > 0)
                 {
@@ -420,7 +441,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 AddStep(
                     "entity-match",
                     $"Matched {matchedEntities.Count} entities in the database",
-                    matchedEntities.Count == 0 ? "No entity matches found; using LLM/heuristic entities." : string.Join(", ", matchedEntities),
+                    BuildEntityMatchDetail(detectedEntities, matchCandidates, matchedEntities),
                     (int)matchTimer.ElapsedMilliseconds);
             }
 
@@ -470,10 +491,19 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 ? request.QueryEmbedding!
                 : await _foundry.CreateEmbeddingAsync(rewrittenQuestion, cancellationToken);
             embeddingTimer.Stop();
+            var vectorLiteral = ToVectorLiteral(vector, 1536);
+            var embeddingOutput = $"Vector:\n{vectorLiteral}\nEmbedding length: {vector.Length.ToString(CultureInfo.InvariantCulture)}";
+            var embeddingDetail = usedProvidedEmbedding
+                ? BuildPromptDetail("(not applicable for embeddings)", "(embedding provided; no model call)", "Output", embeddingOutput)
+                : BuildPromptDetail(
+                    "(not applicable for embeddings)",
+                    rewrittenQuestion,
+                    "Output",
+                    embeddingOutput);
             AddStep(
                 "embedding",
                 usedProvidedEmbedding ? "Used provided query embedding" : "Generated query embedding",
-                $"Embedding length: {vector.Length}",
+                embeddingDetail,
                 (int)embeddingTimer.ElapsedMilliseconds);
 
             var vectorTimer = Stopwatch.StartNew();
@@ -484,7 +514,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             AddStep(
                 "vector-search",
                 $"Vector search returned {chunks.Count} chunks (limit={request.Limit})",
-                BuildVectorSearchDetail(entityFilter),
+                BuildVectorSearchDetail(entityFilter, request.Limit, vector),
                 (int)vectorTimer.ElapsedMilliseconds);
 
             var prompt = BuildPromptContext(entityFilter, chunks);
@@ -501,12 +531,22 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 {
                     answer = await _foundry.AnswerQuestionAsync(rewrittenQuestion, prompt, cancellationToken);
                     answerTimer.Stop();
-                    AddStep("llm-answer", "LLM answer generated", answer, (int)answerTimer.ElapsedMilliseconds);
+                    var answerPrompt = BuildAnswerUserPrompt(prompt, rewrittenQuestion);
+                    AddStep(
+                        "llm-answer",
+                        "LLM answer generated",
+                        BuildPromptDetailPromptsOnly(_foundry.AnswerSystemPrompt, answerPrompt),
+                        (int)answerTimer.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
                     answerTimer.Stop();
-                    AddStep("llm-answer", "LLM answer unavailable", ex.Message, (int)answerTimer.ElapsedMilliseconds);
+                    var answerPrompt = BuildAnswerUserPrompt(prompt, rewrittenQuestion);
+                    AddStep(
+                        "llm-answer",
+                        "LLM answer unavailable",
+                        BuildPromptDetailPromptsOnly(_foundry.AnswerSystemPrompt, answerPrompt),
+                        (int)answerTimer.ElapsedMilliseconds);
                 }
             }
 
@@ -524,13 +564,14 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 traceResult,
                 null,
                 rewrittenQuestion,
-                _foundry.AnswerSystemPrompt);
+                _foundry.AnswerSystemPrompt,
+                analysisSystemPrompt);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Hybrid retrieval pipeline failed.");
             var traceFailure = steps is null ? null : new HybridRetrievalTraceDto(request.Query, steps);
-            return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], [], string.Empty, "Graph -> Vector -> LLM", null, traceFailure, null, rewrittenQuestion, _foundry.AnswerSystemPrompt);
+            return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], [], string.Empty, "Graph -> Vector -> LLM", null, traceFailure, null, rewrittenQuestion, _foundry.AnswerSystemPrompt, analysisSystemPrompt);
         }
     }
 
@@ -549,15 +590,18 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return !Regex.IsMatch(query, @"\b(create|merge|delete|set|drop|remove|call|load)\b", RegexOptions.IgnoreCase);
     }
 
-    private static List<string> DetectEntities(string query)
+    private static (List<string> Entities, string Detail) DetectEntitiesWithDetail(string query)
     {
         var known = new[] { "Microsoft", "OpenAI", "Azure", "PostgreSQL", "Apache AGE", "DiskANN", "pgvector" };
+        var knownMatches = new List<string>();
+        var regexMatches = new List<string>();
         var entities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var candidate in known)
         {
             if (query.Contains(candidate, StringComparison.OrdinalIgnoreCase))
             {
+                knownMatches.Add(candidate);
                 entities.Add(candidate);
             }
         }
@@ -565,13 +609,43 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         foreach (Match match in Regex.Matches(query, @"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)?\b"))
         {
             var value = match.Value.Trim();
-            if (value.Length is >= 3 and <= 80)
+            if (!string.IsNullOrWhiteSpace(value))
             {
-                entities.Add(value);
+                regexMatches.Add(value);
             }
         }
 
-        return entities.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).Take(8).ToList();
+        var uniqueRegex = regexMatches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var filteredRegex = uniqueRegex
+            .Where(value => value.Length is >= 3 and <= 80)
+            .ToList();
+        foreach (var candidate in filteredRegex)
+        {
+            entities.Add(candidate);
+        }
+
+        var finalEntities = entities.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).Take(8).ToList();
+        var detail = string.Join(Environment.NewLine,
+        [
+            $"Step 1: Known term matches ({knownMatches.Count}): {FormatEntityList(knownMatches, 12)}",
+            $"Step 2: Regex candidates ({uniqueRegex.Count}): {FormatEntityList(uniqueRegex, 12)}",
+            $"Step 3: Length-filtered candidates ({filteredRegex.Count}): {FormatEntityList(filteredRegex, 12)}",
+            $"Step 4: Final entities (max 8): {FormatEntityList(finalEntities, 12)}"
+        ]);
+
+        return (finalEntities, detail);
+    }
+
+    private static string FormatEntityList(IReadOnlyCollection<string> items, int maxItems)
+    {
+        if (items.Count == 0)
+        {
+            return "(none)";
+        }
+
+        var preview = items.Take(maxItems).ToList();
+        var text = string.Join(", ", preview);
+        return items.Count > maxItems ? $"{text} (+{items.Count - maxItems} more)" : text;
     }
 
     private static List<string> BuildGraphExpansionQueries(IReadOnlyCollection<string> seedEntities, int hops)
@@ -604,35 +678,153 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return result;
     }
 
-    private static string BuildVectorSearchDetail(IReadOnlyCollection<string> entityFilter)
+    private static string BuildVectorSearchDetail(IReadOnlyCollection<string> entityFilter, int limit, float[] queryEmbedding)
     {
-        const string sql = "SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding <=> CAST(@query_vector AS vector) AS distance\n" +
-                           "FROM chunks c\n" +
-                           "JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
-                           "JOIN entities e ON e.id = ce.entity_id\n" +
-                           "WHERE e.name = ANY(@entity_names)\n" +
-                           "  AND c.embedding IS NOT NULL\n" +
-                           "ORDER BY c.embedding <=> CAST(@query_vector AS vector)\n" +
-                           "LIMIT @limit;";
+        const string parameterizedSql = "SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding <=> CAST(@query_vector AS vector) AS distance\n" +
+                                        "FROM chunks c\n" +
+                                        "JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
+                                        "JOIN entities e ON e.id = ce.entity_id\n" +
+                                        "WHERE e.name = ANY(@entity_names)\n" +
+                                        "  AND c.embedding IS NOT NULL\n" +
+                                        "ORDER BY c.embedding <=> CAST(@query_vector AS vector)\n" +
+                                        "LIMIT @limit;";
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
+        var entityArray = entityFilter.Count == 0
+            ? "ARRAY[]::text[]"
+            : $"ARRAY[{string.Join(", ", entityFilter.Select(e => $"'{EscapeSqlLiteral(e)}'"))}]::text[]";
+        var executableSql = "SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding <=> '" + vectorLiteral + "'::vector AS distance\n" +
+                            "FROM chunks c\n" +
+                            "JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
+                            "JOIN entities e ON e.id = ce.entity_id\n" +
+                            "WHERE e.name = ANY(" + entityArray + ")\n" +
+                            "  AND c.embedding IS NOT NULL\n" +
+                            "ORDER BY c.embedding <=> '" + vectorLiteral + "'::vector\n" +
+                            "LIMIT " + constrainedLimit + ";";
 
-        var entitiesPreview = entityFilter.Count == 0
-            ? "(none)"
-            : string.Join(", ", entityFilter.Take(8));
-        return $"SQL:\n{sql}\n\nEntity filter ({entityFilter.Count}): {entitiesPreview}";
+        return $"Parameterized SQL:\n{parameterizedSql}\n\nExecutable SQL:\n{executableSql}";
     }
 
-    private static async Task<List<string>> MatchEntitiesAsync(
+    private static string BuildAnalysisUserPrompt(string question, string? clarification)
+    {
+        var clarificationText = string.IsNullOrWhiteSpace(clarification) ? string.Empty : $"\nClarification: {clarification}";
+        return $"Question: {question}{clarificationText}";
+    }
+
+    private static string BuildEntityMatchDetail(IReadOnlyCollection<string> candidates, IReadOnlyCollection<string> expandedCandidates, IReadOnlyCollection<string> matched)
+    {
+        const string sql = "SELECT name\n" +
+                           "FROM entities\n" +
+                           "WHERE lower(name) = ANY(@exact)\n" +
+                           "   OR name ILIKE ANY(@patterns)\n" +
+                           "ORDER BY CASE WHEN lower(name) = ANY(@exact) THEN 0 ELSE 1 END, name\n" +
+                           "LIMIT 20;";
+        var lowered = expandedCandidates.Select(c => c.ToLowerInvariant()).ToList();
+        var patterns = expandedCandidates.Select(c => $"%{c}%").ToList();
+        var output = matched.Count == 0 ? "(none)" : string.Join(", ", matched);
+        var showExpanded = expandedCandidates.Count != candidates.Count
+            || expandedCandidates.Any(candidate => !candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase));
+        return string.Join(Environment.NewLine,
+        [
+            "SQL:",
+            sql,
+            string.Empty,
+            $"Parameters:",
+            $"- @exact ({lowered.Count}): {FormatEntityList(lowered, 12)}",
+            $"- @patterns ({patterns.Count}): {FormatEntityList(patterns, 12)}",
+            showExpanded ? $"- Expanded candidates ({expandedCandidates.Count}): {FormatEntityList(expandedCandidates, 12)}" : "- Expanded candidates: (none)",
+            string.Empty,
+            $"Matched entities: {output}"
+        ]);
+    }
+
+    private static List<string> ExpandEntityCandidates(IReadOnlyCollection<string> candidates)
+    {
+        var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            expanded.Add(candidate.Trim());
+            foreach (var variant in GenerateAsciiVariants(candidate))
+            {
+                if (!string.IsNullOrWhiteSpace(variant))
+                {
+                    expanded.Add(variant.Trim());
+                }
+            }
+        }
+
+        return expanded.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static IReadOnlyList<string> GenerateAsciiVariants(string input)
+    {
+        var variants = new List<string> { string.Empty };
+        foreach (var ch in input)
+        {
+            string[] options = ch switch
+            {
+                'Å' or 'å' => ["aa"],
+                'Æ' or 'æ' => ["ae"],
+                'Ø' or 'ø' => ["o"],
+                'Ö' or 'ö' => ["o", "oe"],
+                _ => [ch.ToString()]
+            };
+
+            var next = new List<string>(variants.Count * options.Length);
+            foreach (var prefix in variants)
+            {
+                foreach (var option in options)
+                {
+                    next.Add(prefix + option);
+                }
+            }
+            variants = next;
+        }
+
+        return variants;
+    }
+
+    private static string BuildAnswerUserPrompt(string context, string question)
+        => $"Context:\n{context}\n\nQuestion:\n{question}";
+
+    private static string BuildPromptDetail(string? systemPrompt, string? userPrompt, string outputLabel, string output)
+    {
+        var systemText = string.IsNullOrWhiteSpace(systemPrompt) ? "(not available)" : systemPrompt.Trim();
+        var userText = string.IsNullOrWhiteSpace(userPrompt) ? "(not available)" : userPrompt.Trim();
+        return $"System prompt:\n{systemText}\n\nUser prompt:\n{userText}\n\n{outputLabel}:\n{output}";
+    }
+
+    private static string BuildPromptDetailPromptsOnly(string? systemPrompt, string? userPrompt)
+    {
+        var systemText = string.IsNullOrWhiteSpace(systemPrompt) ? "(not available)" : systemPrompt.Trim();
+        var userText = string.IsNullOrWhiteSpace(userPrompt) ? "(not available)" : userPrompt.Trim();
+        return $"System prompt:\n{systemText}\n\nUser prompt:\n{userText}";
+    }
+
+    private static string BuildPromptDetailSystemOnly(string? systemPrompt)
+    {
+        var systemText = string.IsNullOrWhiteSpace(systemPrompt) ? "(not available)" : systemPrompt.Trim();
+        return $"System prompt:\n{systemText}";
+    }
+
+    private static async Task<(List<string> Matched, List<string> ExpandedCandidates)> MatchEntitiesAsync(
         NpgsqlConnection connection,
         IReadOnlyCollection<string> candidates,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
         {
-            return [];
+            return ([], []);
         }
 
-        var lowered = candidates.Select(c => c.ToLowerInvariant()).ToArray();
-        var patterns = candidates.Select(c => $"%{c}%").ToArray();
+        var expandedCandidates = ExpandEntityCandidates(candidates);
+        var lowered = expandedCandidates.Select(c => c.ToLowerInvariant()).ToArray();
+        var patterns = expandedCandidates.Select(c => $"%{c}%").ToArray();
         const string sql = """
                            SELECT name
                            FROM entities
@@ -660,7 +852,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             }
         }
 
-        return matches;
+        return (matches, expandedCandidates);
     }
 
     private static async Task<List<string>> LoadFallbackEntitiesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)

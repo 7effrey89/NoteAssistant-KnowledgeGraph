@@ -26,7 +26,7 @@ public sealed class MarkdownGraphIngestionServiceTests
         var service = new MarkdownGraphIngestionService(foundry, options);
         var markdown = "# Title\n\nFirst paragraph.\n\nSecond paragraph.";
 
-        var plan = await service.CreateGraphPlanAsync("sample.md", markdown, CancellationToken.None);
+        var plan = await service.CreateGraphPlanAsync("sample.md", markdown, null, CancellationToken.None);
 
         Assert.Equal("custom_graph", plan.GraphName);
         Assert.Equal(3, plan.Chunks.Count);

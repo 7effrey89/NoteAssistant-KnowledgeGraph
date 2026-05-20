@@ -8,10 +8,16 @@ public sealed record ChunkEntityLinkDto(int ChunkId, string EntityLabel, string 
 
 public sealed record IngestionStatusDto(int DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
 
+public sealed record DocumentMetadata(
+    string? DocumentType,
+    DateOnly? DocumentDate,
+    IReadOnlyList<string>? Tags);
+
 public sealed record GraphIngestionPlan(
     int DocumentId,
     string GraphName,
     string Title,
+    DocumentMetadata? Metadata,
     IReadOnlyList<ChunkDto> Chunks,
     IReadOnlyList<EntityDto> Entities,
     IReadOnlyList<ChunkEntityLinkDto> Mentions,
@@ -72,4 +78,5 @@ public sealed record HybridRetrievalResponse(
     HybridRetrievalTraceDto? Trace = null,
     string? ClarificationQuestion = null,
     string? RewrittenQuestion = null,
-    string? SystemPrompt = null);
+    string? SystemPrompt = null,
+    string? AnalysisSystemPrompt = null);

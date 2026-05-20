@@ -20,7 +20,7 @@
     <div class="card mb-4">
         <div class="card-header">0) Optional: Reset PostgreSQL (dev only)</div>
         <div class="card-body">
-            <p class="text-muted small mb-2">Drops relational tables, the AGE graph, and the AGE extension (ag_catalog), and clears the analysis cache.</p>
+            <p class="text-muted small mb-2">Drops the AGE graph, the graph schema, the kg_data schema (documents, chunks, entities, chunk_entities), the public fallback tables (documents, chunks, entities, chunk_entities), the AGE extension (ag_catalog), and clears the cache for document-to-entity breakdown.</p>
             <div class="d-flex flex-wrap gap-2">
                 <button class="btn btn-outline-danger" id="resetDbBtn">Reset database</button>
                 <button class="btn btn-outline-secondary" id="initScriptBtn">Run init script</button>
@@ -74,6 +74,33 @@
                     <ul id="mentionsOutput"></ul>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">2.5) Metadata</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label" for="metadataDocumentType">Document type</label>
+                    <select class="form-select" id="metadataDocumentType">
+                        <option value="">(select)</option>
+                        <option value="transcription">Transcription</option>
+                        <option value="meeting_summary">Meeting summary</option>
+                        <option value="product_notes">Product notes</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="metadataDocumentDate">Document date</label>
+                    <input class="form-control" type="date" id="metadataDocumentDate" />
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label" for="metadataTags">Tags (comma-separated)</label>
+                    <input class="form-control" id="metadataTags" placeholder="e.g. power bi, external sharing" />
+                </div>
+            </div>
+            <div class="mt-2 text-muted small">Metadata is stored with the document to support queries like "latest meeting".</div>
         </div>
     </div>
 
@@ -169,7 +196,7 @@
                         <label class="form-check-label" for="hybridTraceToggle">Show retrieval trace</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="checkbox" id="hybridAnswerToggle" />
+                        <input class="form-check-input" type="checkbox" id="hybridAnswerToggle" checked />
                         <label class="form-check-label" for="hybridAnswerToggle">Ask LLM for answer</label>
                     </div>
                 </div>
@@ -246,6 +273,14 @@
             document.getElementById('hybridQuestion').value = text;
         }
 
+        function getMetadataPayload() {
+            return {
+                documentType: document.getElementById('metadataDocumentType').value.trim(),
+                documentDate: document.getElementById('metadataDocumentDate').value.trim(),
+                tags: document.getElementById('metadataTags').value.trim()
+            };
+        }
+
         function setBackendStatus(state, text) {
             backendLamp.className = `status-lamp status-lamp-${state}`;
             backendStatusText.innerText = text;
@@ -278,6 +313,10 @@
 
             const formData = new FormData();
             formData.append('file', file);
+            const metadata = getMetadataPayload();
+            formData.append('documentType', metadata.documentType || '');
+            formData.append('documentDate', metadata.documentDate || '');
+            formData.append('tags', metadata.tags || '');
 
             setMessage('uploadMessage', `Uploading ${file.name}…`, 'text-muted');
 
@@ -581,12 +620,12 @@
         }
 
         async function resetDatabase() {
-            if (!confirm('This will delete relational data, drop the AGE graph, and remove the AGE extension (ag_catalog). Continue?')) {
+            if (!confirm('This will drop the AGE graph and graph schema, drop the kg_data schema (documents, chunks, entities, chunk_entities), drop the public fallback tables (documents, chunks, entities, chunk_entities), drop the AGE extension (ag_catalog), and clear the cache for document-to-entity breakdown. Continue?')) {
                 return;
             }
 
             resetDbBtn.disabled = true;
-            setMessage('resetDbMessage', 'Resetting database and clearing cache…', 'text-muted');
+            setMessage('resetDbMessage', 'Resetting database and clearing the cache for document-to-entity breakdown…', 'text-muted');
 
             let response;
             try {
@@ -610,7 +649,7 @@
             setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
             setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
-            setMessage('resetDbMessage', `Database reset completed. Cache files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
+            setMessage('resetDbMessage', `Database reset completed. Cache for document-to-entity breakdown files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
             initScriptOutput.innerText = '';
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
@@ -714,9 +753,21 @@
 
             const trace = payload.trace;
             const mapItems = [];
-            mapItems.push({ title: 'User question received', body: question });
+            if (!isClarification) {
+                mapItems.push({ title: 'User question received', body: question });
+            }
 
             if (payload.clarificationQuestion) {
+                if (isClarification && window.lastClarificationResponse) {
+                    mapItems.push({ title: 'Clarification received', body: window.lastClarificationResponse });
+                }
+                const clarificationPrompt = payload.analysisSystemPrompt || '(not available)';
+                mapItems.push({
+                    title: 'Clarification prompt',
+                    indent: true,
+                    scroll: true,
+                    body: `LLM generated the clarification question.\n\nSystem prompt:\n${clarificationPrompt}`
+                });
                 mapItems.push({
                     title: 'Clarification needed',
                     body: `${payload.clarificationQuestion} (attempt ${hybridClarificationAttempts + 1} of 3)`,
@@ -729,6 +780,10 @@
                 return;
             }
 
+            if (isClarification && window.lastClarificationResponse) {
+                mapItems.push({ title: 'Clarification received', body: window.lastClarificationResponse });
+            }
+
             const effectiveQuestion = payload.rewrittenQuestion || question;
             if (payload.rewrittenQuestion && (payload.rewrittenQuestion !== question || (window.lastClarificationResponse && window.lastClarificationResponse.length > 0))) {
                 mapItems.push({
@@ -738,29 +793,66 @@
                 });
             }
 
+            const rewriteStep = getTraceStep(trace, 'question-rewrite');
+            const rewriteDetail = includeTrace && rewriteStep?.detail ? rewriteStep.detail : null;
+            if (rewriteDetail) {
+                mapItems.push({
+                    title: 'Question rewrite prompt',
+                    indent: true,
+                    scroll: true,
+                    body: rewriteDetail
+                });
+            }
+
             mapItems.push({ title: 'Entity detection input', body: effectiveQuestion, indent: true });
+            const analysisPrompt = payload.analysisSystemPrompt || '(not available)';
             mapItems.push({
                 title: 'Entity detection logic',
-                body: 'LLM extracts entities and flags ambiguous pronouns; heuristic is fallback if LLM fails.'
+                bodyHtml: `LLM extracts entities and flags ambiguous pronouns; heuristic is fallback if LLM fails.<br><em>LLM System prompt: ${escapeHtml(analysisPrompt)}</em>`
             });
             const llmStep = getTraceStep(trace, 'entity-llm');
             const detectionStep = getTraceStep(trace, 'entity-detection');
-            const detectionDetail = includeTrace && (llmStep?.detail || detectionStep?.detail)
-                ? (llmStep?.detail || detectionStep?.detail)
-                : '(trace disabled)';
+            const detectionDetail = includeTrace && detectionStep?.detail
+                ? detectionStep.detail
+                : null;
             mapItems.push({
                 title: 'Entity detection output',
                 indent: true,
                 body: (() => {
                     const fallbackStep = getTraceStep(trace, 'entity-fallback');
                     const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
-                    const lines = [detectedList.length ? detectedList.join(', ') : '(none)'];
-                    if (detectionDetail) {
-                        lines.push(truncateText(detectionDetail, 500));
+                    const detectedText = detectedList.length ? detectedList.join(', ') : '(none)';
+                    const detailText = detectionDetail ? detectionDetail.trim() : '';
+                    const showDetail = detailText
+                        && detailText !== detectedText
+                        && !detailText.includes(detectedText);
+                    const lines = [detectedText];
+                    if (showDetail) {
+                        lines.push(truncateText(detailText, 500));
                     }
                     return lines.join('\n');
                 })()
             });
+
+            const entityPromptDetail = includeTrace && llmStep?.detail ? llmStep.detail : null;
+            if (entityPromptDetail) {
+                mapItems.push({
+                    title: 'Entity detection prompt',
+                    indent: true,
+                    scroll: true,
+                    body: entityPromptDetail
+                });
+            }
+
+            const detectionSteps = includeTrace && detectionStep?.detail ? detectionStep.detail : null;
+            if (detectionSteps && detectionSteps.includes('Step 1:')) {
+                mapItems.push({
+                    title: 'Entity detection steps',
+                    indent: true,
+                    scroll: true,
+                    body: detectionSteps
+                });
+            }
 
             const fallbackStep = getTraceStep(trace, 'entity-fallback');
             if (fallbackStep) {
@@ -781,11 +873,19 @@
             if (matchStep || matched) {
                 const matchDetail = includeTrace && matchStep?.detail
                     ? matchStep.detail
-                    : (matched || '(trace disabled)');
+                    : null;
+                if (matchDetail) {
+                    mapItems.push({
+                        title: 'Entity match trace',
+                        indent: true,
+                        scroll: true,
+                        body: matchDetail
+                    });
+                }
                 mapItems.push({
                     title: 'Entity match output',
                     indent: true,
-                    body: truncateText(matchDetail, 500)
+                    body: matched || '(none)'
                 });
             }
 
@@ -794,9 +894,33 @@
             mapItems.push({ title: 'Graph expansion query', body: truncateText(expansionDetail, 600), indent: true });
             mapItems.push({ title: 'Graph-expanded entities', body: (payload.graphEntities || []).join(', ') || '(none)' });
 
+            const embeddingStep = getTraceStep(trace, 'embedding');
+            const embeddingDetail = includeTrace && embeddingStep?.detail ? embeddingStep.detail : null;
+            if (embeddingDetail) {
+                mapItems.push({
+                    title: 'Embedding prompt',
+                    indent: true,
+                    scroll: true,
+                    body: embeddingDetail
+                });
+            }
+
             const vectorStep = getTraceStep(trace, 'vector-search');
             const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
-            mapItems.push({ title: 'Vector search input', body: truncateText(vectorDetail, 600), indent: true });
+            const vectorSql = parseSqlSections(vectorDetail);
+            if (vectorSql) {
+                mapItems.push({
+                    title: 'Vector search input',
+                    bodyHtml: buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable),
+                    indent: true
+                });
+            } else {
+                mapItems.push({
+                    title: 'Vector search input',
+                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`,
+                    indent: true
+                });
+            }
 
             const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`);
             mapItems.push({
@@ -808,6 +932,11 @@
 
             mapItems.push({ title: 'System prompt', body: payload.systemPrompt || '(none)', indent: true, scroll: true });
             mapItems.push({ title: 'Prompt context', body: payload.promptContext || '(empty)', indent: true, scroll: true });
+            const answerStep = getTraceStep(trace, 'llm-answer');
+            const answerDetail = includeTrace && answerStep?.detail ? answerStep.detail : null;
+            if (answerDetail) {
+                mapItems.push({ title: 'LLM answer prompt', body: answerDetail, indent: true, scroll: true });
+            }
             mapItems.push({ title: 'LLM answer', body: payload.answer || (includeAnswer ? '(no answer returned)' : '(answer disabled)'), indent: true });
 
             appendProcessMap(mapItems);
@@ -896,10 +1025,14 @@
             title.innerText = item.title || 'Step';
             bubble.appendChild(title);
 
-            if (item.body) {
+            if (item.body || item.bodyHtml) {
                 const body = document.createElement('div');
                 body.className = 'process-bubble-body';
-                body.innerText = item.body;
+                if (item.bodyHtml) {
+                    body.innerHTML = item.bodyHtml;
+                } else {
+                    body.innerText = item.body;
+                }
                 bubble.appendChild(body);
             }
 
@@ -956,6 +1089,71 @@
 
             return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
         }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function parseSqlSections(value) {
+            if (!value) {
+                return null;
+            }
+
+            const parameterizedHeader = 'Parameterized SQL:';
+            const executableHeader = 'Executable SQL:';
+            const parameterizedIndex = value.indexOf(parameterizedHeader);
+            const executableIndex = value.indexOf(executableHeader);
+            if (parameterizedIndex === -1 || executableIndex === -1) {
+                return null;
+            }
+
+            const parameterized = value
+                .slice(parameterizedIndex + parameterizedHeader.length, executableIndex)
+                .trim();
+            const executable = value
+                .slice(executableIndex + executableHeader.length)
+                .trim();
+            return { parameterized, executable };
+        }
+
+        function buildSqlToggleHtml(parameterizedSql, executableSql) {
+            const parameterized = escapeHtml(parameterizedSql);
+            const executable = escapeHtml(executableSql);
+            return `
+                <div class="sql-toggle" data-view="parameterized">
+                    <div class="btn-group btn-group-sm sql-toggle-buttons" role="group">
+                        <button type="button" class="btn btn-outline-secondary sql-toggle-btn active" data-view="parameterized">Parameterized</button>
+                        <button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="executable">Executable</button>
+                    </div>
+                    <pre class="sql-toggle-view sql-toggle-view-parameterized">${parameterized}</pre>
+                    <pre class="sql-toggle-view sql-toggle-view-executable d-none">${executable}</pre>
+                </div>`;
+        }
+
+        document.addEventListener('click', (event) => {
+            const button = event.target.closest('.sql-toggle-btn');
+            if (!button) {
+                return;
+            }
+
+            const container = button.closest('.sql-toggle');
+            if (!container) {
+                return;
+            }
+
+            const view = button.dataset.view;
+            container.querySelectorAll('.sql-toggle-view').forEach((element) => {
+                element.classList.toggle('d-none', !element.classList.contains(`sql-toggle-view-${view}`));
+            });
+            container.querySelectorAll('.sql-toggle-btn').forEach((btn) => {
+                btn.classList.toggle('active', btn === button);
+            });
+        });
 
         function renderResults(rows) {
             const table = document.getElementById('resultsTable');
