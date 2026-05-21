@@ -33,6 +33,7 @@ public interface IFoundryInferenceClient
     Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken);
     string AnswerSystemPrompt { get; }
     string AnalysisSystemPrompt { get; }
+    string EntityExtractionSystemPrompt { get; }
 }
 
 public sealed record LlmTokenUsage(int? PromptTokens, int? CompletionTokens);
@@ -61,6 +62,9 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         "If a Clarification is provided, do NOT ask another clarification; use it to rewrite the question. " +
         "If no clarification is needed, use null. " +
         "rewrittenQuestion should be a clearer version of the question with explicit entities when possible.";
+    private const string DefaultEntityExtractionSystemPrompt =
+        "Extract key entities from the user content. Return ONLY a JSON array of objects with 'label' and 'name'. " +
+        "Use labels like Company, Product, Platform, Technology, Concept, Person, or Organization. No prose.";
     private readonly FoundryOptions _copilot;
     private readonly ILogger<FoundryInferenceClient> _logger;
     private readonly EmbeddingClient? _embeddingsClient;
@@ -112,6 +116,8 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
     public string AnalysisSystemPrompt => DefaultAnalysisSystemPrompt;
 
+    public string EntityExtractionSystemPrompt => DefaultEntityExtractionSystemPrompt;
+
     public async Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken)
     {
         var embeddings = await CreateEmbeddingsAsync([input], cancellationToken);
@@ -144,9 +150,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var messages = new List<ChatMessage>
         {
-            ChatMessage.CreateSystemMessage(
-                "Extract key entities from the user content. Return ONLY a JSON array of objects with 'label' and 'name'. " +
-                "Use labels like Company, Product, Platform, Technology, Concept, Person, or Organization. No prose."),
+            ChatMessage.CreateSystemMessage(DefaultEntityExtractionSystemPrompt),
             ChatMessage.CreateUserMessage(markdownContent)
         };
 

@@ -284,6 +284,12 @@ app.MapPost("/api/query", async (GraphQueryRequest request, AgeGraphRepository r
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapPost("/api/graph/node/details", async (GraphNodeDetailsRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetNodeDetailsAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/query/assist", (QueryAssistantRequest request, QueryAssistantService assistant) =>
 {
     if (string.IsNullOrWhiteSpace(request.Prompt))

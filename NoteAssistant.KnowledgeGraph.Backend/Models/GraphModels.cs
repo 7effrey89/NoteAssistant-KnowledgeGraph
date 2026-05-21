@@ -25,7 +25,8 @@ public sealed record GraphIngestionPlan(
     IngestionStatusDto Status,
     string OriginalContent = "",
     string ContentHash = "",
-    bool Cached = false);
+    bool Cached = false,
+    string DecompositionSystemPrompt = "");
 
 public sealed record GraphQueryRequest(string Cypher, string GraphName = "knowledge_graph");
 
@@ -36,9 +37,23 @@ public sealed record GraphQueryResponse(
     IReadOnlyList<GraphNodeDto> Nodes,
     IReadOnlyList<GraphEdgeDto> Edges);
 
-public sealed record GraphNodeDto(string Id, string Label, string Title);
+public sealed record GraphNodeDto(string Id, string Label, string Title, IReadOnlyDictionary<string, string?>? Properties = null);
 
 public sealed record GraphEdgeDto(string Source, string Target, string Label);
+
+public sealed record GraphNodeDetailsRequest(
+    string Id,
+    string Label,
+    string Title,
+    IReadOnlyDictionary<string, string?>? Properties = null);
+
+public sealed record GraphNodeDetailsResponse(
+    bool Success,
+    string? Error,
+    string NodeType,
+    IReadOnlyDictionary<string, string?> Attributes,
+    IReadOnlyDictionary<string, string>? AttributeSources = null,
+    IReadOnlyDictionary<string, string>? AttributeSourceSqls = null);
 
 public sealed record StatementExecutionDto(int Index, string StatementType, bool Success, int DurationMs, string? Error, string Statement);
 

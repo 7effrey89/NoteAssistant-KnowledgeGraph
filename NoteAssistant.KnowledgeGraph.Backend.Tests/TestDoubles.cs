@@ -31,6 +31,8 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
 
     public string AnalysisSystemPrompt => "test-analysis-system-prompt";
 
+    public string EntityExtractionSystemPrompt => "test-entity-extraction-system-prompt";
+
     public Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
         => Task.FromResult(new AnswerResult("(fake answer)", null));
 

@@ -66,6 +66,10 @@
                     <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
                 </div>
                 <div class="tab-pane fade" id="tab-decomp" role="tabpanel">
+                    <details class="mb-3 decomposition-prompt-details">
+                        <summary>System prompt</summary>
+                        <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
+                    </details>
                     <h5>Chunks</h5>
                     <ul id="chunksOutput"></ul>
                     <h5>Entities</h5>
@@ -135,47 +139,57 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">5) Query editor + assistant</div>
+        <div class="card-header">5) Query editor + graph explorer</div>
         <div class="card-body">
-            <div class="mb-2">
-                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
-                <div class="input-group">
-                    <input class="form-control" id="assistantPrompt" placeholder="e.g. show all chunks and mentioned entities" />
-                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+            <div class="row g-3 query-workbench-layout">
+                <div class="col-lg-3 query-workbench-sidebar">
+                    <div class="mb-2">
+                        <label class="form-label" for="assistantPrompt">Assistant prompt</label>
+                        <div class="assistant-prompt-group">
+                            <textarea class="form-control" id="assistantPrompt" rows="3" placeholder="e.g. show all chunks and mentioned entities"></textarea>
+                            <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                        </div>
+                        <div class="mt-2 d-flex flex-column gap-2">
+                            <span class="text-muted small">Quick prompts:</span>
+                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt1">Show all chunks with entities</button>
+                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt2">Find entities related to Power BI</button>
+                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                        </div>
+                        <small class="text-muted" id="assistExplanation"></small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="queryInput">Cypher query</label>
+                        <textarea id="queryInput" class="form-control" rows="12"></textarea>
+                    </div>
+                    <button class="btn btn-success w-100" id="runQueryBtn">Run query</button>
                 </div>
-                <div class="mt-2 d-flex flex-wrap gap-2">
-                    <span class="text-muted small">Quick prompts:</span>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt1">Show all chunks with entities</button>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt2">Find entities related to Power BI</button>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                <div class="col-lg-9 query-workbench-main">
+                    <div id="queryError" class="text-danger mb-2"></div>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <div id="graphCheckStatus" class="text-muted small flex-grow-1">Graph counts not loaded.</div>
+                        <button class="btn btn-sm btn-outline-secondary" id="graphCheckBtn">Refresh counts</button>
+                    </div>
+                    <details class="query-workbench-details mb-2">
+                        <summary>Cypher results</summary>
+                        <div class="table-responsive query-results-panel mt-2">
+                            <table class="table table-sm table-bordered mb-0" id="resultsTable"></table>
+                        </div>
+                    </details>
+                    <details class="query-workbench-details mb-2" open>
+                        <summary>Graph</summary>
+                        <div id="graphView" class="mt-2 query-graph-view"></div>
+                    </details>
                 </div>
-                <small class="text-muted" id="assistExplanation"></small>
             </div>
-            <div class="mb-3">
-                <label class="form-label" for="queryInput">Cypher query</label>
-                <textarea id="queryInput" class="form-control" rows="7"></textarea>
-            </div>
-            <button class="btn btn-success" id="runQueryBtn">Run query</button>
+            <details id="graphSelectionDetails" class="graph-selection-details mt-3">
+                <summary id="graphSelectionSummary">Selected graph item details</summary>
+                <div id="graphSelectionContent" class="graph-selection-content text-muted small">Click a node or edge in the graph to inspect it.</div>
+            </details>
         </div>
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">6) Query result + graph explorer</div>
-        <div class="card-body">
-            <div id="queryError" class="text-danger mb-2"></div>
-            <div class="d-flex align-items-center gap-2 mb-2">
-                <div id="graphCheckStatus" class="text-muted small">Graph counts not loaded.</div>
-                <button class="btn btn-sm btn-outline-secondary" id="graphCheckBtn">Refresh counts</button>
-            </div>
-            <div class="table-responsive mb-3" style="max-height: 360px; overflow:auto;">
-                <table class="table table-sm table-bordered" id="resultsTable"></table>
-            </div>
-            <div id="graphView" style="height: 420px; border: 1px solid #ddd;"></div>
-        </div>
-    </div>
-
-    <div class="card mb-4">
-        <div class="card-header">7) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
+        <div class="card-header">6) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
         <div class="card-body">
             <div class="mb-2">
                 <label class="form-label" for="hybridQuestion">Question</label>
@@ -653,6 +667,7 @@
             initScriptOutput.innerText = '';
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
+            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
@@ -962,6 +977,7 @@
 
         function renderDecomposition(payload) {
             document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
+            document.getElementById('decompositionSystemPrompt').textContent = payload.decompositionSystemPrompt || '(no system prompt returned)';
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
@@ -1251,6 +1267,7 @@
         function renderGraph(nodes, edges) {
             const container = document.getElementById('graphView');
             container.innerHTML = '';
+            resetGraphSelectionDetails();
 
             if (!nodes.length) {
                 container.innerText = 'No graph primitives returned. Use a query that returns vertices/edges.';
@@ -1262,13 +1279,336 @@
                 return;
             }
 
+            const nodesById = new Map(nodes.map(node => [String(node.id), node]));
+            const edgesById = new Map();
             const visNodes = new vis.DataSet(nodes.map(node => ({ id: node.id, label: node.title, group: node.label })));
-            const visEdges = new vis.DataSet(edges.map(edge => ({ from: edge.source, to: edge.target, label: edge.label, arrows: 'to' })));
+            const visEdges = new vis.DataSet(edges.map((edge, index) => {
+                const id = `edge-${index}`;
+                edgesById.set(id, edge);
+                return { id, from: edge.source, to: edge.target, label: edge.label, arrows: 'to' };
+            }));
 
-            new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+            const network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
                 interaction: { hover: true, navigationButtons: true },
                 physics: { stabilization: false }
             });
+
+            network.on('click', (params) => {
+                const nodeId = params.nodes && params.nodes.length > 0 ? params.nodes[0] : null;
+                if (nodeId !== null) {
+                    const node = nodesById.get(String(nodeId));
+                    if (node) {
+                        showGraphNodeDetails(node);
+                        return;
+                    }
+                }
+
+                const edgeId = params.edges && params.edges.length > 0 ? params.edges[0] : null;
+                if (edgeId !== null) {
+                    const edge = edgesById.get(String(edgeId));
+                    if (edge) {
+                        showGraphEdgeDetails(edge, nodesById);
+                        return;
+                    }
+                }
+
+                resetGraphSelectionDetails();
+            });
+        }
+
+        function resetGraphSelectionDetails() {
+            const details = document.getElementById('graphSelectionDetails');
+            const summary = document.getElementById('graphSelectionSummary');
+            const content = document.getElementById('graphSelectionContent');
+            details.open = false;
+            summary.innerText = 'Selected graph item details';
+            content.className = 'graph-selection-content text-muted small';
+            content.innerText = 'Click a node or edge in the graph to inspect it.';
+        }
+
+        async function showGraphNodeDetails(node) {
+            showGraphSelectionDetails(`Node: ${node.title || node.id}`, [
+                ['Type', 'Node', 'vis-network selection'],
+                ['AGE ID', node.id, 'AGE vertex.id'],
+                ['Label', node.label, 'AGE vertex.label'],
+                ['Title', node.title, 'display value'],
+                ...objectEntriesToRows(node.properties || {}, (key) => `AGE vertex.properties.${key}`)
+            ], true);
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/graph/node/details`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: String(node.id),
+                        label: node.label || '',
+                        title: node.title || '',
+                        properties: node.properties || {}
+                    })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    setGraphRelationalDetails(payload?.error || `Could not load kg_data details (status ${response.status}).`, true);
+                    return;
+                }
+
+                setGraphRelationalDetails(payload?.attributes || {}, payload?.attributeSources || {}, false, node, payload?.attributeSourceSqls || {});
+            } catch (err) {
+                setGraphRelationalDetails(`Could not load kg_data details: ${err.message}`, true);
+            }
+        }
+
+        function showGraphEdgeDetails(edge, nodesById) {
+            const source = nodesById.get(String(edge.source));
+            const target = nodesById.get(String(edge.target));
+            showGraphSelectionDetails(`Edge: ${edge.label || 'relationship'}`, [
+                ['Type', 'Edge', 'vis-network selection'],
+                ['Label', edge.label, 'AGE edge.label'],
+                ['Source ID', edge.source, 'AGE edge.start_id'],
+                ['Source title', source?.title || '', 'display value'],
+                ['Target ID', edge.target, 'AGE edge.end_id'],
+                ['Target title', target?.title || '', 'display value']
+            ]);
+        }
+
+        function showGraphSelectionDetails(summaryText, rows, includeRelationalDetails = false) {
+            const details = document.getElementById('graphSelectionDetails');
+            const summary = document.getElementById('graphSelectionSummary');
+            const content = document.getElementById('graphSelectionContent');
+
+            summary.innerText = summaryText;
+            content.className = 'graph-selection-content';
+            content.innerHTML = '';
+
+            const grid = document.createElement('div');
+            grid.className = includeRelationalDetails ? 'graph-selection-grid' : '';
+
+            const graphPanel = document.createElement('div');
+            const graphTitle = document.createElement('div');
+            graphTitle.className = 'graph-selection-panel-title';
+            graphTitle.innerText = 'Graph item';
+            graphPanel.appendChild(graphTitle);
+            graphPanel.appendChild(createGraphAttributeTable(rows));
+            grid.appendChild(graphPanel);
+
+            if (includeRelationalDetails) {
+                const relationalPanel = document.createElement('div');
+                const relationalTitle = document.createElement('div');
+                relationalTitle.className = 'graph-selection-panel-title';
+                relationalTitle.innerText = 'kg_data attributes';
+                relationalPanel.appendChild(relationalTitle);
+
+                const relationalContent = document.createElement('div');
+                relationalContent.id = 'graphRelationalDetails';
+                relationalContent.className = 'text-muted small';
+                relationalContent.innerText = 'Loading relational details...';
+                relationalPanel.appendChild(relationalContent);
+                grid.appendChild(relationalPanel);
+            }
+
+            content.appendChild(grid);
+            details.open = true;
+        }
+
+        function createGraphAttributeTable(rows) {
+            const table = document.createElement('table');
+            table.className = 'table table-sm table-bordered mb-0 graph-selection-table';
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            const columnDescriptions = {
+                Attribute: 'The displayed field name for the selected graph item or relational row.',
+                Value: 'The value returned for that field. Long values are shortened until expanded.',
+                Source: 'Where the value came from. For derived values, this can be executable SQL.'
+            };
+            ['Attribute', 'Value', 'Source'].forEach((label) => {
+                const th = document.createElement('th');
+                th.scope = 'col';
+                th.innerText = label;
+                th.title = columnDescriptions[label];
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            rows.forEach(([label, value, source, sourceSql]) => {
+                const tr = document.createElement('tr');
+                const th = document.createElement('th');
+                th.scope = 'row';
+                th.innerText = label;
+                const td = document.createElement('td');
+                appendExpandableCellContent(td, value ?? '');
+                const sourceTd = document.createElement('td');
+                sourceTd.className = 'graph-selection-source';
+                appendSourceCellContent(sourceTd, source || '', sourceSql || '');
+                tr.appendChild(th);
+                tr.appendChild(td);
+                tr.appendChild(sourceTd);
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            return table;
+        }
+
+        function appendExpandableCellContent(cell, value) {
+            const text = String(value ?? '');
+            const maxLength = 140;
+            if (text.length <= maxLength) {
+                cell.innerText = text;
+                return;
+            }
+
+            const textSpan = document.createElement('span');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-sm btn-outline-secondary graph-cell-toggle';
+            button.title = 'Expand or collapse full cell text';
+
+            let expanded = false;
+            const render = () => {
+                textSpan.innerText = expanded ? text : `${text.slice(0, maxLength)}...`;
+                button.innerText = expanded ? 'Collapse' : 'Expand';
+            };
+            button.addEventListener('click', () => {
+                expanded = !expanded;
+                render();
+            });
+
+            render();
+            cell.appendChild(textSpan);
+            cell.appendChild(document.createTextNode(' '));
+            cell.appendChild(button);
+        }
+
+        function appendSourceCellContent(cell, source, sourceSql) {
+            if (!sourceSql) {
+                appendExpandableCellContent(cell, source);
+                return;
+            }
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-link graph-source-link';
+            button.title = 'Show executable SQL for this source';
+            button.innerText = source;
+            button.addEventListener('click', () => showSourceSqlDialog(source, sourceSql));
+            cell.appendChild(button);
+        }
+
+        function setGraphRelationalDetails(value, sourcesOrIsError = {}, isError = false, selectedNode = null, sourceSqls = {}) {
+            if (typeof sourcesOrIsError === 'boolean') {
+                isError = sourcesOrIsError;
+                sourcesOrIsError = {};
+            }
+
+            const container = document.getElementById('graphRelationalDetails');
+            if (!container) {
+                return;
+            }
+
+            container.className = isError ? 'text-danger small' : '';
+            container.innerHTML = '';
+            if (typeof value === 'string') {
+                container.innerText = value;
+                return;
+            }
+
+            const rows = objectEntriesToRows(
+                value,
+                (key) => sourcesOrIsError[key] || 'kg_data',
+                (key) => sourceSqls[key] || '');
+            if (rows.length === 0) {
+                container.className = 'text-muted small';
+                container.innerText = 'No relational details found.';
+                return;
+            }
+
+            appendEntityFocusAction(container, selectedNode);
+            container.appendChild(createGraphAttributeTable(rows));
+        }
+
+        function appendEntityFocusAction(container, selectedNode) {
+            const entityName = selectedNode?.properties?.name;
+            if (!entityName || selectedNode.label === 'Document' || selectedNode.label === 'Chunk') {
+                return;
+            }
+
+            const note = document.createElement('div');
+            note.className = 'graph-selection-hint mb-2';
+            note.innerText = 'The canvas only shows relationships returned by the active Cypher query. Focus this entity to show all MENTIONS edges returned for it.';
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-sm btn-outline-primary mb-2';
+            button.innerText = 'Show linked chunks in graph';
+            button.addEventListener('click', async () => {
+                document.getElementById('queryInput').value = `MATCH (c:Chunk)-[r:MENTIONS]->(e)\nWHERE e.name = "${escapeCypherString(entityName)}"\nRETURN c, r, e\nLIMIT 200`;
+                await runQuery();
+            });
+
+            container.appendChild(note);
+            container.appendChild(button);
+        }
+
+        function escapeCypherString(value) {
+            return String(value)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"');
+        }
+
+        function objectEntriesToRows(value, sourceFactory = () => '', sourceSqlFactory = () => '') {
+            return Object.entries(value || {}).map(([key, val]) => [formatAttributeLabel(key), val, sourceFactory(key), sourceSqlFactory(key)]);
+        }
+
+        function showSourceSqlDialog(source, sql) {
+            const existing = document.getElementById('sourceSqlDialog');
+            if (existing) {
+                existing.remove();
+            }
+
+            const overlay = document.createElement('div');
+            overlay.id = 'sourceSqlDialog';
+            overlay.className = 'source-sql-overlay';
+
+            const dialog = document.createElement('div');
+            dialog.className = 'source-sql-dialog';
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-label', 'Executable source SQL');
+
+            const header = document.createElement('div');
+            header.className = 'source-sql-header';
+            const title = document.createElement('div');
+            title.className = 'source-sql-title';
+            title.innerText = source;
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'btn btn-sm btn-outline-secondary';
+            closeButton.innerText = 'Close';
+            closeButton.addEventListener('click', () => overlay.remove());
+            header.appendChild(title);
+            header.appendChild(closeButton);
+
+            const pre = document.createElement('pre');
+            pre.className = 'source-sql-code';
+            pre.innerText = sql;
+
+            dialog.appendChild(header);
+            dialog.appendChild(pre);
+            overlay.appendChild(dialog);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) {
+                    overlay.remove();
+                }
+            });
+            document.body.appendChild(overlay);
+            closeButton.focus();
+        }
+
+        function formatAttributeLabel(value) {
+            return String(value)
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, (match) => match.toUpperCase());
         }
 
         function setMessage(id, text, cssClass) {

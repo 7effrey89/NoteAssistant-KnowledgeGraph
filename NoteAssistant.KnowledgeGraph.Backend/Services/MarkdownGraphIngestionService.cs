@@ -39,14 +39,14 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, enrichedChunks, entities, mentions, normalizedMetadata);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
-        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty);
+        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt);
     }
 
     public GraphIngestionPlan RefreshSql(GraphIngestionPlan plan)
     {
         var fileName = plan.Status.FileName;
         var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.Chunks, plan.Entities, plan.Mentions, NormalizeMetadata(plan.Metadata));
-        return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql };
+        return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql, DecompositionSystemPrompt = string.IsNullOrWhiteSpace(plan.DecompositionSystemPrompt) ? _foundry.EntityExtractionSystemPrompt : plan.DecompositionSystemPrompt };
     }
 
     private static IEnumerable<ChunkDto> ChunkMarkdown(string content, int documentId)

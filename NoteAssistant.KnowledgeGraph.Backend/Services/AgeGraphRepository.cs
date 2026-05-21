@@ -278,6 +278,30 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
     }
 
+    public async Task<GraphNodeDetailsResponse> GetNodeDetailsAsync(GraphNodeDetailsRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new GraphNodeDetailsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", request.Label, new Dictionary<string, string?>(), new Dictionary<string, string>());
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            return request.Label switch
+            {
+                "Document" => await GetDocumentNodeDetailsAsync(connection, request, cancellationToken),
+                "Chunk" => await GetChunkNodeDetailsAsync(connection, request, cancellationToken),
+                _ => await GetEntityNodeDetailsAsync(connection, request, cancellationToken)
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load graph node details for {Label} {Id}.", request.Label, request.Id);
+            return new GraphNodeDetailsResponse(false, ex.Message, request.Label, new Dictionary<string, string?>(), new Dictionary<string, string>());
+        }
+    }
+
     public async Task<HybridRetrievalResponse> ExecuteHybridRetrievalAsync(HybridRetrievalRequest request, CancellationToken cancellationToken)
     {
         if (!IsConfigured)
@@ -1110,6 +1134,295 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private static string EscapeSqlLiteral(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
 
+    private static async Task<GraphNodeDetailsResponse> GetDocumentNodeDetailsAsync(
+        NpgsqlConnection connection,
+        GraphNodeDetailsRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetLongProperty(request, "id", out var documentId)
+            && !TryParsePrefixedId(request.Id, "doc:", out documentId))
+        {
+            return MissingNodeDetails(request, "Document node does not include a relational document id.");
+        }
+
+        const string sql = """
+                           SELECT id,
+                                  title,
+                                  file_name,
+                                  document_type,
+                                  document_date,
+                                  content,
+                                  tags::text,
+                                  created_at
+                           FROM documents
+                           WHERE id = @document_id;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("document_id", documentId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return MissingNodeDetails(request, $"No document row found for id {documentId}.");
+        }
+
+        var attributes = ReadAttributes(reader, [
+            "id",
+            "title",
+            "file_name",
+            "document_type",
+            "document_date",
+            "content",
+            "tags",
+            "created_at"
+        ]);
+        return new GraphNodeDetailsResponse(true, null, "Document", attributes, new Dictionary<string, string>
+        {
+            ["id"] = "documents.id",
+            ["title"] = "documents.title",
+            ["file_name"] = "documents.file_name",
+            ["document_type"] = "documents.document_type",
+            ["document_date"] = "documents.document_date",
+            ["content"] = "documents.content",
+            ["tags"] = "documents.tags",
+            ["created_at"] = "documents.created_at"
+        });
+    }
+
+    private static async Task<GraphNodeDetailsResponse> GetChunkNodeDetailsAsync(
+        NpgsqlConnection connection,
+        GraphNodeDetailsRequest request,
+        CancellationToken cancellationToken)
+    {
+        NpgsqlCommand command;
+        if (TryGetLongProperty(request, "document_id", out var documentId)
+            && TryGetIntProperty(request, "chunk_index", out var chunkIndex))
+        {
+            const string sql = """
+                               SELECT c.id,
+                                      c.document_id,
+                                      d.title AS document_title,
+                                      d.file_name AS document_file_name,
+                                      c.chunk_index,
+                                      c.content,
+                                      string_agg(DISTINCT e.label || ': ' || e.name, ', ' ORDER BY e.label || ': ' || e.name) AS mentioned_entities,
+                                      c.created_at
+                               FROM chunks c
+                               JOIN documents d ON d.id = c.document_id
+                               LEFT JOIN chunk_entities ce ON ce.chunk_id = c.id
+                               LEFT JOIN entities e ON e.id = ce.entity_id
+                               WHERE c.document_id = @document_id AND c.chunk_index = @chunk_index
+                               GROUP BY c.id, c.document_id, d.title, d.file_name, c.chunk_index, c.content, c.created_at;
+                               """;
+            command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("document_id", documentId);
+            command.Parameters.AddWithValue("chunk_index", chunkIndex);
+        }
+        else if (TryParsePrefixedId(request.Id, "chunk:", out var chunkId))
+        {
+            const string sql = """
+                               SELECT c.id,
+                                      c.document_id,
+                                      d.title AS document_title,
+                                      d.file_name AS document_file_name,
+                                      c.chunk_index,
+                                      c.content,
+                                      string_agg(DISTINCT e.label || ': ' || e.name, ', ' ORDER BY e.label || ': ' || e.name) AS mentioned_entities,
+                                      c.created_at
+                               FROM chunks c
+                               JOIN documents d ON d.id = c.document_id
+                               LEFT JOIN chunk_entities ce ON ce.chunk_id = c.id
+                               LEFT JOIN entities e ON e.id = ce.entity_id
+                               WHERE c.id = @chunk_id
+                               GROUP BY c.id, c.document_id, d.title, d.file_name, c.chunk_index, c.content, c.created_at;
+                               """;
+            command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("chunk_id", chunkId);
+        }
+        else
+        {
+            return MissingNodeDetails(request, "Chunk node does not include relational document/chunk identifiers.");
+        }
+
+        await using (command)
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return MissingNodeDetails(request, "No chunk row found for the selected node.");
+            }
+
+            var attributes = ReadAttributes(reader, [
+                "id",
+                "document_id",
+                "document_title",
+                "document_file_name",
+                "chunk_index",
+                "content",
+                "mentioned_entities",
+                "created_at"
+            ]);
+            return new GraphNodeDetailsResponse(true, null, "Chunk", attributes, new Dictionary<string, string>
+            {
+                ["id"] = "chunks.id",
+                ["document_id"] = "chunks.document_id",
+                ["document_title"] = "documents.title",
+                ["document_file_name"] = "documents.file_name",
+                ["chunk_index"] = "chunks.chunk_index",
+                ["content"] = "chunks.content",
+                ["mentioned_entities"] = "entities.label + entities.name via chunk_entities",
+                ["created_at"] = "chunks.created_at"
+            });
+        }
+    }
+
+    private static async Task<GraphNodeDetailsResponse> GetEntityNodeDetailsAsync(
+        NpgsqlConnection connection,
+        GraphNodeDetailsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var name = GetProperty(request, "name");
+        if (string.IsNullOrWhiteSpace(name) && request.Title.Contains(':', StringComparison.Ordinal))
+        {
+            name = request.Title[(request.Title.IndexOf(':', StringComparison.Ordinal) + 1)..].Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(name) && TryParsePrefixedId(request.Id, "entity:", out var entityId))
+        {
+            const string byIdSql = """
+                                   SELECT e.id,
+                                          e.label,
+                                          e.name,
+                                    COUNT(DISTINCT ce.chunk_id)::text AS chunks_mentioning_this_entity,
+                                    COUNT(DISTINCT c.document_id)::text AS documents_mentioning_this_entity,
+                                    string_agg(DISTINCT 'Chunk ' || c.chunk_index::text, ', ' ORDER BY 'Chunk ' || c.chunk_index::text) AS chunks,
+                                          string_agg(DISTINCT d.title, ', ' ORDER BY d.title) AS documents,
+                                          e.created_at
+                                   FROM entities e
+                                   LEFT JOIN chunk_entities ce ON ce.entity_id = e.id
+                                   LEFT JOIN chunks c ON c.id = ce.chunk_id
+                                   LEFT JOIN documents d ON d.id = c.document_id
+                                   WHERE e.id = @entity_id
+                                   GROUP BY e.id, e.label, e.name, e.created_at;
+                                   """;
+            await using var byIdCommand = new NpgsqlCommand(byIdSql, connection);
+            byIdCommand.Parameters.AddWithValue("entity_id", entityId);
+            return await ReadEntityNodeDetailsAsync(byIdCommand, request, cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return MissingNodeDetails(request, "Entity node does not include a name.");
+        }
+
+        const string sql = """
+                           SELECT e.id,
+                                  e.label,
+                                  e.name,
+                                  COUNT(DISTINCT ce.chunk_id)::text AS chunks_mentioning_this_entity,
+                                  COUNT(DISTINCT c.document_id)::text AS documents_mentioning_this_entity,
+                                  string_agg(DISTINCT 'Chunk ' || c.chunk_index::text, ', ' ORDER BY 'Chunk ' || c.chunk_index::text) AS chunks,
+                                  string_agg(DISTINCT d.title, ', ' ORDER BY d.title) AS documents,
+                                  e.created_at
+                           FROM entities e
+                           LEFT JOIN chunk_entities ce ON ce.entity_id = e.id
+                           LEFT JOIN chunks c ON c.id = ce.chunk_id
+                           LEFT JOIN documents d ON d.id = c.document_id
+                           WHERE e.name = @name
+                           GROUP BY e.id, e.label, e.name, e.created_at;
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("name", name);
+        return await ReadEntityNodeDetailsAsync(command, request, cancellationToken);
+    }
+
+    private static async Task<GraphNodeDetailsResponse> ReadEntityNodeDetailsAsync(
+        NpgsqlCommand command,
+        GraphNodeDetailsRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return MissingNodeDetails(request, "No entity row found for the selected node.");
+        }
+
+        var attributes = ReadAttributes(reader, [
+            "id",
+            "label",
+            "name",
+            "chunks_mentioning_this_entity",
+            "documents_mentioning_this_entity",
+            "chunks",
+            "documents",
+            "created_at"
+        ]);
+        var entityId = attributes.TryGetValue("id", out var idValue) && long.TryParse(idValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId)
+            ? parsedId
+            : 0;
+        var sources = new Dictionary<string, string>
+        {
+            ["id"] = "kg_data.entities.id",
+            ["label"] = "kg_data.entities.label",
+            ["name"] = "kg_data.entities.name",
+            ["chunks_mentioning_this_entity"] = "COUNT(DISTINCT chunk_entities.chunk_id) WHERE chunk_entities.entity_id = entities.id",
+            ["documents_mentioning_this_entity"] = "COUNT(DISTINCT chunks.document_id) WHERE chunk_entities.entity_id = entities.id",
+            ["chunks"] = "string_agg(DISTINCT chunks.chunk_index) WHERE chunk_entities.entity_id = entities.id",
+            ["documents"] = "string_agg(DISTINCT documents.title) WHERE chunk_entities.entity_id = entities.id",
+            ["created_at"] = "kg_data.entities.created_at"
+        };
+        var sourceSqls = new Dictionary<string, string>
+        {
+            ["chunks_mentioning_this_entity"] = $"SELECT COUNT(DISTINCT ce.chunk_id)\nFROM kg_data.entities e\nLEFT JOIN kg_data.chunk_entities ce ON ce.entity_id = e.id\nWHERE e.id = {entityId};",
+            ["documents_mentioning_this_entity"] = $"SELECT COUNT(DISTINCT c.document_id)\nFROM kg_data.entities e\nLEFT JOIN kg_data.chunk_entities ce ON ce.entity_id = e.id\nLEFT JOIN kg_data.chunks c ON c.id = ce.chunk_id\nWHERE e.id = {entityId};",
+            ["chunks"] = $"SELECT string_agg(DISTINCT 'Chunk ' || c.chunk_index::text, ', ' ORDER BY 'Chunk ' || c.chunk_index::text)\nFROM kg_data.entities e\nLEFT JOIN kg_data.chunk_entities ce ON ce.entity_id = e.id\nLEFT JOIN kg_data.chunks c ON c.id = ce.chunk_id\nWHERE e.id = {entityId};",
+            ["documents"] = $"SELECT string_agg(DISTINCT d.title, ', ' ORDER BY d.title)\nFROM kg_data.entities e\nLEFT JOIN kg_data.chunk_entities ce ON ce.entity_id = e.id\nLEFT JOIN kg_data.chunks c ON c.id = ce.chunk_id\nLEFT JOIN kg_data.documents d ON d.id = c.document_id\nWHERE e.id = {entityId};"
+        };
+
+        return new GraphNodeDetailsResponse(true, null, "Entity", attributes, sources, sourceSqls);
+    }
+
+    private static GraphNodeDetailsResponse MissingNodeDetails(GraphNodeDetailsRequest request, string message)
+        => new(false, message, string.IsNullOrWhiteSpace(request.Label) ? "Node" : request.Label, new Dictionary<string, string?>(), new Dictionary<string, string>());
+
+    private static IReadOnlyDictionary<string, string?> ReadAttributes(NpgsqlDataReader reader, IReadOnlyList<string> names)
+    {
+        var attributes = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < reader.FieldCount && i < names.Count; i++)
+        {
+            attributes[names[i]] = GetFieldValueAsString(reader, i);
+        }
+
+        return attributes;
+    }
+
+    private static bool TryGetLongProperty(GraphNodeDetailsRequest request, string key, out long value)
+        => long.TryParse(GetProperty(request, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+
+    private static bool TryGetIntProperty(GraphNodeDetailsRequest request, string key, out int value)
+        => int.TryParse(GetProperty(request, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+
+    private static string? GetProperty(GraphNodeDetailsRequest request, string key)
+    {
+        if (request.Properties is null)
+        {
+            return null;
+        }
+
+        return request.Properties.TryGetValue(key, out var value) ? value : null;
+    }
+
+    private static bool TryParsePrefixedId(string id, string prefix, out long value)
+    {
+        value = 0;
+        if (!id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return long.TryParse(id[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
     private static async Task<List<HybridChunkResultDto>> QueryChunksByEntitiesAndVectorAsync(
         NpgsqlConnection connection,
         IReadOnlyCollection<string> entities,
@@ -1371,7 +1684,11 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var id = reader.GetInt64(0);
                 var title = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
                 var nodeId = $"doc:{id}";
-                nodes[nodeId] = new GraphNodeDto(nodeId, "Document", string.IsNullOrWhiteSpace(title) ? "Document" : $"Document: {title}");
+                nodes[nodeId] = new GraphNodeDto(
+                    nodeId,
+                    "Document",
+                    string.IsNullOrWhiteSpace(title) ? "Document" : $"Document: {title}",
+                    new Dictionary<string, string?> { ["id"] = id.ToString(CultureInfo.InvariantCulture) });
             }
         }
 
@@ -1386,7 +1703,16 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var chunkIndex = reader.GetInt32(2);
                 var nodeId = $"chunk:{id}";
                 var documentNodeId = $"doc:{documentId}";
-                nodes[nodeId] = new GraphNodeDto(nodeId, "Chunk", $"Chunk {chunkIndex}");
+                nodes[nodeId] = new GraphNodeDto(
+                    nodeId,
+                    "Chunk",
+                    $"Chunk {chunkIndex}",
+                    new Dictionary<string, string?>
+                    {
+                        ["id"] = id.ToString(CultureInfo.InvariantCulture),
+                        ["document_id"] = documentId.ToString(CultureInfo.InvariantCulture),
+                        ["chunk_index"] = chunkIndex.ToString(CultureInfo.InvariantCulture)
+                    });
                 edges.Add(new GraphEdgeDto(documentNodeId, nodeId, "HAS_CHUNK"));
             }
         }
@@ -1401,7 +1727,15 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var label = reader.IsDBNull(1) ? "Entity" : reader.GetString(1);
                 var name = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
                 var nodeId = $"entity:{id}";
-                nodes[nodeId] = new GraphNodeDto(nodeId, label, string.IsNullOrWhiteSpace(name) ? label : $"{label}: {name}");
+                nodes[nodeId] = new GraphNodeDto(
+                    nodeId,
+                    label,
+                    string.IsNullOrWhiteSpace(name) ? label : $"{label}: {name}",
+                    new Dictionary<string, string?>
+                    {
+                        ["id"] = id.ToString(CultureInfo.InvariantCulture),
+                        ["name"] = name
+                    });
             }
         }
 
@@ -1444,16 +1778,28 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var id = idValue.ToString();
                 var label = labelValue.GetString() ?? "Node";
                 var title = label;
+                IReadOnlyDictionary<string, string?>? graphProperties = null;
                 if (element.TryGetProperty("properties", out var properties)
-                    && properties.ValueKind == JsonValueKind.Object
-                    && properties.TryGetProperty("name", out var nameValue))
+                    && properties.ValueKind == JsonValueKind.Object)
                 {
-                    title = $"{label}: {nameValue.GetString()}";
+                    graphProperties = ReadJsonProperties(properties);
+                    if (properties.TryGetProperty("name", out var nameValue))
+                    {
+                        title = $"{label}: {nameValue.GetString()}";
+                    }
+                    else if (properties.TryGetProperty("title", out var titleValue))
+                    {
+                        title = $"{label}: {titleValue.GetString()}";
+                    }
+                    else if (properties.TryGetProperty("chunk_index", out var chunkIndexValue))
+                    {
+                        title = $"{label} {chunkIndexValue}";
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(id))
                 {
-                    nodes[id] = new GraphNodeDto(id, label, title);
+                    nodes[id] = new GraphNodeDto(id, label, title, graphProperties);
                     found = true;
                 }
             }
@@ -1487,14 +1833,43 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         var label = root.TryGetProperty("label", out var labelValue) ? labelValue.GetString() ?? "Node" : "Node";
 
         var title = label;
+        IReadOnlyDictionary<string, string?>? graphProperties = null;
         if (root.TryGetProperty("properties", out var properties)
-            && properties.ValueKind == JsonValueKind.Object
-            && properties.TryGetProperty("name", out var nameValue))
+            && properties.ValueKind == JsonValueKind.Object)
         {
-            title = $"{label}: {nameValue.GetString()}";
+            graphProperties = ReadJsonProperties(properties);
+            if (properties.TryGetProperty("name", out var nameValue))
+            {
+                title = $"{label}: {nameValue.GetString()}";
+            }
+            else if (properties.TryGetProperty("title", out var titleValue))
+            {
+                title = $"{label}: {titleValue.GetString()}";
+            }
+            else if (properties.TryGetProperty("chunk_index", out var chunkIndexValue))
+            {
+                title = $"{label} {chunkIndexValue}";
+            }
         }
 
-        nodes[id] = new GraphNodeDto(id, label, title);
+        nodes[id] = new GraphNodeDto(id, label, title, graphProperties);
+    }
+
+    private static IReadOnlyDictionary<string, string?> ReadJsonProperties(JsonElement properties)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in properties.EnumerateObject())
+        {
+            result[property.Name] = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => property.Value.ToString(),
+                JsonValueKind.Null => null,
+                _ => property.Value.GetRawText()
+            };
+        }
+
+        return result;
     }
 
     private static void ParseEdge(string value, ICollection<GraphEdgeDto> edges)
