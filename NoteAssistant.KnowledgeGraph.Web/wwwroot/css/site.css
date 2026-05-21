@@ -180,6 +180,65 @@ body {
   min-width: 0;
 }
 
+.query-workbench-layout {
+  position: relative;
+}
+
+.query-sidebar-panel {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #f8f9fa;
+  padding: 12px;
+}
+
+.query-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.query-sidebar-title {
+  font-weight: 700;
+  color: #343a40;
+}
+
+.query-sidebar-toggle {
+  white-space: nowrap;
+}
+
+.query-sidebar-content {
+  margin-top: 10px;
+}
+
+.query-sidebar-collapsed .query-workbench-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: auto;
+  max-width: none;
+}
+
+.query-sidebar-collapsed .query-sidebar-panel {
+  padding: 8px;
+}
+
+.query-sidebar-collapsed .query-sidebar-header {
+  justify-content: center;
+}
+
+.query-sidebar-collapsed .query-sidebar-title,
+.query-sidebar-collapsed .query-sidebar-content {
+  display: none;
+}
+
+.query-sidebar-collapsed .query-workbench-main {
+  flex: 0 0 100%;
+  width: 100%;
+  max-width: 100%;
+}
+
 .assistant-prompt-group {
   display: grid;
   grid-template-columns: 1fr;
@@ -222,9 +281,110 @@ body {
   padding: 0 12px 12px 12px;
 }
 
+.graph-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 12px;
+  padding: 12px;
+  position: relative;
+}
+
+.graph-workbench.graph-settings-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+}
+
+.graph-settings-collapsed .query-graph-view {
+  grid-column: 1 / -1;
+  height: min(72vh, 760px);
+  min-height: 560px;
+}
+
 .query-graph-view {
   height: 520px;
-  border: 1px solid #ddd;
+  min-width: 0;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.graph-settings-pane {
+  order: 2;
+  align-self: stretch;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #f8f9fa;
+  padding: 12px;
+}
+
+.graph-settings-collapsed .graph-settings-pane {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  align-self: start;
+  min-width: 0;
+  padding: 8px;
+}
+
+.graph-settings-collapsed .graph-settings-header {
+  justify-content: center;
+}
+
+.graph-settings-collapsed .graph-settings-title {
+  display: none;
+}
+
+.graph-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.graph-settings-title {
+  font-weight: 700;
+  color: #343a40;
+  margin-bottom: 10px;
+}
+
+.graph-settings-header .graph-settings-title {
+  margin-bottom: 0;
+}
+
+.graph-settings-toggle {
+  white-space: nowrap;
+}
+
+.graph-settings-content {
+  margin-top: 10px;
+}
+
+.graph-settings-collapsed .graph-settings-content {
+  display: none;
+}
+
+.graph-settings-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.graph-settings-grid .form-label {
+  margin-bottom: 3px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #495057;
+}
+
+.graph-settings-checks {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.graph-render-stats {
+  line-height: 1.35;
 }
 
 .decomposition-prompt-details summary {
@@ -366,6 +526,19 @@ body {
 }
 
 @media (max-width: 768px) {
+  .query-sidebar-collapsed .query-workbench-sidebar {
+    position: static;
+    width: 100%;
+  }
+
+  .graph-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-settings-pane {
+    order: -1;
+  }
+
   .graph-selection-grid {
     grid-template-columns: 1fr;
   }

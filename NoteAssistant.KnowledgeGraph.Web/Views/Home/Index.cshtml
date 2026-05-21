@@ -143,25 +143,33 @@
         <div class="card-body">
             <div class="row g-3 query-workbench-layout">
                 <div class="col-lg-3 query-workbench-sidebar">
-                    <div class="mb-2">
-                        <label class="form-label" for="assistantPrompt">Assistant prompt</label>
-                        <div class="assistant-prompt-group">
-                            <textarea class="form-control" id="assistantPrompt" rows="3" placeholder="e.g. show all chunks and mentioned entities"></textarea>
-                            <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                    <div class="query-sidebar-panel">
+                        <div class="query-sidebar-header">
+                            <div class="query-sidebar-title">Query tools</div>
+                            <button class="btn btn-sm btn-outline-secondary query-sidebar-toggle" type="button" id="querySidebarToggleBtn" aria-expanded="true" aria-controls="querySidebarContent">Minimize</button>
                         </div>
-                        <div class="mt-2 d-flex flex-column gap-2">
-                            <span class="text-muted small">Quick prompts:</span>
-                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt1">Show all chunks with entities</button>
-                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt2">Find entities related to Power BI</button>
-                            <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                        <div id="querySidebarContent" class="query-sidebar-content">
+                            <div class="mb-2">
+                                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
+                                <div class="assistant-prompt-group">
+                                    <textarea class="form-control" id="assistantPrompt" rows="3" placeholder="e.g. show all chunks and mentioned entities"></textarea>
+                                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                                </div>
+                                <div class="mt-2 d-flex flex-column gap-2">
+                                    <span class="text-muted small">Quick prompts:</span>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt1">Show all chunks with entities</button>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt2">Find entities related to Power BI</button>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                                </div>
+                                <small class="text-muted" id="assistExplanation"></small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="queryInput">Cypher query</label>
+                                <textarea id="queryInput" class="form-control" rows="12"></textarea>
+                            </div>
+                            <button class="btn btn-success w-100" id="runQueryBtn">Run query</button>
                         </div>
-                        <small class="text-muted" id="assistExplanation"></small>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label" for="queryInput">Cypher query</label>
-                        <textarea id="queryInput" class="form-control" rows="12"></textarea>
-                    </div>
-                    <button class="btn btn-success w-100" id="runQueryBtn">Run query</button>
                 </div>
                 <div class="col-lg-9 query-workbench-main">
                     <div id="queryError" class="text-danger mb-2"></div>
@@ -177,7 +185,154 @@
                     </details>
                     <details class="query-workbench-details mb-2" open>
                         <summary>Graph</summary>
-                        <div id="graphView" class="mt-2 query-graph-view"></div>
+                        <div class="graph-workbench mt-2">
+                            <aside class="graph-settings-pane" aria-label="Graph visual settings">
+                                <div class="graph-settings-header">
+                                    <div class="graph-settings-title">Graph settings</div>
+                                    <button class="btn btn-sm btn-outline-secondary graph-settings-toggle" type="button" id="graphSettingsToggleBtn" aria-expanded="true" aria-controls="graphSettingsContent">Minimize</button>
+                                </div>
+                                <div id="graphSettingsContent" class="graph-settings-content">
+                                <div class="graph-settings-grid">
+                                    <div>
+                                        <label class="form-label" for="graphEngineSelect">Engine</label>
+                                        <select class="form-select form-select-sm" id="graphEngineSelect" data-graph-setting="engine">
+                                            <option value="cytoscape" selected>Cytoscape.js</option>
+                                            <option value="vis">vis-network</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphCytoscapeRendererSelect">Renderer</label>
+                                        <select class="form-select form-select-sm" id="graphCytoscapeRendererSelect" data-graph-setting="cytoscapeRenderer">
+                                            <option value="canvas">Canvas</option>
+                                            <option value="webgl" selected>WebGL preview</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutSelect">Layout</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutSelect" data-graph-setting="layout">
+                                            <optgroup label="Discrete">
+                                                <option value="grid">Grid</option>
+                                                <option value="circle">Circle</option>
+                                                <option value="concentric">Concentric</option>
+                                                <option value="breadthfirst">Breadthfirst</option>
+                                                <option value="random">Random</option>
+                                            </optgroup>
+                                            <optgroup label="Force-directed">
+                                                <option value="visDefault">Original vis-network</option>
+                                                <option value="physics">Physics simulation</option>
+                                                <option value="fcose">fCoSE</option>
+                                                <option value="cose" selected>CoSE</option>
+                                                <option value="cose-bilkent">CoSE-Bilkent</option>
+                                                <option value="cola">Cola</option>
+                                            </optgroup>
+                                            <optgroup label="Hierarchical">
+                                                <option value="dagre">Dagre</option>
+                                                <option value="elk">ELK</option>
+                                                <option value="cise">CiSE</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphColorModeSelect">Color</label>
+                                        <select class="form-select form-select-sm" id="graphColorModeSelect" data-graph-setting="colorMode">
+                                            <option value="kind">By kind</option>
+                                            <option value="legacyVis" selected>Legacy vis-network</option>
+                                            <option value="type">By label</option>
+                                            <option value="degree">By degree</option>
+                                            <option value="neutral">Neutral</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphNodeScaleRange">Node size</label>
+                                        <input class="form-range" type="range" id="graphNodeScaleRange" min="0.7" max="1.8" step="0.1" value="1" data-graph-setting="nodeScale" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphEdgeWidthRange">Edge width</label>
+                                        <input class="form-range" type="range" id="graphEdgeWidthRange" min="1" max="6" step="1" value="2" data-graph-setting="edgeWidth" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsStrengthRange">Physics strength</label>
+                                        <input class="form-range" type="range" id="graphPhysicsStrengthRange" min="0.5" max="2.5" step="0.1" value="1" data-graph-setting="physicsStrength" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsSpringRange">Spring length</label>
+                                        <input class="form-range" type="range" id="graphPhysicsSpringRange" min="60" max="220" step="10" value="110" data-graph-setting="physicsSpringLength" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsGravityRange">Gravity</label>
+                                        <input class="form-range" type="range" id="graphPhysicsGravityRange" min="0.1" max="1.5" step="0.1" value="0.7" data-graph-setting="physicsGravity" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutQualitySelect">Quality</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutQualitySelect" data-graph-setting="layoutQuality">
+                                            <option value="draft">Draft</option>
+                                            <option value="default">Default</option>
+                                            <option value="proof" selected>Proof</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutDirectionSelect">Direction</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutDirectionSelect" data-graph-setting="layoutDirection">
+                                            <option value="TB" selected>Top to bottom</option>
+                                            <option value="LR">Left to right</option>
+                                            <option value="BT">Bottom to top</option>
+                                            <option value="RL">Right to left</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutPaddingRange">Padding</label>
+                                        <input class="form-range" type="range" id="graphLayoutPaddingRange" min="10" max="90" step="5" value="35" data-graph-setting="layoutPadding" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutSpacingRange">Spacing</label>
+                                        <input class="form-range" type="range" id="graphLayoutSpacingRange" min="0.8" max="2.4" step="0.1" value="1.35" data-graph-setting="layoutSpacing" />
+                                    </div>
+                                </div>
+                                <div class="graph-settings-checks">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphAnimateLayoutToggle" checked data-graph-setting="animateLayout" />
+                                        <label class="form-check-label" for="graphAnimateLayoutToggle">Animate layout</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphAutoFitLayoutToggle" checked data-graph-setting="autoFitLayout" />
+                                        <label class="form-check-label" for="graphAutoFitLayoutToggle">Auto fit layout</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphNodeLabelsToggle" checked data-graph-setting="showNodeLabels" />
+                                        <label class="form-check-label" for="graphNodeLabelsToggle">Node labels</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphNodeTextInsideToggle" data-graph-setting="nodeTextInside" />
+                                        <label class="form-check-label" for="graphNodeTextInsideToggle">Text inside nodes</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphEdgeLabelsToggle" checked data-graph-setting="showEdgeLabels" />
+                                        <label class="form-check-label" for="graphEdgeLabelsToggle">Edge labels</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphArrowsToggle" checked data-graph-setting="showArrows" />
+                                        <label class="form-check-label" for="graphArrowsToggle">Direction arrows</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphHighlightToggle" checked data-graph-setting="highlightNeighborhood" />
+                                        <label class="form-check-label" for="graphHighlightToggle">Highlight neighborhood</label>
+                                    </div>
+                                </div>
+                                <div class="d-flex flex-wrap gap-2 mt-3">
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphZoomInBtn">Zoom in</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphZoomOutBtn">Zoom out</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphFitBtn">Fit</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphCenterBtn">Center</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphRelayoutBtn">Re-layout</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphSelectionLayoutBtn">Layout selection</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphBackgroundForceBtn">Start force</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphResetStyleBtn">Reset</button>
+                                </div>
+                                <div id="graphRenderStats" class="graph-render-stats text-muted small mt-2">Run a query to render a graph.</div>
+                                </div>
+                            </aside>
+                            <div id="graphView" class="query-graph-view"></div>
+                        </div>
                     </details>
                 </div>
             </div>
@@ -224,7 +379,37 @@
 
 @section Scripts {
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/layout-base/layout-base.js"></script>
+    <script src="https://unpkg.com/cose-base/cose-base.js"></script>
+    <script src="https://unpkg.com/avsdf-base/avsdf-base.js"></script>
+    <script src="https://unpkg.com/webcola/WebCola/cola.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+    <script src="https://unpkg.com/cytoscape-cola/cytoscape-cola.js"></script>
+    <script src="https://unpkg.com/dagre/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre/cytoscape-dagre.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+    <script src="https://unpkg.com/cytoscape-elk@2.3.0/dist/cytoscape-elk.js"></script>
+    <script src="https://unpkg.com/cytoscape-cose-bilkent/cytoscape-cose-bilkent.js"></script>
+    <script src="https://unpkg.com/cytoscape-cise/cytoscape-cise.js"></script>
     <script>
+        const findCytoscapeExtension = (...candidates) => candidates.find(candidate => typeof candidate === 'function') || null;
+        const cytoscapeExtensions = {
+            fcose: findCytoscapeExtension(window.cytoscapeFcose, window.fcose),
+            cola: findCytoscapeExtension(window.cytoscapeCola, window.cola),
+            dagre: findCytoscapeExtension(window.cytoscapeDagre),
+            elk: findCytoscapeExtension(window.cytoscapeElk),
+            coseBilkent: findCytoscapeExtension(window.cytoscapeCoseBilkent, window.coseBilkent),
+            cise: findCytoscapeExtension(window.cytoscapeCise, window.cise)
+        };
+        if (window.cytoscape) {
+            Object.values(cytoscapeExtensions).forEach((extension) => {
+                if (extension) {
+                    cytoscape.use(extension);
+                }
+            });
+        }
+
         const backendBaseUrl = document.getElementById('backendBaseUrl').innerText.trim().replace(/\/$/, '');
         const backendLamp = document.getElementById('backendLamp');
         const backendStatusText = document.getElementById('backendStatusText');
@@ -232,6 +417,111 @@
         let currentGraphName = 'knowledge_graph';
         let graphReady = false;
         let hybridClarificationAttempts = 0;
+        let graphCy = null;
+        let graphNetwork = null;
+        let backgroundCytoscapeLayout = null;
+        let querySidebarCollapsed = false;
+        let graphSettingsCollapsed = false;
+        let currentVisNodeDataSet = null;
+        let currentVisEdgeDataSet = null;
+        let currentVisNodeItems = [];
+        let currentVisEdgeItems = [];
+        let currentGraphNodes = [];
+        let currentGraphEdges = [];
+        let currentGraphNodeMap = new Map();
+        let currentGraphEdgeMap = new Map();
+        let currentGraphLabelColorMap = new Map();
+        const legacyVisNetworkPalette = Object.freeze([
+            { background: '#97C2FC', border: '#2B7CE9' },
+            { background: '#FFFF00', border: '#FFA500' },
+            { background: '#FB7E81', border: '#FA0A10' },
+            { background: '#7BE141', border: '#41A906' },
+            { background: '#6E6EFD', border: '#0000FF' },
+            { background: '#C2FABC', border: '#4AD63A' },
+            { background: '#FFA807', border: '#FFA500' },
+            { background: '#F5A45D', border: '#FA0A10' },
+            { background: '#A5A5A5', border: '#7C7C7C' }
+        ]);
+        const defaultGraphSettings = Object.freeze({
+            engine: 'cytoscape',
+            cytoscapeRenderer: 'webgl',
+            layout: 'cose',
+            colorMode: 'legacyVis',
+            nodeScale: 1,
+            edgeWidth: 2,
+            physicsStrength: 1,
+            physicsSpringLength: 110,
+            physicsGravity: 0.7,
+            layoutQuality: 'proof',
+            layoutDirection: 'TB',
+            layoutPadding: 35,
+            layoutSpacing: 1.35,
+            animateLayout: true,
+            autoFitLayout: true,
+            showNodeLabels: true,
+            nodeTextInside: false,
+            showEdgeLabels: true,
+            showArrows: true,
+            highlightNeighborhood: true
+        });
+        const visDefaultGraphSettings = Object.freeze({
+            ...defaultGraphSettings,
+            engine: 'vis',
+            cytoscapeRenderer: 'canvas',
+            layout: 'visDefault',
+            colorMode: 'legacyVis',
+            nodeScale: 1,
+            edgeWidth: 1,
+            physicsStrength: 1,
+            physicsSpringLength: 100,
+            physicsGravity: 0.7,
+            layoutQuality: 'default',
+            layoutDirection: 'TB',
+            layoutPadding: 35,
+            layoutSpacing: 1.35,
+            animateLayout: true,
+            autoFitLayout: true,
+            showNodeLabels: true,
+            nodeTextInside: false,
+            showEdgeLabels: true,
+            showArrows: false,
+            highlightNeighborhood: true
+        });
+        const graphSettings = { ...defaultGraphSettings };
+        const graphSettingDescriptions = Object.freeze({
+            engine: 'Choose the graph renderer. Cytoscape.js enables richer layouts; vis-network restores the previous renderer.',
+            cytoscapeRenderer: 'Choose the Cytoscape.js drawing backend. WebGL preview uses the GPU when supported and falls back to canvas if unavailable.',
+            layout: 'Choose how nodes are positioned. Some layouts are geometric, some are physics-based, and some are hierarchical.',
+            colorMode: 'Choose how node colors are assigned: by kind, legacy vis-network groups, label, degree, or neutral styling.',
+            nodeScale: 'Scale node size up or down without changing graph data.',
+            edgeWidth: 'Change edge line thickness for readability.',
+            physicsStrength: 'Tune repulsion and simulation force for physics-based layouts.',
+            physicsSpringLength: 'Set the preferred distance between connected nodes in force and hierarchy layouts.',
+            physicsGravity: 'Tune how strongly layouts pull nodes toward the center.',
+            layoutQuality: 'Choose the speed/detail tradeoff for layouts that support quality modes.',
+            layoutDirection: 'Choose the direction used by hierarchical layouts such as Dagre, ELK, and breadthfirst.',
+            layoutPadding: 'Set empty space around the graph when a layout fits the viewport.',
+            layoutSpacing: 'Scale spacing between nodes for layouts that support spacing.',
+            animateLayout: 'Animate layout changes instead of jumping directly to new positions.',
+            autoFitLayout: 'Automatically fit the graph into the viewport after layout runs.',
+            showNodeLabels: 'Show or hide node labels.',
+            nodeTextInside: 'Render node labels inside node shapes when supported by the selected engine.',
+            showEdgeLabels: 'Show or hide relationship labels on edges.',
+            showArrows: 'Show or hide edge direction arrows.',
+            highlightNeighborhood: 'In Cytoscape.js, keep related nodes and edges prominent and dim unrelated graph items. vis-network uses its native selection behavior.'
+        });
+        const graphActionDescriptions = Object.freeze({
+            querySidebarToggleBtn: 'Collapse or expand the query tools column so the graph and results area can use more width.',
+            graphSettingsToggleBtn: 'Collapse or expand the graph settings pane so the graph canvas can use more space.',
+            graphZoomInBtn: 'Zoom into the graph viewport.',
+            graphZoomOutBtn: 'Zoom out of the graph viewport.',
+            graphFitBtn: 'Fit all graph elements into the visible canvas.',
+            graphCenterBtn: 'Center the graph in the current canvas.',
+            graphRelayoutBtn: 'Run the selected layout again with the current settings.',
+            graphSelectionLayoutBtn: 'Apply the selected Cytoscape layout to selected nodes and their neighborhood.',
+            graphBackgroundForceBtn: 'Start or stop a continuous Cytoscape force layout. Nodes remain draggable while the simulation runs, and stopping keeps the current positions.',
+            graphResetStyleBtn: 'Reset graph settings to the defaults for the selected engine.'
+        });
 
         const uploadBtn = document.getElementById('uploadBtn');
         const refreshStatusBtn = document.getElementById('refreshStatusBtn');
@@ -252,6 +542,16 @@
         const hybridQuick1 = document.getElementById('hybridQuick1');
         const hybridQuick2 = document.getElementById('hybridQuick2');
         const hybridQuick3 = document.getElementById('hybridQuick3');
+        const graphZoomInBtn = document.getElementById('graphZoomInBtn');
+        const graphZoomOutBtn = document.getElementById('graphZoomOutBtn');
+        const graphFitBtn = document.getElementById('graphFitBtn');
+        const graphCenterBtn = document.getElementById('graphCenterBtn');
+        const graphRelayoutBtn = document.getElementById('graphRelayoutBtn');
+        const graphSelectionLayoutBtn = document.getElementById('graphSelectionLayoutBtn');
+        const graphBackgroundForceBtn = document.getElementById('graphBackgroundForceBtn');
+        const graphResetStyleBtn = document.getElementById('graphResetStyleBtn');
+        const graphSettingsToggleBtn = document.getElementById('graphSettingsToggleBtn');
+        const querySidebarToggleBtn = document.getElementById('querySidebarToggleBtn');
 
         uploadBtn.addEventListener('click', uploadFile);
         refreshStatusBtn.addEventListener('click', refreshStatus);
@@ -271,6 +571,22 @@
         hybridQuick1.addEventListener('click', () => setHybridQuickQuestion('Can F8 support them?'));
         hybridQuick2.addEventListener('click', () => setHybridQuickQuestion('What is the meeting about?'));
         hybridQuick3.addEventListener('click', () => setHybridQuickQuestion('What were the key takeaways?'));
+        document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+            control.addEventListener('input', updateGraphSettingFromControl);
+            control.addEventListener('change', updateGraphSettingFromControl);
+        });
+        graphZoomInBtn.addEventListener('click', () => zoomGraphView(1.2));
+        graphZoomOutBtn.addEventListener('click', () => zoomGraphView(0.8));
+        graphFitBtn.addEventListener('click', fitGraphView);
+        graphCenterBtn.addEventListener('click', centerGraphView);
+        graphRelayoutBtn.addEventListener('click', () => runGraphLayout(true));
+        graphSelectionLayoutBtn.addEventListener('click', () => applyLayoutToSelectedNeighborhood());
+        graphBackgroundForceBtn.addEventListener('click', toggleBackgroundForceLayout);
+        graphResetStyleBtn.addEventListener('click', resetGraphSettings);
+        graphSettingsToggleBtn.addEventListener('click', toggleGraphSettingsPane);
+        querySidebarToggleBtn.addEventListener('click', toggleQuerySidebarPane);
+        applyGraphSettingTooltips();
+        updateBackgroundForceButton();
 
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
         window.addEventListener('load', () => {
@@ -1268,52 +1584,1005 @@
             const container = document.getElementById('graphView');
             container.innerHTML = '';
             resetGraphSelectionDetails();
+            destroyGraphInstance();
+            currentGraphNodes = nodes || [];
+            currentGraphEdges = edges || [];
+            currentGraphNodeMap = new Map(currentGraphNodes.map(node => [String(node.id), node]));
+            currentGraphEdgeMap = new Map();
+            currentGraphLabelColorMap = buildLegacyVisColorMap(currentGraphNodes);
+            setGraphStats(currentGraphNodes.length, currentGraphEdges.length);
 
-            if (!nodes.length) {
+            if (!currentGraphNodes.length) {
                 container.innerText = 'No graph primitives returned. Use a query that returns vertices/edges.';
                 return;
             }
 
-            if (!window.vis || !window.vis.Network) {
+            const degreeById = calculateDegrees(currentGraphNodes, currentGraphEdges);
+            if (graphSettings.engine === 'vis') {
+                renderVisNetworkGraph(container, degreeById);
+                return;
+            }
+
+            renderCytoscapeGraph(container, degreeById);
+        }
+
+        function renderCytoscapeGraph(container, degreeById) {
+            if (!window.cytoscape) {
+                container.innerText = 'Cytoscape.js failed to load. Check internet access or bundle the library locally.';
+                return;
+            }
+
+            const cytoscapeOptions = {
+                container,
+                elements: buildCytoscapeElements(currentGraphNodes, currentGraphEdges, degreeById),
+                style: buildCytoscapeStyle(),
+                layout: buildCytoscapeLayout(false),
+                minZoom: 0.08,
+                maxZoom: 3,
+                wheelSensitivity: 0.18
+            };
+
+            if (graphSettings.cytoscapeRenderer === 'webgl') {
+                cytoscapeOptions.webgl = true;
+            }
+
+            try {
+                graphCy = cytoscape(cytoscapeOptions);
+            } catch (err) {
+                if (graphSettings.cytoscapeRenderer !== 'webgl') {
+                    throw err;
+                }
+
+                console.warn('Cytoscape.js WebGL renderer failed; falling back to canvas.', err);
+                graphSettings.cytoscapeRenderer = 'canvas';
+                syncGraphSettingsControls();
+                graphCy = cytoscape({ ...cytoscapeOptions, webgl: false });
+            }
+
+            graphCy.nodes().grabify();
+
+            graphCy.on('tap', 'node', (event) => {
+                const node = event.target.data('original');
+                if (node) {
+                    showGraphNodeDetails(node);
+                    updateGraphHighlight(event.target);
+                }
+            });
+
+            graphCy.on('tap', 'edge', (event) => {
+                const edge = event.target.data('original');
+                if (edge) {
+                    showGraphEdgeDetails(edge, currentGraphNodeMap);
+                    updateGraphHighlight(event.target);
+                }
+            });
+
+            graphCy.on('tap', (event) => {
+                if (event.target === graphCy) {
+                    clearGraphHighlight();
+                    resetGraphSelectionDetails();
+                }
+            });
+
+            updateBackgroundForceButton();
+        }
+
+        function renderVisNetworkGraph(container, degreeById) {
+            if (!window.vis?.Network || !window.vis?.DataSet) {
                 container.innerText = 'vis-network failed to load. Check internet access or bundle the library locally.';
                 return;
             }
 
-            const nodesById = new Map(nodes.map(node => [String(node.id), node]));
-            const edgesById = new Map();
-            const visNodes = new vis.DataSet(nodes.map(node => ({ id: node.id, label: node.title, group: node.label })));
-            const visEdges = new vis.DataSet(edges.map((edge, index) => {
-                const id = `edge-${index}`;
-                edgesById.set(id, edge);
-                return { id, from: edge.source, to: edge.target, label: edge.label, arrows: 'to' };
-            }));
+            currentVisNodeItems = buildVisNetworkNodes(currentGraphNodes, degreeById);
+            currentVisEdgeItems = buildVisNetworkEdges(currentGraphEdges);
+            currentVisNodeDataSet = new vis.DataSet(currentVisNodeItems);
+            currentVisEdgeDataSet = new vis.DataSet(currentVisEdgeItems);
+            const visData = {
+                nodes: currentVisNodeDataSet,
+                edges: currentVisEdgeDataSet
+            };
+            graphNetwork = new vis.Network(container, visData, buildVisNetworkOptions());
 
-            const network = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
-                interaction: { hover: true, navigationButtons: true },
-                physics: { stabilization: false }
-            });
-
-            network.on('click', (params) => {
-                const nodeId = params.nodes && params.nodes.length > 0 ? params.nodes[0] : null;
-                if (nodeId !== null) {
-                    const node = nodesById.get(String(nodeId));
+            graphNetwork.on('click', (params) => {
+                if (params.nodes.length) {
+                    const node = currentGraphNodeMap.get(String(params.nodes[0]));
                     if (node) {
                         showGraphNodeDetails(node);
-                        return;
                     }
+                    return;
                 }
 
-                const edgeId = params.edges && params.edges.length > 0 ? params.edges[0] : null;
-                if (edgeId !== null) {
-                    const edge = edgesById.get(String(edgeId));
+                if (params.edges.length) {
+                    const edge = currentGraphEdgeMap.get(String(params.edges[0]));
                     if (edge) {
-                        showGraphEdgeDetails(edge, nodesById);
-                        return;
+                        showGraphEdgeDetails(edge, currentGraphNodeMap);
                     }
+                    return;
                 }
 
+                graphNetwork.unselectAll();
                 resetGraphSelectionDetails();
             });
+
+            updateBackgroundForceButton();
+        }
+
+        function destroyGraphInstance() {
+            stopBackgroundForceLayout();
+
+            if (graphCy) {
+                graphCy.destroy();
+                graphCy = null;
+            }
+
+            if (graphNetwork) {
+                graphNetwork.destroy();
+                graphNetwork = null;
+            }
+            currentVisNodeDataSet = null;
+            currentVisEdgeDataSet = null;
+            currentVisNodeItems = [];
+            currentVisEdgeItems = [];
+            updateBackgroundForceButton();
+        }
+
+        function buildCytoscapeElements(nodes, edges, degreeById) {
+            const cyNodes = nodes.map(node => {
+                const id = String(node.id);
+                return {
+                    group: 'nodes',
+                    data: buildGraphNodeVisualData(node, degreeById)
+                };
+            });
+
+            const cyEdges = edges
+                .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                .map((edge, index) => {
+                    const id = `edge-${index}`;
+                    currentGraphEdgeMap.set(id, edge);
+                    return {
+                        group: 'edges',
+                        data: {
+                            id,
+                            source: String(edge.source),
+                            target: String(edge.target),
+                            label: edge.label || '',
+                            original: edge
+                        }
+                    };
+                });
+
+            return [...cyNodes, ...cyEdges];
+        }
+
+        function buildGraphNodeVisualData(node, degreeById) {
+            const id = String(node.id);
+            return {
+                id,
+                title: node.title || id,
+                kgLabel: node.label || 'Node',
+                nodeKind: getGraphNodeKind(node),
+                legacyVisColor: currentGraphLabelColorMap.get(node.label || 'Node')?.background || legacyVisNetworkPalette[0].background,
+                legacyVisBorderColor: currentGraphLabelColorMap.get(node.label || 'Node')?.border || legacyVisNetworkPalette[0].border,
+                degree: degreeById.get(id) || 0,
+                original: node
+            };
+        }
+
+        function buildVisNetworkNodes(nodes, degreeById) {
+            if (graphSettings.layout === 'visDefault') {
+                return nodes.map((node) => ({
+                    id: String(node.id),
+                    label: graphSettings.showNodeLabels ? node.title || String(node.id) : '',
+                    title: JSON.stringify(node.properties || {}, null, 2),
+                    group: node.label || 'Node'
+                }));
+            }
+
+            const nodeScale = Number(graphSettings.nodeScale) || 1;
+            const positions = buildVisNetworkPositions(nodes, degreeById);
+            return nodes.map((node) => {
+                const data = buildGraphNodeVisualData(node, degreeById);
+                const nodeSize = Math.round((18 + Math.min(data.degree, 8) * 2) * nodeScale);
+                const color = getCytoscapeNodeColor(data);
+                const borderColor = getCytoscapeNodeBorderColor(data);
+                const position = positions.get(data.id) || {};
+                return {
+                    id: data.id,
+                    label: graphSettings.showNodeLabels ? data.title : '',
+                    title: `${data.kgLabel}: ${data.title}`,
+                    group: data.kgLabel,
+                    shape: graphSettings.nodeTextInside ? 'ellipse' : 'dot',
+                    size: nodeSize,
+                    borderWidth: 2,
+                    color: {
+                        background: color,
+                        border: borderColor,
+                        highlight: { background: color, border: '#111827' },
+                        hover: { background: color, border: '#111827' }
+                    },
+                    font: {
+                        color: graphSettings.nodeTextInside ? '#ffffff' : '#212529',
+                        face: 'system-ui, -apple-system, Segoe UI, sans-serif',
+                        size: 12,
+                        bold: graphSettings.nodeTextInside,
+                        strokeWidth: graphSettings.nodeTextInside ? 3 : 0,
+                        strokeColor: 'rgba(0, 0, 0, 0.36)'
+                    },
+                    margin: graphSettings.nodeTextInside ? 8 : undefined,
+                    widthConstraint: graphSettings.nodeTextInside ? { maximum: Math.max(70, nodeSize * 4) } : undefined,
+                    ...position
+                };
+            });
+        }
+
+        function buildVisNetworkEdges(edges) {
+            if (graphSettings.layout === 'visDefault') {
+                return edges
+                    .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                    .map((edge, index) => {
+                        const id = edge.id ? String(edge.id) : `edge-${index}`;
+                        currentGraphEdgeMap.set(id, edge);
+                        return {
+                            id,
+                            from: String(edge.source),
+                            to: String(edge.target),
+                            label: graphSettings.showEdgeLabels ? edge.label || '' : ''
+                        };
+                    });
+            }
+
+            const edgeWidth = Number(graphSettings.edgeWidth) || 2;
+            return edges
+                .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                .map((edge, index) => {
+                    const id = `edge-${index}`;
+                    currentGraphEdgeMap.set(id, edge);
+                    return {
+                        id,
+                        from: String(edge.source),
+                        to: String(edge.target),
+                        label: graphSettings.showEdgeLabels ? edge.label || '' : '',
+                        arrows: graphSettings.showArrows ? 'to' : '',
+                        width: edgeWidth,
+                        color: { color: '#8c9aa8', highlight: '#111827', hover: '#111827' },
+                        font: { color: '#495057', size: 10, align: 'middle', strokeWidth: 3, strokeColor: '#ffffff' },
+                        smooth: { type: 'dynamic' }
+                    };
+                });
+        }
+
+        function buildVisNetworkOptions() {
+            if (graphSettings.layout === 'visDefault') {
+                return {};
+            }
+
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const physicsGravity = Number(graphSettings.physicsGravity) || 0.7;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const forceLayouts = ['physics', 'fcose', 'cose', 'cose-bilkent', 'cola', 'cise', 'random'];
+            const hierarchicalLayouts = ['breadthfirst', 'dagre', 'elk'];
+            const physicsEnabled = forceLayouts.includes(graphSettings.layout);
+            const hierarchicalEnabled = hierarchicalLayouts.includes(graphSettings.layout);
+            return {
+                autoResize: true,
+                layout: {
+                    improvedLayout: !hierarchicalEnabled,
+                    hierarchical: hierarchicalEnabled
+                        ? { enabled: true, direction: mapLayoutDirectionForVis(graphSettings.layoutDirection), sortMethod: 'directed', nodeSpacing: Math.round(110 * layoutSpacing), levelSeparation: physicsSpringLength }
+                        : false
+                },
+                interaction: { hover: true, multiselect: false, navigationButtons: false, keyboard: false },
+                nodes: { shadow: false },
+                edges: { shadow: false, selectionWidth: 2 },
+                physics: {
+                    enabled: physicsEnabled,
+                    solver: 'forceAtlas2Based',
+                    stabilization: { enabled: true, iterations: Math.round(550 * physicsStrength), fit: Boolean(graphSettings.autoFitLayout) },
+                    forceAtlas2Based: {
+                        gravitationalConstant: -55 * physicsStrength,
+                        centralGravity: Math.max(0.005, physicsGravity / 10),
+                        springLength: physicsSpringLength,
+                        springConstant: 0.08 * physicsStrength,
+                        damping: 0.42,
+                        avoidOverlap: 0.55
+                    }
+                }
+            };
+        }
+
+        function mapLayoutDirectionForVis(direction) {
+            switch (direction) {
+                case 'LR':
+                    return 'LR';
+                case 'BT':
+                    return 'DU';
+                case 'RL':
+                    return 'RL';
+                case 'TB':
+                default:
+                    return 'UD';
+            }
+        }
+
+        function buildVisNetworkPositions(nodes, degreeById) {
+            const positions = new Map();
+            if (['physics', 'fcose', 'cose', 'cose-bilkent', 'cola', 'cise', 'breadthfirst', 'dagre', 'elk', 'random'].includes(graphSettings.layout)) {
+                return positions;
+            }
+
+            const nodeCount = Math.max(nodes.length, 1);
+            const spacing = 85 * (Number(graphSettings.layoutSpacing) || 1.35);
+            if (graphSettings.layout === 'grid') {
+                const columns = Math.ceil(Math.sqrt(nodeCount));
+                nodes.forEach((node, index) => {
+                    const row = Math.floor(index / columns);
+                    const column = index % columns;
+                    positions.set(String(node.id), { x: (column - columns / 2) * spacing, y: row * spacing, fixed: { x: true, y: true } });
+                });
+                return positions;
+            }
+
+            const orderedNodes = graphSettings.layout === 'concentric'
+                ? [...nodes].sort((left, right) => (degreeById.get(String(right.id)) || 0) - (degreeById.get(String(left.id)) || 0))
+                : nodes;
+            orderedNodes.forEach((node, index) => {
+                const radius = graphSettings.layout === 'concentric' ? 95 + Math.floor(index / 8) * 90 : Math.max(130, nodeCount * 14);
+                const angle = (index / nodeCount) * Math.PI * 2;
+                positions.set(String(node.id), { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, fixed: { x: true, y: true } });
+            });
+            return positions;
+        }
+
+        function calculateDegrees(nodes, edges) {
+            const degreeById = new Map(nodes.map(node => [String(node.id), 0]));
+            edges.forEach(edge => {
+                const source = String(edge.source);
+                const target = String(edge.target);
+                degreeById.set(source, (degreeById.get(source) || 0) + 1);
+                degreeById.set(target, (degreeById.get(target) || 0) + 1);
+            });
+            return degreeById;
+        }
+
+        function buildCytoscapeStyle() {
+            const nodeScale = Number(graphSettings.nodeScale) || 1;
+            const edgeWidth = Number(graphSettings.edgeWidth) || 2;
+            const nodeSize = 34 * nodeScale;
+            const labelInside = graphSettings.nodeTextInside;
+            return [
+                {
+                    selector: 'node',
+                    style: {
+                        'width': nodeSize,
+                        'height': nodeSize,
+                        'background-color': (element) => getCytoscapeNodeColor(element.data()),
+                        'border-width': 2,
+                        'border-color': (element) => getCytoscapeNodeBorderColor(element.data()),
+                        'label': graphSettings.showNodeLabels ? 'data(title)' : '',
+                        'font-size': 11,
+                        'font-family': 'system-ui, -apple-system, Segoe UI, sans-serif',
+                        'font-weight': labelInside ? 700 : 500,
+                        'color': labelInside ? '#ffffff' : '#212529',
+                        'text-wrap': 'wrap',
+                        'text-max-width': labelInside ? Math.max(28, nodeSize * 1.15) : 120,
+                        'text-valign': labelInside ? 'center' : 'bottom',
+                        'text-halign': 'center',
+                        'text-margin-y': labelInside ? 0 : 6,
+                        'text-background-color': '#ffffff',
+                        'text-background-opacity': graphSettings.showNodeLabels && !labelInside ? 0.78 : 0,
+                        'text-background-padding': 2,
+                        'text-outline-color': labelInside ? 'rgba(0, 0, 0, 0.36)' : 'transparent',
+                        'text-outline-width': labelInside ? 2 : 0,
+                        'overlay-opacity': 0,
+                        'transition-property': 'background-color, border-color, opacity, width, height, line-color, target-arrow-color',
+                        'transition-duration': '120ms'
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': edgeWidth,
+                        'line-color': '#8c9aa8',
+                        'target-arrow-color': '#8c9aa8',
+                        'target-arrow-shape': graphSettings.showArrows ? 'triangle' : 'none',
+                        'curve-style': 'bezier',
+                        'label': graphSettings.showEdgeLabels ? 'data(label)' : '',
+                        'font-size': 9,
+                        'color': '#495057',
+                        'text-background-color': '#ffffff',
+                        'text-background-opacity': graphSettings.showEdgeLabels ? 0.75 : 0,
+                        'text-background-padding': 2,
+                        'text-rotation': 'autorotate',
+                        'transition-property': 'line-color, target-arrow-color, opacity, width',
+                        'transition-duration': '120ms'
+                    }
+                },
+                {
+                    selector: '.faded',
+                    style: {
+                        'opacity': 0.16,
+                        'text-opacity': 0.08
+                    }
+                },
+                {
+                    selector: '.highlighted',
+                    style: {
+                        'opacity': 1,
+                        'border-color': '#111827',
+                        'line-color': '#111827',
+                        'target-arrow-color': '#111827',
+                        'width': (element) => element.isEdge() ? Math.max(edgeWidth + 1, 3) : nodeSize
+                    }
+                }
+            ];
+        }
+
+        function getCytoscapeNodeColor(data) {
+            if (graphSettings.colorMode === 'legacyVis') {
+                return data.legacyVisColor || legacyVisNetworkPalette[0].background;
+            }
+
+            if (graphSettings.colorMode === 'neutral') {
+                return '#5f6c7b';
+            }
+
+            if (graphSettings.colorMode === 'degree') {
+                const degree = Number(data.degree) || 0;
+                if (degree >= 6) return '#c2410c';
+                if (degree >= 3) return '#0f766e';
+                return '#4f46e5';
+            }
+
+            if (graphSettings.colorMode === 'kind') {
+                switch (data.nodeKind) {
+                    case 'document':
+                        return '#2563eb';
+                    case 'chunk':
+                        return '#059669';
+                    case 'entity':
+                        return '#7c3aed';
+                    default:
+                        return '#6b7280';
+                }
+            }
+
+            const palette = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#be123c', '#0891b2', '#65a30d'];
+            const label = String(data.kgLabel || 'Node');
+            let hash = 0;
+            for (let index = 0; index < label.length; index += 1) {
+                hash = ((hash << 5) - hash) + label.charCodeAt(index);
+                hash |= 0;
+            }
+            return palette[Math.abs(hash) % palette.length];
+        }
+
+        function getCytoscapeNodeBorderColor(data) {
+            if (graphSettings.colorMode === 'legacyVis') {
+                return data.legacyVisBorderColor || legacyVisNetworkPalette[0].border;
+            }
+
+            return '#ffffff';
+        }
+
+        function buildLegacyVisColorMap(nodes) {
+            const colorMap = new Map();
+            nodes.forEach((node) => {
+                const label = node.label || 'Node';
+                if (!colorMap.has(label)) {
+                    colorMap.set(label, legacyVisNetworkPalette[colorMap.size % legacyVisNetworkPalette.length]);
+                }
+            });
+            return colorMap;
+        }
+
+        function getGraphNodeKind(node) {
+            const label = String(node.label || '').toLowerCase();
+            const properties = node.properties || {};
+            const title = String(node.title || properties.title || properties.name || '').toLowerCase();
+            const candidates = [label, title, String(properties.type || '').toLowerCase(), String(properties.kind || '').toLowerCase()];
+
+            if (candidates.some(value => value.includes('document'))) {
+                return 'document';
+            }
+
+            if (candidates.some(value => value.includes('chunk'))) {
+                return 'chunk';
+            }
+
+            if (candidates.some(value => value.includes('entity'))) {
+                return 'entity';
+            }
+
+            return 'other';
+        }
+
+        function buildCytoscapeLayout(animated) {
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const physicsGravity = Number(graphSettings.physicsGravity) || 0.7;
+            const layoutPadding = Number(graphSettings.layoutPadding) || 35;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const animateLayout = Boolean(graphSettings.animateLayout) && animated;
+            const layoutDirection = graphSettings.layoutDirection || 'TB';
+            const common = {
+                fit: Boolean(graphSettings.autoFitLayout),
+                padding: layoutPadding,
+                animate: animateLayout,
+                animationDuration: animateLayout ? 500 : 0
+            };
+
+            switch (graphSettings.layout) {
+                case 'physics':
+                case 'fcose':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('fcose') ? 'fcose' : 'cose',
+                        quality: graphSettings.layoutQuality || 'proof',
+                        randomize: true,
+                        nodeSeparation: Math.round(75 * layoutSpacing),
+                        nodeRepulsion: () => Math.round(6500 * physicsStrength),
+                        idealEdgeLength: () => physicsSpringLength,
+                        edgeElasticity: () => Math.round(90 * physicsStrength),
+                        gravity: physicsGravity,
+                        gravityRangeCompound: 1.5,
+                        gravityCompound: 1.0,
+                        numIter: Math.round(1600 * physicsStrength),
+                        tile: true
+                    };
+                case 'cola':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('cola') ? 'cola' : 'cose',
+                        maxSimulationTime: Math.round(3000 * physicsStrength),
+                        nodeSpacing: Math.round(30 * layoutSpacing),
+                        edgeLength: physicsSpringLength,
+                        flow: layoutDirection === 'LR' ? { axis: 'x', minSeparation: physicsSpringLength } : undefined,
+                        alignment: undefined,
+                        groupCompaction: 0.8,
+                        infinite: false
+                    };
+                case 'cose-bilkent':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('coseBilkent') ? 'cose-bilkent' : 'cose',
+                        nodeDimensionsIncludeLabels: true,
+                        idealEdgeLength: physicsSpringLength,
+                        nodeRepulsion: Math.round(4500 * physicsStrength),
+                        gravity: Math.max(0.05, physicsGravity / 3),
+                        gravityRange: 3.8,
+                        numIter: Math.round(1800 * physicsStrength)
+                    };
+                case 'dagre':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('dagre') ? 'dagre' : 'breadthfirst',
+                        rankDir: layoutDirection,
+                        align: layoutDirection === 'LR' || layoutDirection === 'RL' ? 'UL' : undefined,
+                        nodeSep: Math.round(50 * layoutSpacing),
+                        rankSep: physicsSpringLength,
+                        edgeSep: 10,
+                        ranker: 'network-simplex'
+                    };
+                case 'elk':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('elk') ? 'elk' : 'breadthfirst',
+                        algorithm: graphSettings.layoutQuality === 'draft' ? 'mrtree' : graphSettings.layoutQuality === 'default' ? 'layered' : 'stress',
+                        nodeDimensionsIncludeLabels: true,
+                        randomize: true,
+                        elk: {
+                            'elk.direction': mapLayoutDirectionForElk(layoutDirection),
+                            'elk.spacing.nodeNode': Math.round(60 * layoutSpacing),
+                            'elk.layered.spacing.baseValue': physicsSpringLength,
+                            'elk.layered.spacing.nodeNodeBetweenLayers': physicsSpringLength
+                        }
+                    };
+                case 'cise':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('cise') ? 'cise' : 'circle',
+                        clusters: buildCiseClusters(),
+                        allowNodesInsideCircle: true,
+                        maxRatioOfNodesInsideCircle: 0.1,
+                        springCoeff: 0.45,
+                        nodeRepulsion: Math.round(4500 * physicsStrength),
+                        gravity: Math.max(0.05, physicsGravity / 3),
+                        gravityRange: 3.8
+                    };
+                case 'breadthfirst':
+                    return { ...common, name: 'breadthfirst', directed: true, spacingFactor: layoutSpacing, maximal: false };
+                case 'concentric':
+                    return { ...common, name: 'concentric', minNodeSpacing: Math.round(45 * layoutSpacing), concentric: node => node.degree(), levelWidth: nodes => Math.max(1, nodes.maxDegree() / 3), equidistant: graphSettings.layoutQuality === 'proof' };
+                case 'circle':
+                    return { ...common, name: 'circle', avoidOverlap: true, spacingFactor: layoutSpacing, startAngle: (3 / 2) * Math.PI, clockwise: true };
+                case 'grid':
+                    return { ...common, name: 'grid', avoidOverlap: true, avoidOverlapPadding: Math.round(20 * layoutSpacing), spacingFactor: layoutSpacing };
+                case 'random':
+                    return { ...common, name: 'random' };
+                case 'cose':
+                default:
+                    return { ...common, name: 'cose', randomize: true, nodeOverlap: 20, componentSpacing: Math.round(40 * layoutSpacing), nodeRepulsion: Math.round(400000 * physicsStrength), idealEdgeLength: physicsSpringLength, edgeElasticity: Math.round(100 * physicsStrength), nestingFactor: 5, gravity: Math.round(80 * physicsGravity), numIter: Math.round(1000 * physicsStrength), initialTemp: 200, coolingFactor: 0.95, minTemp: 1.0 };
+            }
+        }
+
+        function isCytoscapeLayoutAvailable(layoutName) {
+            return Boolean(cytoscapeExtensions[layoutName]);
+        }
+
+        function mapLayoutDirectionForElk(direction) {
+            switch (direction) {
+                case 'LR':
+                    return 'RIGHT';
+                case 'BT':
+                    return 'UP';
+                case 'RL':
+                    return 'LEFT';
+                case 'TB':
+                default:
+                    return 'DOWN';
+            }
+        }
+
+        function buildCiseClusters() {
+            const clustersByLabel = new Map();
+            currentGraphNodes.forEach((node) => {
+                const label = node.label || 'Node';
+                const cluster = clustersByLabel.get(label) || [];
+                cluster.push(String(node.id));
+                clustersByLabel.set(label, cluster);
+            });
+            return [...clustersByLabel.values()].filter(cluster => cluster.length > 1);
+        }
+
+        function updateGraphSettingFromControl(event) {
+            const control = event.currentTarget;
+            const setting = control.dataset.graphSetting;
+            if (!setting) {
+                return;
+            }
+
+            graphSettings[setting] = control.type === 'checkbox' ? control.checked : control.value;
+            if (setting === 'engine') {
+                applyGraphEngineDefaults(graphSettings.engine);
+            }
+
+            if (!currentGraphNodes.length) {
+                return;
+            }
+
+            if (setting === 'engine') {
+                renderGraph(currentGraphNodes, currentGraphEdges);
+                return;
+            }
+
+            if (setting === 'cytoscapeRenderer') {
+                if (graphSettings.engine === 'cytoscape') {
+                    renderGraph(currentGraphNodes, currentGraphEdges);
+                }
+                return;
+            }
+
+            if (graphSettings.engine === 'vis') {
+                if (setting === 'highlightNeighborhood') {
+                    clearGraphHighlight();
+                    return;
+                }
+
+                renderGraph(currentGraphNodes, currentGraphEdges);
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            const layoutSettings = new Set(['layout', 'physicsStrength', 'physicsSpringLength', 'physicsGravity', 'layoutQuality', 'layoutDirection', 'layoutPadding', 'layoutSpacing', 'animateLayout', 'autoFitLayout']);
+            if (layoutSettings.has(setting)) {
+                runGraphLayout(true);
+                return;
+            }
+
+            graphCy.style(buildCytoscapeStyle()).update();
+            clearGraphHighlight();
+        }
+
+        function applyGraphEngineDefaults(engine) {
+            Object.assign(graphSettings, engine === 'vis' ? visDefaultGraphSettings : defaultGraphSettings, { engine });
+            syncGraphSettingsControls();
+        }
+
+        function syncGraphSettingsControls() {
+            document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+                const setting = control.dataset.graphSetting;
+                if (control.type === 'checkbox') {
+                    control.checked = Boolean(graphSettings[setting]);
+                } else {
+                    control.value = graphSettings[setting];
+                }
+            });
+        }
+
+        function applyGraphSettingTooltips() {
+            document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+                const description = graphSettingDescriptions[control.dataset.graphSetting];
+                if (!description) {
+                    return;
+                }
+
+                control.title = description;
+                control.setAttribute('aria-label', description);
+                const label = control.id ? document.querySelector(`label[for="${control.id}"]`) : null;
+                if (label) {
+                    label.title = description;
+                }
+            });
+
+            Object.entries(graphActionDescriptions).forEach(([id, description]) => {
+                const button = document.getElementById(id);
+                if (!button) {
+                    return;
+                }
+
+                button.title = description;
+                button.setAttribute('aria-label', description);
+            });
+        }
+
+        function runGraphLayout(animated) {
+            if (graphSettings.engine === 'vis') {
+                if (currentGraphNodes.length) {
+                    renderGraph(currentGraphNodes, currentGraphEdges);
+                }
+                return;
+            }
+
+            if (!graphCy || graphCy.nodes().empty()) {
+                return;
+            }
+
+            stopBackgroundForceLayout();
+            graphCy.layout(buildCytoscapeLayout(animated)).run();
+        }
+
+        function toggleBackgroundForceLayout() {
+            if (backgroundCytoscapeLayout) {
+                stopBackgroundForceLayout();
+                return;
+            }
+
+            startBackgroundForceLayout();
+        }
+
+        function startBackgroundForceLayout() {
+            if (graphSettings.engine !== 'cytoscape' || !graphCy || graphCy.nodes().empty()) {
+                return;
+            }
+
+            stopBackgroundForceLayout();
+            graphCy.nodes().unlock().grabify();
+            const layout = graphCy.layout(buildCytoscapeBackgroundForceLayout());
+            backgroundCytoscapeLayout = layout;
+            updateBackgroundForceButton();
+            layout.on('layoutstop', () => {
+                if (backgroundCytoscapeLayout === layout) {
+                    backgroundCytoscapeLayout = null;
+                    graphCy?.nodes().unlock().grabify();
+                    updateBackgroundForceButton();
+                }
+            });
+            layout.run();
+        }
+
+        function stopBackgroundForceLayout() {
+            if (!backgroundCytoscapeLayout) {
+                updateBackgroundForceButton();
+                return;
+            }
+
+            const layout = backgroundCytoscapeLayout;
+            backgroundCytoscapeLayout = null;
+            layout.stop?.();
+            graphCy?.nodes().unlock().grabify();
+            updateBackgroundForceButton();
+        }
+
+        function buildCytoscapeBackgroundForceLayout() {
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const layoutDirection = graphSettings.layoutDirection || 'TB';
+
+            if (isCytoscapeLayoutAvailable('cola')) {
+                return {
+                    name: 'cola',
+                    fit: false,
+                    animate: true,
+                    refresh: 1,
+                    maxSimulationTime: 0,
+                    ungrabifyWhileSimulating: false,
+                    randomize: false,
+                    centerGraph: false,
+                    avoidOverlap: true,
+                    handleDisconnected: true,
+                    nodeSpacing: Math.round(35 * layoutSpacing),
+                    edgeLength: physicsSpringLength,
+                    flow: layoutDirection === 'LR' ? { axis: 'x', minSeparation: physicsSpringLength } : undefined,
+                    convergenceThreshold: 0.00001,
+                    infinite: true
+                };
+            }
+
+            return {
+                name: 'cose',
+                fit: false,
+                animate: true,
+                randomize: false,
+                nodeOverlap: 20,
+                componentSpacing: Math.round(40 * layoutSpacing),
+                nodeRepulsion: Math.round(420000 * physicsStrength),
+                idealEdgeLength: physicsSpringLength,
+                edgeElasticity: Math.round(100 * physicsStrength),
+                gravity: Math.round(80 * (Number(graphSettings.physicsGravity) || 0.7)),
+                numIter: Math.round(2500 * physicsStrength),
+                initialTemp: 160,
+                coolingFactor: 0.98,
+                minTemp: 0.25
+            };
+        }
+
+        function updateBackgroundForceButton() {
+            if (!graphBackgroundForceBtn) {
+                return;
+            }
+
+            const canRun = graphSettings.engine === 'cytoscape' && Boolean(graphCy) && !graphCy.nodes().empty();
+            graphBackgroundForceBtn.disabled = !canRun;
+            graphBackgroundForceBtn.classList.toggle('btn-success', Boolean(backgroundCytoscapeLayout));
+            graphBackgroundForceBtn.classList.toggle('btn-outline-secondary', !backgroundCytoscapeLayout);
+            graphBackgroundForceBtn.innerText = backgroundCytoscapeLayout ? 'Stop force' : 'Start force';
+        }
+
+        function fitGraphView() {
+            if (graphSettings.engine === 'vis') {
+                graphNetwork?.fit({ animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            graphCy?.animate({ fit: { eles: graphCy.elements(), padding: 50 }, duration: 500, easing: 'ease-out-cubic' });
+        }
+
+        function toggleGraphSettingsPane() {
+            graphSettingsCollapsed = !graphSettingsCollapsed;
+            const workbench = document.querySelector('.graph-workbench');
+            workbench?.classList.toggle('graph-settings-collapsed', graphSettingsCollapsed);
+            graphSettingsToggleBtn.innerText = graphSettingsCollapsed ? 'Settings' : 'Minimize';
+            graphSettingsToggleBtn.setAttribute('aria-expanded', String(!graphSettingsCollapsed));
+
+            window.requestAnimationFrame(() => {
+                graphCy?.resize();
+                graphNetwork?.redraw();
+                fitGraphView();
+            });
+        }
+
+        function toggleQuerySidebarPane() {
+            querySidebarCollapsed = !querySidebarCollapsed;
+            const workbench = document.querySelector('.query-workbench-layout');
+            workbench?.classList.toggle('query-sidebar-collapsed', querySidebarCollapsed);
+            querySidebarToggleBtn.innerText = querySidebarCollapsed ? 'Query' : 'Minimize';
+            querySidebarToggleBtn.setAttribute('aria-expanded', String(!querySidebarCollapsed));
+
+            window.requestAnimationFrame(() => {
+                graphCy?.resize();
+                graphNetwork?.redraw();
+                fitGraphView();
+            });
+        }
+
+        function centerGraphView() {
+            if (graphSettings.engine === 'vis') {
+                graphNetwork?.moveTo({ position: { x: 0, y: 0 }, animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            graphCy?.animate({ center: { eles: graphCy.elements() }, duration: 500 });
+        }
+
+        function zoomGraphView(scale) {
+            if (graphSettings.engine === 'vis') {
+                const zoom = graphNetwork?.getScale?.() || 1;
+                graphNetwork?.moveTo({ scale: zoom * scale, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            graphCy.animate({ zoom: graphCy.zoom() * scale, duration: 350, easing: 'ease-in-out-cubic' });
+        }
+
+        function applyLayoutToSelectedNeighborhood() {
+            if (graphSettings.engine === 'vis') {
+                runGraphLayout(true);
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            const selectedNodes = graphCy.nodes(':selected');
+            if (!selectedNodes.length) {
+                return;
+            }
+
+            const boundingBox = selectedNodes.boundingBox();
+            const center = {
+                x: (boundingBox.x1 + boundingBox.x2) / 2,
+                y: (boundingBox.y1 + boundingBox.y2) / 2
+            };
+            const neighborhood = selectedNodes.neighborhood().add(selectedNodes);
+            const otherNodes = graphCy.nodes().not(neighborhood);
+            const positions = {};
+            otherNodes.forEach((node) => {
+                positions[node.id()] = { ...node.position() };
+            });
+
+            const layout = neighborhood.layout({
+                ...buildCytoscapeLayout(true),
+                fit: false,
+                boundingBox: {
+                    x1: center.x - 140,
+                    y1: center.y - 140,
+                    x2: center.x + 140,
+                    y2: center.y + 140
+                }
+            });
+            layout.on('layoutstop', () => {
+                otherNodes.forEach((node) => {
+                    node.animate({ position: positions[node.id()], duration: 500 });
+                });
+            });
+            layout.run();
+        }
+
+        function updateGraphHighlight(target) {
+            if (!graphCy || !graphSettings.highlightNeighborhood) {
+                return;
+            }
+
+            graphCy.elements().removeClass('highlighted faded');
+            const focus = target.closedNeighborhood ? target.closedNeighborhood() : target.connectedNodes().union(target);
+            graphCy.elements().difference(focus).addClass('faded');
+            focus.addClass('highlighted');
+        }
+
+        function clearGraphHighlight() {
+            graphCy?.elements().removeClass('highlighted faded');
+            graphNetwork?.unselectAll();
+        }
+
+        function resetGraphSettings() {
+            Object.assign(graphSettings, graphSettings.engine === 'vis' ? visDefaultGraphSettings : defaultGraphSettings);
+            syncGraphSettingsControls();
+
+            if (graphCy) {
+                renderGraph(currentGraphNodes, currentGraphEdges);
+            } else if (graphNetwork && currentGraphNodes.length) {
+                renderGraph(currentGraphNodes, currentGraphEdges);
+            }
+        }
+
+        function setGraphStats(nodeCount, edgeCount) {
+            const stats = document.getElementById('graphRenderStats');
+            if (stats) {
+                const cytoscapeRendererSuffix = graphSettings.cytoscapeRenderer === 'webgl' ? ' (WebGL preview)' : ' (canvas)';
+                const engineName = graphSettings.engine === 'vis' ? 'vis-network' : `Cytoscape.js${cytoscapeRendererSuffix}`;
+                stats.innerText = `${nodeCount} nodes, ${edgeCount} edges rendered with ${engineName}.`;
+            }
         }
 
         function resetGraphSelectionDetails() {
@@ -1328,7 +2597,7 @@
 
         async function showGraphNodeDetails(node) {
             showGraphSelectionDetails(`Node: ${node.title || node.id}`, [
-                ['Type', 'Node', 'vis-network selection'],
+                ['Type', 'Node', 'Cytoscape.js selection'],
                 ['AGE ID', node.id, 'AGE vertex.id'],
                 ['Label', node.label, 'AGE vertex.label'],
                 ['Title', node.title, 'display value'],
@@ -1362,7 +2631,7 @@
             const source = nodesById.get(String(edge.source));
             const target = nodesById.get(String(edge.target));
             showGraphSelectionDetails(`Edge: ${edge.label || 'relationship'}`, [
-                ['Type', 'Edge', 'vis-network selection'],
+                ['Type', 'Edge', 'Cytoscape.js selection'],
                 ['Label', edge.label, 'AGE edge.label'],
                 ['Source ID', edge.source, 'AGE edge.start_id'],
                 ['Source title', source?.title || '', 'display value'],
