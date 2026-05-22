@@ -1,5 +1,6 @@
 import Graph from "https://esm.sh/graphology@0.26.0";
-import Sigma from "https://esm.sh/sigma@3";
+import Sigma from "https://esm.sh/sigma@3.0.3";
+import { EdgeCurvedArrowProgram } from "https://esm.sh/@sigma/edge-curve@3.1.0?deps=sigma@3.0.3";
 import { circlepack, circular, random } from "https://esm.sh/graphology-layout@0.6.1";
 import forceAtlas2 from "https://esm.sh/graphology-layout-forceatlas2@0.10.1";
 import ForceLayout from "https://esm.sh/graphology-layout-force@0.2.4/worker";
@@ -23,7 +24,7 @@ const state = {
   selectedEdge: null,
   hoveredNode: null,
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
-  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, highlightNeighborhood: true, sizeMode: "degree" },
+  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree" },
   currentLayout: "random",
   currentWorkerLayout: null,
   lastWorkerLayout: null,
@@ -31,7 +32,9 @@ const state = {
   lastPayload: null,
   history: [],
   historyIndex: -1,
-  isRestoringHistory: false
+  isRestoringHistory: false,
+  isQueryRunning: false,
+  latestQueryRequestId: 0
 };
 
 const el = {
@@ -56,6 +59,7 @@ const el = {
   labelsToggle: document.getElementById("kgLabelsToggle"),
   nodeNamesInsideToggle: document.getElementById("kgNodeNamesInsideToggle"),
   edgeLabelsToggle: document.getElementById("kgEdgeLabelsToggle"),
+  curvedEdgesToggle: document.getElementById("kgCurvedEdgesToggle"),
   neighborToggle: document.getElementById("kgNeighborToggle"),
   searchResults: document.getElementById("kgSearchResults"),
   layoutStatus: document.getElementById("kgLayoutStatus"),
@@ -101,6 +105,11 @@ el.nodeNamesInsideToggle.addEventListener("change", () => {
 });
 el.edgeLabelsToggle.addEventListener("change", () => {
   state.settings.showEdgeLabels = el.edgeLabelsToggle.checked;
+  updateRendererSettings();
+});
+el.curvedEdgesToggle.addEventListener("change", () => {
+  state.settings.curvedEdges = el.curvedEdgesToggle.checked;
+  updateEdgeShapeAttributes();
   updateRendererSettings();
 });
 el.neighborToggle.addEventListener("change", () => {
@@ -242,6 +251,11 @@ async function refreshStatus() {
 }
 
 async function runQuery() {
+  if (state.isQueryRunning) {
+    setQueryMessage("Query already running...", "muted");
+    return;
+  }
+
   const cypher = el.queryInput.value.trim();
   state.graphName = el.graphNameInput.value.trim() || "knowledge_graph";
   if (!cypher) {
@@ -249,6 +263,8 @@ async function runQuery() {
     return;
   }
 
+  const requestId = ++state.latestQueryRequestId;
+  state.isQueryRunning = true;
   setQueryMessage("Running query...", "muted");
   el.runQueryBtn.disabled = true;
   try {
@@ -258,6 +274,10 @@ async function runQuery() {
       body: JSON.stringify({ cypher, graphName: state.graphName })
     });
     const payload = await response.json().catch(() => null);
+    if (requestId !== state.latestQueryRequestId) {
+      return;
+    }
+
     if (!response.ok) {
       setQueryMessage(payload?.error || payload?.detail || `Query failed with status ${response.status}.`, "error");
       loadGraph([], []);
@@ -269,9 +289,15 @@ async function runQuery() {
     setQueryMessage(`Rendered ${(payload.nodes || []).length} nodes and ${(payload.edges || []).length} relationships.`, "success");
     el.exportBtn.disabled = false;
   } catch (error) {
+    if (requestId !== state.latestQueryRequestId) {
+      return;
+    }
     setQueryMessage(`Query failed: ${error.message}`, "error");
   } finally {
-    el.runQueryBtn.disabled = false;
+    if (requestId === state.latestQueryRequestId) {
+      state.isQueryRunning = false;
+      el.runQueryBtn.disabled = false;
+    }
   }
 }
 
@@ -296,6 +322,11 @@ function rebuildGraph() {
   if (state.renderer) {
     state.renderer.kill();
     state.renderer = null;
+  }
+
+  // Ensure previous Sigma canvases are removed before constructing a new renderer.
+  if (el.sigmaContainer) {
+    el.sigmaContainer.innerHTML = "";
   }
 
   const graph = new Graph({ type: "directed", multi: true, allowSelfLoops: true });
@@ -346,28 +377,73 @@ function buildNodeAttributes(node) {
 }
 
 function buildEdgeAttributes(edge) {
-  return { size: 1.3, label: edge.label, color: "#94a3b8", relationship: edge.label, properties: edge.properties };
+  return { size: 1.3, type: getEdgeType(), label: edge.label, color: "#94a3b8", relationship: edge.label, properties: edge.properties };
 }
 
 function buildSigmaSettings() {
-  return { allowInvalidContainer: true, renderLabels: state.settings.showLabels, renderEdgeLabels: state.settings.showEdgeLabels, labelRenderer: state.settings.nodeNamesInside ? renderNodeNameInside : undefined, labelRenderedSizeThreshold: 0, labelSize: 12, edgeLabelSize: 10, minCameraRatio: 0.03, maxCameraRatio: 8, defaultEdgeType: "arrow", labelColor: { color: "#1f2937" }, edgeLabelColor: { color: "#475569" } };
+  const settings = {
+    allowInvalidContainer: true,
+    renderLabels: state.settings.showLabels,
+    renderEdgeLabels: state.settings.showEdgeLabels,
+    defaultDrawNodeLabel: renderAdaptiveNodeLabel,
+    labelRenderer: renderAdaptiveNodeLabel,
+    labelRenderedSizeThreshold: 0,
+    labelSize: 12,
+    edgeLabelSize: 10,
+    minCameraRatio: 0.03,
+    maxCameraRatio: 8,
+    defaultEdgeType: getEdgeType(),
+    edgeProgramClasses: { curvedArrow: EdgeCurvedArrowProgram },
+    labelColor: { color: "#1f2937" },
+    edgeLabelColor: { color: "#475569" }
+  };
+
+  return settings;
 }
 
-function renderNodeNameInside(context, data) {
+function getEdgeType() {
+  return state.settings.curvedEdges ? "curvedArrow" : "arrow";
+}
+
+function updateEdgeShapeAttributes() {
+  if (!state.graph) return;
+  const edgeType = getEdgeType();
+  state.graph.forEachEdge(edge => state.graph.setEdgeAttribute(edge, "type", edgeType));
+}
+
+function renderAdaptiveNodeLabel(context, data) {
   if (!data.label) return;
+
   const radius = Math.max(6, data.size || 0);
-  const maxWidth = Math.max(10, radius * 1.72);
-  const fontSize = Math.max(7, Math.min(12, radius * 0.66));
   context.save();
-  context.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillStyle = "#ffffff";
-  context.strokeStyle = "rgba(15, 23, 42, 0.55)";
-  context.lineWidth = Math.max(2, fontSize * 0.22);
-  const text = fitCanvasText(context, data.label, maxWidth);
-  context.strokeText(text, data.x, data.y);
-  context.fillText(text, data.x, data.y);
+
+  if (state.settings.nodeNamesInside) {
+    const maxWidth = Math.max(10, radius * 1.72);
+    const fontSize = Math.max(7, Math.min(12, radius * 0.66));
+    context.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "#ffffff";
+    context.strokeStyle = "rgba(15, 23, 42, 0.55)";
+    context.lineWidth = Math.max(2, fontSize * 0.22);
+    const text = fitCanvasText(context, data.label, maxWidth);
+    context.strokeText(text, data.x, data.y);
+    context.fillText(text, data.x, data.y);
+  } else {
+    const maxWidth = 180;
+    const fontSize = Math.max(10, Math.min(13, radius * 0.9));
+    context.font = `600 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#1f2937";
+    context.strokeStyle = "rgba(255, 255, 255, 0.88)";
+    context.lineWidth = Math.max(2, fontSize * 0.24);
+    const text = fitCanvasText(context, data.label, maxWidth);
+    const y = data.y + radius + fontSize + 2;
+    context.strokeText(text, data.x, y);
+    context.fillText(text, data.x, y);
+  }
+
   context.restore();
 }
 
@@ -458,7 +534,7 @@ function updateRendererSettings() {
   if (!state.renderer) return;
   state.renderer.setSetting("renderLabels", state.settings.showLabels);
   state.renderer.setSetting("renderEdgeLabels", state.settings.showEdgeLabels);
-  state.renderer.setSetting("labelRenderer", state.settings.nodeNamesInside ? renderNodeNameInside : undefined);
+  state.renderer.setSetting("defaultEdgeType", getEdgeType());
   updateReducers();
 }
 
