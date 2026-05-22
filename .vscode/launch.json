@@ -1,0 +1,54 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: Run",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend/bin/Debug/net8.0/NoteAssistant.KnowledgeGraph.Backend.dll",
+      "cwd": "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5070"
+      },
+      "preLaunchTask": "prep-backend",
+      "postDebugTask": "stop-backend",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Web: Run",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Web/bin/Debug/net8.0/NoteAssistant.KnowledgeGraph.Web.dll",
+      "cwd": "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Web",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5272"
+      },
+      "preLaunchTask": "prep-web",
+      "postDebugTask": "stop-web",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Tests: Backend",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend.Tests/bin/Debug/net8.0/NoteAssistant.KnowledgeGraph.Backend.Tests.dll",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Testing"
+      },
+      "preLaunchTask": "build-tests",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Backend + Web",
+      "configurations": ["Backend: Run", "Web: Run"],
+      "stopAll": true
+    }
+  ]
+}

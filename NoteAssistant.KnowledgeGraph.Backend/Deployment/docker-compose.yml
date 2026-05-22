@@ -1,0 +1,16 @@
+services:
+  postgres-age:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: noteassistant/postgres-age-vector:pg18
+    container_name: noteassistant-postgres-age
+    environment:
+      POSTGRES_DB: noteassistant
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "shared_preload_libraries=age"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d

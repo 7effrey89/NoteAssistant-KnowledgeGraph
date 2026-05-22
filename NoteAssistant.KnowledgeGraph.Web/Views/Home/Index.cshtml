@@ -1,0 +1,1020 @@
+@{
+    ViewData["Title"] = "Knowledge Graph Workbench";
+    var backendBaseUrl = (string?)ViewData["BackendBaseUrl"] ?? "https://localhost:7228";
+}
+
+<div class="container py-3">
+    <h1 class="mb-4">Knowledge Graph Workbench</h1>
+
+    <div class="alert alert-info">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <span>Backend endpoint: <code id="backendBaseUrl">@backendBaseUrl</code></span>
+            <span class="d-flex align-items-center gap-1">
+                <span id="backendLamp" class="status-lamp"></span>
+                <small id="backendStatusText" class="text-muted">Checking backend...</small>
+            </span>
+        </div>
+    </div>
+    <div id="ageStatus" class="alert alert-warning d-none"></div>
+
+    <div class="card mb-4">
+        <div class="card-header">0) Optional: Reset PostgreSQL (dev only)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">Drops relational tables, the AGE graph, and the AGE extension (ag_catalog), and clears the analysis cache.</p>
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-outline-danger" id="resetDbBtn">Reset database</button>
+                <button class="btn btn-outline-secondary" id="initScriptBtn">Run init script</button>
+            </div>
+            <div class="mt-2"><small id="resetDbMessage" class="text-muted">Use with caution.</small></div>
+            <div class="mt-3">
+                <div class="small text-muted">Init script output</div>
+                <pre id="initScriptOutput" class="mt-2 p-2 bg-light border rounded" style="max-height: 240px; overflow:auto;"></pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">1) Upload markdown document</div>
+        <div class="card-body">
+            <div class="input-group">
+                <input class="form-control" type="file" id="markdownFile" accept=".md" />
+                <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+            </div>
+            <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>2) Decomposition & ingestion status</span>
+            <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
+        </div>
+        <div class="card-body">
+            <button class="btn btn-outline-secondary mb-3" id="refreshStatusBtn">Refresh Status</button>
+            <div id="statusOutput" class="mb-3"></div>
+
+            <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Chunks · Entities · Links</button>
+                </li>
+            </ul>
+            <div class="tab-content border border-top-0 p-3">
+                <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
+                    <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
+                </div>
+                <div class="tab-pane fade" id="tab-decomp" role="tabpanel">
+                    <h5>Chunks</h5>
+                    <ul id="chunksOutput"></ul>
+                    <h5>Entities</h5>
+                    <ul id="entitiesOutput"></ul>
+                    <h5>Chunk → Entity links</h5>
+                    <ul id="mentionsOutput"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">3) Ingest into PostgreSQL (relational)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">Stores documents, chunks, entities, and embeddings in PostgreSQL. Requires <code>ConnectionStrings:AgeDatabase</code>.</p>
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" id="ingestBtn" disabled>Ingest to PostgreSQL</button>
+                <button class="btn btn-outline-secondary" id="ingestSqlBtn" disabled>Show SQL</button>
+                <button class="btn btn-outline-secondary" id="ingestLogBtn" disabled>Refresh log</button>
+            </div>
+            <div class="mt-2"><small id="ingestMessage" class="text-muted">Upload a document first.</small></div>
+            <details class="mt-3">
+                <summary>Ingest SQL</summary>
+                <pre id="ingestSqlOutput" class="mt-2 p-2 bg-light border rounded" style="max-height: 240px; overflow:auto;"></pre>
+            </details>
+            <details class="mt-2">
+                <summary>Ingest execution log</summary>
+                <pre id="ingestLogOutput" class="mt-2 p-2 bg-light border rounded" style="max-height: 240px; overflow:auto;"></pre>
+            </details>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">4) Build Apache AGE graph</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">Creates (if needed) and populates the AGE graph with the current document.</p>
+            <button class="btn btn-outline-primary" id="initGraphBtn" disabled>Build graph</button>
+            <div class="mt-2"><small id="initGraphMessage" class="text-muted">Upload a document first.</small></div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">5) Query editor + assistant</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
+                <div class="input-group">
+                    <input class="form-control" id="assistantPrompt" placeholder="e.g. show all chunks and mentioned entities" />
+                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                </div>
+                <div class="mt-2 d-flex flex-wrap gap-2">
+                    <span class="text-muted small">Quick prompts:</span>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt1">Show all chunks with entities</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt2">Find entities related to Power BI</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                </div>
+                <small class="text-muted" id="assistExplanation"></small>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="queryInput">Cypher query</label>
+                <textarea id="queryInput" class="form-control" rows="7"></textarea>
+            </div>
+            <button class="btn btn-success" id="runQueryBtn">Run query</button>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">6) Query result + graph explorer</div>
+        <div class="card-body">
+            <div id="queryError" class="text-danger mb-2"></div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <div id="graphCheckStatus" class="text-muted small">Graph counts not loaded.</div>
+                <button class="btn btn-sm btn-outline-secondary" id="graphCheckBtn">Refresh counts</button>
+            </div>
+            <div class="table-responsive mb-3" style="max-height: 360px; overflow:auto;">
+                <table class="table table-sm table-bordered" id="resultsTable"></table>
+            </div>
+            <div id="graphView" style="height: 420px; border: 1px solid #ddd;"></div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">7) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <label class="form-label" for="hybridQuestion">Question</label>
+                <div class="input-group">
+                    <input class="form-control" id="hybridQuestion" value="What did Microsoft do with OpenAI?" />
+                    <button class="btn btn-primary" id="runHybridBtn">Run Hybrid Retrieval</button>
+                </div>
+                <div class="mt-2 d-flex flex-wrap gap-2">
+                    <span class="text-muted small">Quick questions:</span>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="hybridQuick1">Can F8 support them?</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="hybridQuick2">What is the meeting about?</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="hybridQuick3">What were the key takeaways?</button>
+                </div>
+                <div class="mt-2"><small id="hybridStatus" class="text-muted"></small></div>
+                <div class="mt-2">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="hybridTraceToggle" checked />
+                        <label class="form-check-label" for="hybridTraceToggle">Show retrieval trace</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="hybridAnswerToggle" />
+                        <label class="form-check-label" for="hybridAnswerToggle">Ask LLM for answer</label>
+                    </div>
+                </div>
+            </div>
+            <div id="hybridError" class="text-danger mb-2"></div>
+            <h6>Process map</h6>
+            <div id="hybridProcessMap" class="process-map"></div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script>
+        const backendBaseUrl = document.getElementById('backendBaseUrl').innerText.trim().replace(/\/$/, '');
+        const backendLamp = document.getElementById('backendLamp');
+        const backendStatusText = document.getElementById('backendStatusText');
+        let currentDocumentId = null;
+        let currentGraphName = 'knowledge_graph';
+        let graphReady = false;
+        let hybridClarificationAttempts = 0;
+
+        const uploadBtn = document.getElementById('uploadBtn');
+        const refreshStatusBtn = document.getElementById('refreshStatusBtn');
+        const ingestBtn = document.getElementById('ingestBtn');
+        const ingestSqlBtn = document.getElementById('ingestSqlBtn');
+        const ingestLogBtn = document.getElementById('ingestLogBtn');
+        const initGraphBtn = document.getElementById('initGraphBtn');
+        const assistBtn = document.getElementById('assistBtn');
+        const runQueryBtn = document.getElementById('runQueryBtn');
+        const runHybridBtn = document.getElementById('runHybridBtn');
+        const graphCheckBtn = document.getElementById('graphCheckBtn');
+        const resetDbBtn = document.getElementById('resetDbBtn');
+        const initScriptBtn = document.getElementById('initScriptBtn');
+        const initScriptOutput = document.getElementById('initScriptOutput');
+        const quickPrompt1 = document.getElementById('quickPrompt1');
+        const quickPrompt2 = document.getElementById('quickPrompt2');
+        const quickPrompt3 = document.getElementById('quickPrompt3');
+        const hybridQuick1 = document.getElementById('hybridQuick1');
+        const hybridQuick2 = document.getElementById('hybridQuick2');
+        const hybridQuick3 = document.getElementById('hybridQuick3');
+
+        uploadBtn.addEventListener('click', uploadFile);
+        refreshStatusBtn.addEventListener('click', refreshStatus);
+        ingestBtn.addEventListener('click', ingestToDatabase);
+        ingestSqlBtn.addEventListener('click', loadIngestSql);
+        ingestLogBtn.addEventListener('click', refreshIngestLog);
+        initGraphBtn.addEventListener('click', initGraph);
+        assistBtn.addEventListener('click', assistQuery);
+        runQueryBtn.addEventListener('click', runQuery);
+        runHybridBtn.addEventListener('click', runHybridRetrieval);
+        graphCheckBtn.addEventListener('click', refreshGraphCheck);
+        resetDbBtn.addEventListener('click', resetDatabase);
+        initScriptBtn.addEventListener('click', runInitScript);
+        quickPrompt1.addEventListener('click', () => setQuickPrompt('Show all chunks with entities'));
+        quickPrompt2.addEventListener('click', () => setQuickPrompt('Find entities related to Power BI'));
+        quickPrompt3.addEventListener('click', () => setQuickPrompt('List documents and chunk counts'));
+        hybridQuick1.addEventListener('click', () => setHybridQuickQuestion('Can F8 support them?'));
+        hybridQuick2.addEventListener('click', () => setHybridQuickQuestion('What is the meeting about?'));
+        hybridQuick3.addEventListener('click', () => setHybridQuickQuestion('What were the key takeaways?'));
+
+        document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
+        window.addEventListener('load', () => {
+            checkBackendStatus();
+            setInterval(checkBackendStatus, 15000);
+            loadGraphOnStartup();
+        });
+
+        function setQuickPrompt(text) {
+            document.getElementById('assistantPrompt').value = text;
+        }
+
+        function setHybridQuickQuestion(text) {
+            document.getElementById('hybridQuestion').value = text;
+        }
+
+        function setBackendStatus(state, text) {
+            backendLamp.className = `status-lamp status-lamp-${state}`;
+            backendStatusText.innerText = text;
+        }
+
+        async function checkBackendStatus() {
+            setBackendStatus('warning', 'Checking backend...');
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/health`);
+                if (response.ok) {
+                    setBackendStatus('online', 'Backend online');
+                    return;
+                }
+
+                const payload = await response.json().catch(() => null);
+                const detail = payload?.detail || payload?.error;
+                setBackendStatus('warning', detail ? `Backend online: ${detail}` : `Backend online (status ${response.status}).`);
+            } catch (err) {
+                setBackendStatus('offline', `Backend offline: ${err.message}`);
+            }
+        }
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('markdownFile');
+            const file = fileInput.files[0];
+            if (!file) {
+                setMessage('uploadMessage', 'Please select a .md file first.', 'text-danger');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            setMessage('uploadMessage', `Uploading ${file.name}…`, 'text-muted');
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+            } catch (err) {
+                console.error('Upload network error', err);
+                setMessage('uploadMessage', `Network error calling ${backendBaseUrl}: ${err.message}. Check the backend is running and CORS allows ${window.location.origin}.`, 'text-danger');
+                return;
+            }
+
+            let payload;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                console.error('Upload parse error', err, response.status);
+                setMessage('uploadMessage', `Backend returned non-JSON (status ${response.status}).`, 'text-danger');
+                return;
+            }
+
+            if (!response.ok) {
+                setMessage('uploadMessage', payload.error || `Upload failed with status ${response.status}.`, 'text-danger');
+                return;
+            }
+
+            currentDocumentId = payload.documentId;
+            if (payload.graphName) {
+                currentGraphName = payload.graphName;
+            }
+            const cachedSuffix = payload.cached ? ' [from cache]' : '';
+            setMessage('uploadMessage', `Document ${payload.documentId} analyzed (${payload.status.state})${cachedSuffix}.`, payload.cached ? 'text-warning' : 'text-success');
+            document.getElementById('cachedBadge').style.display = payload.cached ? 'inline-block' : 'none';
+            ingestBtn.disabled = false;
+            ingestSqlBtn.disabled = false;
+            ingestLogBtn.disabled = false;
+            initGraphBtn.disabled = false;
+            setMessage('ingestMessage', `Ready to ingest document ${payload.documentId} (${payload.chunks.length} chunks, ${payload.entities.length} entities).`, 'text-muted');
+            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
+            renderDecomposition(payload);
+            renderStatus(payload.status);
+        }
+
+        async function ingestToDatabase() {
+            if (!currentDocumentId) {
+                setMessage('ingestMessage', 'Upload a document first.', 'text-danger');
+                return;
+            }
+            ingestBtn.disabled = true;
+            setMessage('ingestMessage', `Ingesting document ${currentDocumentId} into PostgreSQL/AGE…`, 'text-muted');
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/ingest`, { method: 'POST' });
+            } catch (err) {
+                setMessage('ingestMessage', `Network error: ${err.message}`, 'text-danger');
+                ingestBtn.disabled = false;
+                return;
+            }
+            let payload;
+            try { payload = await response.json(); } catch { payload = null; }
+            if (!response.ok) {
+                setMessage('ingestMessage', (payload && (payload.error || payload.detail)) || `Ingest failed (status ${response.status}).`, 'text-danger');
+                ingestBtn.disabled = false;
+                return;
+            }
+            if (payload?.graphName) {
+                currentGraphName = payload.graphName;
+            }
+            const state = payload.status.state;
+            const cls = state === 'Completed' ? 'text-success' : state === 'Ready' ? 'text-warning' : 'text-info';
+            setMessage('ingestMessage', `${state}: ${payload.status.message}`, cls);
+            renderStatus(payload.status);
+            ingestBtn.disabled = false;
+            await refreshIngestLog();
+        }
+
+        async function loadIngestSql() {
+            if (!currentDocumentId) {
+                return;
+            }
+
+            const output = document.getElementById('ingestSqlOutput');
+            output.innerText = 'Loading SQL…';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/ingest/preview`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    output.innerText = (payload && (payload.error || payload.detail)) || `Failed to load SQL (status ${response.status}).`;
+                    return;
+                }
+
+                const relational = payload.relationalStatements || [];
+                const graph = payload.graphStatements || [];
+                const lines = [];
+                lines.push('-- Relational statements');
+                relational.forEach((stmt, idx) => lines.push(`-- ${idx + 1}\n${stmt}`));
+                lines.push('');
+                lines.push('-- Graph statements');
+                graph.forEach((stmt, idx) => lines.push(`-- ${idx + 1}\n${stmt}`));
+                output.innerText = lines.join('\n');
+            } catch (err) {
+                output.innerText = `Failed to load SQL: ${err.message}`;
+            }
+        }
+
+        async function refreshIngestLog() {
+            if (!currentDocumentId) {
+                return;
+            }
+
+            const output = document.getElementById('ingestLogOutput');
+            output.innerText = 'Loading log…';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/ingest/log`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    output.innerText = (payload && (payload.error || payload.detail)) || `Failed to load log (status ${response.status}).`;
+                    return;
+                }
+
+                const lines = [];
+                lines.push(`Started: ${payload.startedAt}`);
+                lines.push(`Completed: ${payload.completedAt || 'n/a'}`);
+                lines.push(`Statements: ${payload.succeededStatements}/${payload.totalStatements} succeeded, ${payload.failedStatements} failed`);
+                (payload.steps || []).forEach((step) => {
+                    const status = step.success ? 'ok' : 'fail';
+                    lines.push(`[${status}] #${step.index} ${step.statementType} (${step.durationMs}ms)`);
+                    if (step.error) {
+                        lines.push(`  error: ${step.error}`);
+                    }
+                    lines.push(`  ${step.statement}`);
+                });
+                output.innerText = lines.join('\n');
+            } catch (err) {
+                output.innerText = `Failed to load log: ${err.message}`;
+            }
+        }
+
+        async function refreshStatus() {
+            if (!currentDocumentId) {
+                return;
+            }
+
+            const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/status`);
+            const payload = await response.json();
+            if (response.ok) {
+                renderStatus(payload);
+            }
+        }
+
+        async function assistQuery() {
+            const prompt = document.getElementById('assistantPrompt').value.trim();
+            if (!prompt) {
+                document.getElementById('assistExplanation').innerText = 'Enter a prompt to get a suggested query.';
+                return;
+            }
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/query/assist`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+            } catch (err) {
+                document.getElementById('assistExplanation').innerText = `Assistant request failed: ${err.message}`;
+                return;
+            }
+
+            let payload = null;
+            try { payload = await response.json(); } catch { payload = null; }
+            if (!response.ok) {
+                document.getElementById('assistExplanation').innerText = (payload && payload.error) || 'Assistant failed.';
+                return;
+            }
+
+            document.getElementById('queryInput').value = payload.suggestedCypher;
+            document.getElementById('assistExplanation').innerText = payload.explanation;
+        }
+
+        async function runQuery() {
+            const query = document.getElementById('queryInput').value.trim();
+            if (!query) {
+                document.getElementById('queryError').innerText = 'Cypher query is required.';
+                renderResults([]);
+                renderGraph([], []);
+                return;
+            }
+            const response = await fetch(`${backendBaseUrl}/api/query`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cypher: query, graphName: currentGraphName })
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                document.getElementById('queryError').innerText = payload.error || 'Query failed.';
+                renderResults([]);
+                renderGraph([], []);
+                return;
+            }
+
+            document.getElementById('queryError').innerText = '';
+            renderResults(payload.rows || []);
+            renderGraph(payload.nodes || [], payload.edges || []);
+        }
+
+        async function loadGraphOnStartup() {
+            document.getElementById('queryError').innerText = 'Loading graph…';
+            try {
+                const health = await fetch(`${backendBaseUrl}/api/health/age`);
+                if (!health.ok) {
+                    const payload = await health.json().catch(() => null);
+                    graphReady = false;
+                    showAgeStatus(payload?.detail || 'Graph not available until AGE is ready.');
+                    document.getElementById('queryError').innerText = 'Graph not available until AGE is ready.';
+                    setMessage('initGraphMessage', payload?.detail || 'Initialize the graph in step 4.', 'text-warning');
+                    return;
+                }
+                graphReady = true;
+                showAgeStatus('');
+                setMessage('initGraphMessage', 'Graph is ready.', 'text-success');
+                try {
+                    const info = await fetch(`${backendBaseUrl}/api/graph/info`);
+                    if (info.ok) {
+                        const payload = await info.json();
+                        if (payload?.graphName) {
+                            currentGraphName = payload.graphName;
+                        }
+                    }
+                } catch {
+                    // ignore graph info lookup failures
+                }
+            } catch (err) {
+                graphReady = false;
+                showAgeStatus(`Backend not reachable: ${err.message}`);
+                document.getElementById('queryError').innerText = `Backend not reachable: ${err.message}`;
+                setMessage('initGraphMessage', 'Backend not reachable.', 'text-danger');
+                return;
+            }
+
+            await refreshGraphCheck();
+            await runQuery();
+        }
+
+        async function initGraph() {
+            if (!currentDocumentId) {
+                setMessage('initGraphMessage', 'Upload a document first.', 'text-danger');
+                return;
+            }
+
+            initGraphBtn.disabled = true;
+            setMessage('initGraphMessage', 'Building graph…', 'text-muted');
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/graph`, { method: 'POST' });
+            } catch (err) {
+                setMessage('initGraphMessage', `Graph build failed: ${err.message}`, 'text-danger');
+                initGraphBtn.disabled = false;
+                return;
+            }
+
+            let payload = null;
+            try { payload = await response.json(); } catch { payload = null; }
+            if (!response.ok) {
+                setMessage('initGraphMessage', (payload && (payload.detail || payload.error)) || `Graph build failed (status ${response.status}).`, 'text-danger');
+                initGraphBtn.disabled = false;
+                return;
+            }
+
+            graphReady = true;
+            showAgeStatus('');
+            if (payload?.graphName) {
+                currentGraphName = payload.graphName;
+            }
+            setMessage('initGraphMessage', `Graph ${currentGraphName} built for document ${currentDocumentId}.`, 'text-success');
+            await refreshGraphCheck();
+            await runQuery();
+        }
+
+        async function refreshGraphCheck() {
+            const statusEl = document.getElementById('graphCheckStatus');
+            statusEl.innerText = 'Loading counts…';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/graph/check`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    statusEl.innerText = (payload && (payload.detail || payload.error)) || `Counts unavailable (status ${response.status}).`;
+                    return;
+                }
+
+                const exists = payload.graphExists ? 'yes' : 'no';
+                statusEl.innerText = `Graph: ${payload.graphName} (exists: ${exists}) | documents: ${payload.documents} | chunks: ${payload.chunks} | entities: ${payload.entities} | mentions: ${payload.mentions}`;
+            } catch (err) {
+                statusEl.innerText = `Counts unavailable: ${err.message}`;
+            }
+        }
+
+        async function resetDatabase() {
+            if (!confirm('This will delete relational data, drop the AGE graph, and remove the AGE extension (ag_catalog). Continue?')) {
+                return;
+            }
+
+            resetDbBtn.disabled = true;
+            setMessage('resetDbMessage', 'Resetting database and clearing cache…', 'text-muted');
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/db/reset`, { method: 'POST' });
+            } catch (err) {
+                setMessage('resetDbMessage', `Reset failed: ${err.message}`, 'text-danger');
+                resetDbBtn.disabled = false;
+                return;
+            }
+
+            let payload = null;
+            try { payload = await response.json(); } catch { payload = null; }
+            if (!response.ok) {
+                setMessage('resetDbMessage', (payload && (payload.detail || payload.error)) || `Reset failed (status ${response.status}).`, 'text-danger');
+                resetDbBtn.disabled = false;
+                return;
+            }
+
+            currentDocumentId = null;
+            graphReady = false;
+            setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
+            setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
+            setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
+            setMessage('resetDbMessage', `Database reset completed. Cache files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
+            initScriptOutput.innerText = '';
+            document.getElementById('statusOutput').innerText = '';
+            document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
+            renderList('chunksOutput', []);
+            renderList('entitiesOutput', []);
+            renderList('mentionsOutput', []);
+            renderResults([]);
+            renderGraph([], []);
+            document.getElementById('graphCheckStatus').innerText = 'Graph counts not loaded.';
+            resetDbBtn.disabled = false;
+        }
+
+        async function runInitScript() {
+            if (!confirm('Run 01-age-init.sql?')) {
+                return;
+            }
+
+            initScriptBtn.disabled = true;
+            setMessage('resetDbMessage', 'Running init script…', 'text-muted');
+            initScriptOutput.innerText = '';
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/db/init`, { method: 'POST' });
+            } catch (err) {
+                setMessage('resetDbMessage', `Init failed: ${err.message}`, 'text-danger');
+                initScriptBtn.disabled = false;
+                return;
+            }
+
+            let payload = null;
+            try { payload = await response.json(); } catch { payload = null; }
+            if (!response.ok) {
+                setMessage('resetDbMessage', (payload && (payload.detail || payload.error)) || `Init failed (status ${response.status}).`, 'text-danger');
+                initScriptBtn.disabled = false;
+                return;
+            }
+
+            setMessage('resetDbMessage', 'Init completed.', 'text-success');
+            initScriptOutput.innerText = payload?.script || '(script content not returned)';
+            await refreshGraphCheck();
+            initScriptBtn.disabled = false;
+        }
+
+        function showAgeStatus(message) {
+            const el = document.getElementById('ageStatus');
+            if (!message) {
+                el.classList.add('d-none');
+                el.innerText = '';
+                return;
+            }
+
+            el.classList.remove('d-none');
+            el.innerText = message;
+        }
+
+        async function runHybridRetrieval(isClarification = false) {
+            const question = document.getElementById('hybridQuestion').value.trim();
+            if (!question) {
+                document.getElementById('hybridError').innerText = 'Question is required.';
+                return;
+            }
+
+            const hybridStatus = document.getElementById('hybridStatus');
+            const includeTrace = document.getElementById('hybridTraceToggle').checked;
+            const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
+
+            if (!isClarification) {
+                hybridClarificationAttempts = 0;
+                renderProcessMap([], false);
+            }
+
+            runHybridBtn.disabled = true;
+            hybridStatus.innerText = 'Processing retrieval...';
+
+            const response = await fetch(`${backendBaseUrl}/api/retrieval/hybrid`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: question,
+                    graphName: currentGraphName,
+                    maxHops: 2,
+                    limit: 10,
+                    includeTrace,
+                    includeAnswer,
+                    clarificationAttempts: hybridClarificationAttempts,
+                    clarificationResponse: isClarification ? (window.lastClarificationResponse || '') : ''
+                })
+            });
+
+            const payload = await response.json();
+            if (!response.ok) {
+                document.getElementById('hybridError').innerText = payload.error || 'Hybrid retrieval failed.';
+                appendProcessMap([{ title: 'Retrieval failed', body: payload.error || 'Hybrid retrieval failed.' }]);
+                hybridStatus.innerText = 'Retrieval failed.';
+                runHybridBtn.disabled = false;
+                return;
+            }
+
+            document.getElementById('hybridError').innerText = '';
+
+            const trace = payload.trace;
+            const mapItems = [];
+            mapItems.push({ title: 'User question received', body: question });
+
+            if (payload.clarificationQuestion) {
+                mapItems.push({
+                    title: 'Clarification needed',
+                    body: `${payload.clarificationQuestion} (attempt ${hybridClarificationAttempts + 1} of 3)`,
+                    clarification: true,
+                    baseQuestion: payload.rewrittenQuestion || question
+                });
+                appendProcessMap(mapItems);
+                hybridStatus.innerText = 'Clarification required.';
+                runHybridBtn.disabled = false;
+                return;
+            }
+
+            const effectiveQuestion = payload.rewrittenQuestion || question;
+            if (payload.rewrittenQuestion && (payload.rewrittenQuestion !== question || (window.lastClarificationResponse && window.lastClarificationResponse.length > 0))) {
+                mapItems.push({
+                    title: 'Question rewrite',
+                    indent: true,
+                    body: payload.rewrittenQuestion
+                });
+            }
+
+            mapItems.push({ title: 'Entity detection input', body: effectiveQuestion, indent: true });
+            mapItems.push({
+                title: 'Entity detection logic',
+                body: 'LLM extracts entities and flags ambiguous pronouns; heuristic is fallback if LLM fails.'
+            });
+            const llmStep = getTraceStep(trace, 'entity-llm');
+            const detectionStep = getTraceStep(trace, 'entity-detection');
+            const detectionDetail = includeTrace && (llmStep?.detail || detectionStep?.detail)
+                ? (llmStep?.detail || detectionStep?.detail)
+                : '(trace disabled)';
+            mapItems.push({
+                title: 'Entity detection output',
+                indent: true,
+                body: (() => {
+                    const fallbackStep = getTraceStep(trace, 'entity-fallback');
+                    const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
+                    const lines = [detectedList.length ? detectedList.join(', ') : '(none)'];
+                    if (detectionDetail) {
+                        lines.push(truncateText(detectionDetail, 500));
+                    }
+                    return lines.join('\n');
+                })()
+            });
+
+            const fallbackStep = getTraceStep(trace, 'entity-fallback');
+            if (fallbackStep) {
+                const fallbackDetail = includeTrace && fallbackStep.detail ? fallbackStep.detail : '(trace disabled)';
+                mapItems.push({
+                    title: 'Fallback rule',
+                    body: 'If no entities are detected, load the most recent entities from the database.'
+                });
+                mapItems.push({
+                    title: 'Entity fallback output',
+                    indent: true,
+                    body: truncateText(fallbackDetail, 500)
+                });
+            }
+
+            const matchStep = getTraceStep(trace, 'entity-match');
+            const matched = (payload.matchedEntities || []).join(', ');
+            if (matchStep || matched) {
+                const matchDetail = includeTrace && matchStep?.detail
+                    ? matchStep.detail
+                    : (matched || '(trace disabled)');
+                mapItems.push({
+                    title: 'Entity match output',
+                    indent: true,
+                    body: truncateText(matchDetail, 500)
+                });
+            }
+
+            const expansionStep = getTraceStep(trace, 'graph-expansion');
+            const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
+            mapItems.push({ title: 'Graph expansion query', body: truncateText(expansionDetail, 600), indent: true });
+            mapItems.push({ title: 'Graph-expanded entities', body: (payload.graphEntities || []).join(', ') || '(none)' });
+
+            const vectorStep = getTraceStep(trace, 'vector-search');
+            const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
+            mapItems.push({ title: 'Vector search input', body: truncateText(vectorDetail, 600), indent: true });
+
+            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`);
+            mapItems.push({
+                title: 'Vector search output',
+                indent: true,
+                scroll: true,
+                body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
+            });
+
+            mapItems.push({ title: 'System prompt', body: payload.systemPrompt || '(none)', indent: true, scroll: true });
+            mapItems.push({ title: 'Prompt context', body: payload.promptContext || '(empty)', indent: true, scroll: true });
+            mapItems.push({ title: 'LLM answer', body: payload.answer || (includeAnswer ? '(no answer returned)' : '(answer disabled)'), indent: true });
+
+            appendProcessMap(mapItems);
+
+            hybridStatus.innerText = 'Retrieval complete.';
+            hybridClarificationAttempts = 0;
+            window.lastClarificationResponse = '';
+            runHybridBtn.disabled = false;
+        }
+
+        function renderDecomposition(payload) {
+            document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
+            renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
+            renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
+            renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
+        }
+
+        function renderStatus(status) {
+            document.getElementById('statusOutput').innerText =
+                `Document ${status.documentId}: ${status.state} | ${status.message} | Updated: ${status.updatedAt}`;
+        }
+
+        function renderList(elementId, items) {
+            const list = document.getElementById(elementId);
+            list.innerHTML = '';
+            for (const item of items) {
+                const li = document.createElement('li');
+                li.innerText = item;
+                list.appendChild(li);
+            }
+        }
+
+        function renderProcessMap(items, append = false) {
+            const container = document.getElementById('hybridProcessMap');
+            if (!append) {
+                container.innerHTML = '';
+            }
+
+            if (!items || items.length === 0) {
+                if (!append) {
+                    container.innerText = '(no process steps to display)';
+                }
+                return;
+            }
+
+            if (append && container.children.length > 0) {
+                const connector = document.createElement('div');
+                connector.className = 'process-connector';
+                if (items[0].indent) {
+                    connector.classList.add('process-connector-indent');
+                }
+                container.appendChild(connector);
+            }
+
+            items.forEach((item, index) => {
+                const bubble = createProcessBubble(item);
+                container.appendChild(bubble);
+
+                if (index < items.length - 1) {
+                    const connector = document.createElement('div');
+                    connector.className = 'process-connector';
+                    if (item.indent) {
+                        connector.classList.add('process-connector-indent');
+                    }
+                    container.appendChild(connector);
+                }
+            });
+        }
+
+        function appendProcessMap(items) {
+            renderProcessMap(items, true);
+        }
+
+        function createProcessBubble(item) {
+            const bubble = document.createElement('div');
+            bubble.className = 'process-bubble';
+            if (item.indent) {
+                bubble.classList.add('process-bubble-indent');
+            }
+            if (item.scroll) {
+                bubble.classList.add('process-bubble-scroll');
+            }
+
+            const title = document.createElement('div');
+            title.className = 'process-bubble-title';
+            title.innerText = item.title || 'Step';
+            bubble.appendChild(title);
+
+            if (item.body) {
+                const body = document.createElement('div');
+                body.className = 'process-bubble-body';
+                body.innerText = item.body;
+                bubble.appendChild(body);
+            }
+
+            if (item.clarification) {
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'input-group mt-2';
+
+                const input = document.createElement('input');
+                input.className = 'form-control';
+                input.type = 'text';
+                input.placeholder = 'Your clarification...';
+
+                const button = document.createElement('button');
+                button.className = 'btn btn-outline-primary';
+                button.type = 'button';
+                button.innerText = 'Submit clarification';
+                if (hybridClarificationAttempts >= 3) {
+                    input.disabled = true;
+                    button.disabled = true;
+                }
+                button.addEventListener('click', () => {
+                    const value = input.value.trim();
+                    if (!value) {
+                        return;
+                    }
+
+                        const base = item.baseQuestion || document.getElementById('hybridQuestion').value.trim();
+                        document.getElementById('hybridQuestion').value = base;
+                        window.lastClarificationResponse = value;
+                    hybridClarificationAttempts += 1;
+                    runHybridRetrieval(true);
+                });
+
+                inputGroup.appendChild(input);
+                inputGroup.appendChild(button);
+                bubble.appendChild(inputGroup);
+            }
+
+            return bubble;
+        }
+
+        function getTraceStep(trace, name) {
+            if (!trace || !Array.isArray(trace.steps)) {
+                return null;
+            }
+
+            return trace.steps.find(step => step.name === name) || null;
+        }
+
+        function truncateText(value, maxLength) {
+            if (!value) {
+                return '';
+            }
+
+            return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+        }
+
+        function renderResults(rows) {
+            const table = document.getElementById('resultsTable');
+            table.innerHTML = '';
+            if (!rows.length) {
+                return;
+            }
+
+            const keys = Object.keys(rows[0]);
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            keys.forEach(k => {
+                const th = document.createElement('th');
+                th.innerText = k;
+                headRow.appendChild(th);
+            });
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                keys.forEach(key => {
+                    const td = document.createElement('td');
+                    td.innerText = row[key] ?? '';
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+        }
+
+        function renderGraph(nodes, edges) {
+            const container = document.getElementById('graphView');
+            container.innerHTML = '';
+
+            if (!nodes.length) {
+                container.innerText = 'No graph primitives returned. Use a query that returns vertices/edges.';
+                return;
+            }
+
+            if (!window.vis || !window.vis.Network) {
+                container.innerText = 'vis-network failed to load. Check internet access or bundle the library locally.';
+                return;
+            }
+
+            const visNodes = new vis.DataSet(nodes.map(node => ({ id: node.id, label: node.title, group: node.label })));
+            const visEdges = new vis.DataSet(edges.map(edge => ({ from: edge.source, to: edge.target, label: edge.label, arrows: 'to' })));
+
+            new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+                interaction: { hover: true, navigationButtons: true },
+                physics: { stabilization: false }
+            });
+        }
+
+        function setMessage(id, text, cssClass) {
+            const el = document.getElementById(id);
+            el.className = cssClass;
+            el.innerText = text;
+        }
+    </script>
+}
