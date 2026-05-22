@@ -12,6 +12,12 @@ public class HomeController(IConfiguration configuration) : Controller
         return View();
     }
 
+    public IActionResult NoteAssistant()
+    {
+        ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";
+        return View();
+    }
+
     public IActionResult GraphExplorer()
     {
         ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";

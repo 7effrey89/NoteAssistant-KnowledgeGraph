@@ -104,12 +104,10 @@ el.nodeNamesInsideToggle.addEventListener("change", () => {
   state.settings.nodeNamesInside = el.nodeNamesInsideToggle.checked;
   updateRendererSettings();
 });
-if (el.labelDensitySlider) {
-  el.labelDensitySlider.addEventListener("input", () => {
-    state.settings.labelDensity = Number(el.labelDensitySlider.value) || 50;
-    refreshRenderer();
-  });
-}
+el.labelDensitySlider.addEventListener("input", () => {
+  state.settings.labelDensity = Number(el.labelDensitySlider.value) || 50;
+  refreshRenderer();
+});
 el.edgeLabelsToggle.addEventListener("change", () => {
   state.settings.showEdgeLabels = el.edgeLabelsToggle.checked;
   updateRendererSettings();
@@ -465,11 +463,11 @@ function fitCanvasTextMultiline(context, text, maxWidth, maxLines = 2) {
     if (lines.length < maxLines) {
       lines.push(currentLine);
     } else {
-      let lastLine = lines[lines.length - 1];
-      while (lastLine.length > 1 && context.measureText(`${lastLine}…`).width > maxWidth) {
-        lastLine = lastLine.slice(0, -1);
+      const lastLine = lines[lines.length - 1];
+      const testEllipsis = `${lastLine}…`;
+      while (lastLine.length > 1 && context.measureText(testEllipsis).width > maxWidth) {
+        lines[lines.length - 1] = lastLine.slice(0, -1);
       }
-      lines[lines.length - 1] = lastLine;
       if (lines[lines.length - 1].length > 1) {
         lines[lines.length - 1] += "…";
       }
@@ -542,7 +540,6 @@ function renderAdaptiveNodeLabel(context, data) {
 function fitCanvasText(context, text, maxWidth) {
   const lines = fitCanvasTextMultiline(context, text, maxWidth, 1);
   return lines[0] || "";
-}
 
 function registerGraphEvents() {
   const renderer = state.renderer;
@@ -1225,3 +1222,4 @@ function formatValue(value) {
 function escapeHtml(value) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#39;");
 }
+

@@ -543,6 +543,9 @@
             highlightNeighborhood: true
         });
         const graphSettings = { ...defaultGraphSettings };
+        let metadataAutoSaveTimer = null;
+        let metadataAutoSaveSequence = 0;
+        let isSettingMetadataForm = false;
         const graphSettingDescriptions = Object.freeze({
             engine: 'Choose the graph renderer. Cytoscape.js enables richer layouts; vis-network restores the previous renderer.',
             layout: 'Choose how nodes are positioned. Some layouts are geometric, some are physics-based, and some are hierarchical.',
@@ -620,7 +623,10 @@
         selectAllDocsBtn.addEventListener('click', selectAllUploadedDocuments);
         clearSelectedDocsBtn.addEventListener('click', clearSelectedDocuments);
         applyMetadataBtn.addEventListener('click', applyMetadataToSelectedDocuments);
-        [metadataDocumentType, metadataDocumentDate, metadataTags].forEach((input) => input.addEventListener('input', saveCurrentMetadataDraft));
+        [metadataDocumentType, metadataDocumentDate, metadataTags].forEach((input) => {
+            input.addEventListener('input', onMetadataFieldChanged);
+            input.addEventListener('change', onMetadataFieldChanged);
+        });
         ingestBtn.addEventListener('click', ingestToDatabase);
         ingestSqlBtn.addEventListener('click', loadIngestSql);
         ingestLogBtn.addEventListener('click', refreshIngestLog);
@@ -679,9 +685,11 @@
         }
 
         function setMetadataForm(metadata) {
+            isSettingMetadataForm = true;
             metadataDocumentType.value = metadata?.documentType || '';
             metadataDocumentDate.value = metadata?.documentDate || '';
             metadataTags.value = Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '');
+            isSettingMetadataForm = false;
         }
 
         function normalizeMetadataDraft(metadata) {
@@ -695,6 +703,78 @@
         function saveCurrentMetadataDraft() {
             if (!currentDocumentId) return;
             metadataDrafts.set(currentDocumentId, getMetadataPayload());
+        }
+
+        function onMetadataFieldChanged() {
+            if (isSettingMetadataForm) {
+                return;
+            }
+
+            saveCurrentMetadataDraft();
+            queueAutoSaveCurrentMetadata();
+        }
+
+        function queueAutoSaveCurrentMetadata() {
+            const documentId = currentDocumentId;
+            if (!documentId) {
+                return;
+            }
+
+            const metadata = getMetadataPayload();
+            if (!hasMetadataPayload(metadata)) {
+                return;
+            }
+
+            if (metadataAutoSaveTimer) {
+                clearTimeout(metadataAutoSaveTimer);
+            }
+
+            metadataAutoSaveTimer = setTimeout(() => {
+                metadataAutoSaveTimer = null;
+                autoSaveMetadataForDocument(documentId, metadata);
+            }, 450);
+        }
+
+        async function autoSaveMetadataForDocument(documentId, metadata) {
+            const sequence = ++metadataAutoSaveSequence;
+            setMessage('metadataMessage', `Saving metadata for document ${documentId}...`, 'text-muted');
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documentIds: [documentId], ...metadata })
+                });
+            } catch (err) {
+                if (sequence !== metadataAutoSaveSequence) {
+                    return;
+                }
+                setMessage('metadataMessage', `Metadata auto-save failed: ${err.message}`, 'text-danger');
+                return;
+            }
+
+            const payload = await response.json().catch(() => null);
+            if (sequence !== metadataAutoSaveSequence) {
+                return;
+            }
+
+            if (!response.ok) {
+                setMessage('metadataMessage', (payload && (payload.error || payload.detail)) || `Metadata auto-save failed (status ${response.status}).`, 'text-danger');
+                return;
+            }
+
+            const updatedPlan = (payload?.updated || [])[0];
+            if (updatedPlan) {
+                uploadedDocuments.set(updatedPlan.documentId, updatedPlan);
+                metadataDrafts.set(updatedPlan.documentId, normalizeMetadataDraft(updatedPlan.metadata));
+                if (currentDocumentId === updatedPlan.documentId) {
+                    renderStatus(updatedPlan.status);
+                }
+                renderUploadedDocuments();
+            }
+
+            setMessage('metadataMessage', `Metadata auto-saved for document ${documentId}. Use the blue button only when you want bulk apply.`, 'text-success');
         }
 
         function hasMetadataPayload(metadata) {

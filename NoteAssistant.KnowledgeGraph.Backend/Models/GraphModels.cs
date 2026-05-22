@@ -19,6 +19,16 @@ public sealed record BulkMetadataUpdateRequest(
     string? DocumentDate,
     string? Tags);
 
+public sealed record NoteAssistantMetadataFileDto(
+    string FileName,
+    string? NoteSession,
+    string? FolderCreationDate,
+    IReadOnlyList<string>? Customers,
+    IReadOnlyList<string>? Services);
+
+public sealed record NoteAssistantMetadataImportRequest(
+    IReadOnlyList<NoteAssistantMetadataFileDto> Files);
+
 public sealed record GraphIngestionPlan(
     long DocumentId,
     string GraphName,

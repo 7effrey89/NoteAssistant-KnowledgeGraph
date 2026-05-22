@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Npgsql;
+using NpgsqlTypes;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
 using NoteAssistant.KnowledgeGraph.Backend.Services;
@@ -124,6 +126,85 @@ static bool HasMetadataValues(DocumentMetadata metadata)
     => !string.IsNullOrWhiteSpace(metadata.DocumentType)
        || metadata.DocumentDate.HasValue
        || metadata.Tags is { Count: > 0 };
+
+// Used for NoteSession values — no extension stripping, just trim the raw value.
+static string NormalizeNoteAssistantSessionKey(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    return value.Trim();
+}
+
+// Used for file name fallback — strips the .json extension and the _metadata suffix.
+static string NormalizeNoteAssistantFileNameKey(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    // Take just the file name part (handles relative paths like "folder/name.json")
+    var fileName = Path.GetFileName(value.Trim());
+    var withoutExtension = Path.GetFileNameWithoutExtension(fileName);
+    if (withoutExtension.EndsWith("_metadata", StringComparison.OrdinalIgnoreCase))
+    {
+        withoutExtension = withoutExtension[..^"_metadata".Length];
+    }
+
+    return withoutExtension.Trim();
+}
+
+static JsonElement BuildNoteAssistantTags(NoteAssistantMetadataFileDto file)
+{
+    var payload = new
+    {
+        Customers = file.Customers?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>(),
+        Services = file.Services?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>()
+    };
+
+    return JsonSerializer.SerializeToElement(payload);
+}
+
+static bool HasNoteAssistantTags(JsonElement tags)
+{
+    if (tags.ValueKind != JsonValueKind.Object)
+    {
+        return false;
+    }
+
+    foreach (var property in tags.EnumerateObject())
+    {
+        if (property.Value.ValueKind == JsonValueKind.Array && property.Value.GetArrayLength() > 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static DateOnly? ParseNoteAssistantFolderDate(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    return DateTimeOffset.TryParse(value, out var parsed)
+        ? DateOnly.FromDateTime(parsed.Date)
+        : null;
+}
 
 static string ResolveContentHash(GraphIngestionPlan plan, IAnalysisCache cache)
 {
@@ -323,6 +404,127 @@ app.MapPost("/api/documents/metadata", (BulkMetadataUpdateRequest request, IMark
     }
 
     return Results.Ok(new { updated, missing });
+});
+
+app.MapPost("/api/noteassistant/import-metadata", async (NoteAssistantMetadataImportRequest request, IAgeDatabaseConnectionFactory connectionFactory, IOptions<DatabaseOptions> databaseOptions, CancellationToken cancellationToken) =>
+{
+    if (request.Files is null || request.Files.Count == 0)
+    {
+        return Results.BadRequest(new { error = "At least one metadata file is required." });
+    }
+
+    if (!connectionFactory.IsConfigured)
+    {
+        return Results.BadRequest(new { error = "ConnectionStrings:AgeDatabase is not configured." });
+    }
+
+    var schemaName = NormalizeSchemaName(databaseOptions.Value.SchemaName);
+    var results = new List<object>();
+    var updatedFileCount = 0;
+    var notFoundFileCount = 0;
+    await using var connection = await connectionFactory.OpenAsync(cancellationToken);
+
+    const string sql = """
+WITH matches AS (
+    SELECT id,
+           title,
+           file_name,
+           document_type,
+           document_date,
+           tags
+    FROM kg_data.documents
+    WHERE lower(regexp_replace(title, '_[^_]*$', '')) = lower(@matchKey)
+),
+updated AS (
+    UPDATE kg_data.documents AS documents
+    SET document_type = COALESCE(documents.document_type, @documentType),
+        document_date = COALESCE(documents.document_date, @documentDate),
+        tags = COALESCE(documents.tags, CAST(@tagsJson AS jsonb))
+    FROM matches
+    WHERE documents.id = matches.id
+    RETURNING documents.id,
+              documents.title,
+              documents.file_name,
+              matches.document_type IS NULL AS updated_document_type,
+              matches.document_date IS NULL AS updated_document_date,
+              matches.tags IS NULL AS updated_tags
+)
+SELECT json_build_object(
+    'matchedCount', (SELECT COUNT(*) FROM matches),
+    'updatedCount', (SELECT COUNT(*) FROM updated),
+    'updatedRows', COALESCE((SELECT json_agg(updated) FROM updated), '[]'::json),
+    'matchedRows', COALESCE((SELECT json_agg(matches) FROM matches), '[]'::json)
+);
+""";
+
+    await using var command = new NpgsqlCommand(sql.Replace("kg_data", schemaName), connection);
+
+    foreach (var file in request.Files)
+    {
+        var matchKey = NormalizeNoteAssistantSessionKey(file.NoteSession);
+        if (string.IsNullOrWhiteSpace(matchKey))
+        {
+            matchKey = NormalizeNoteAssistantFileNameKey(file.FileName);
+        }
+
+        var documentDate = ParseNoteAssistantFolderDate(file.FolderCreationDate);
+        var tags = BuildNoteAssistantTags(file);
+
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("matchKey", NpgsqlDbType.Text, matchKey);
+        command.Parameters.AddWithValue("documentType", NpgsqlDbType.Text, "meeting_summary");
+        var documentDateParameter = command.Parameters.Add("documentDate", NpgsqlDbType.Date);
+        documentDateParameter.Value = documentDate.HasValue ? documentDate.Value.ToDateTime(TimeOnly.MinValue) : DBNull.Value;
+        command.Parameters.AddWithValue("tagsJson", NpgsqlDbType.Jsonb, tags.GetRawText());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        object? payload = null;
+        if (await reader.ReadAsync(cancellationToken) && !reader.IsDBNull(0))
+        {
+            payload = JsonSerializer.Deserialize<JsonElement>(reader.GetString(0));
+        }
+        await reader.CloseAsync();
+
+        var summary = payload is JsonElement json
+            ? json
+            : JsonSerializer.SerializeToElement(new { matchedCount = 0, updatedCount = 0, updatedRows = Array.Empty<object>(), matchedRows = Array.Empty<object>() });
+
+        var matchedCount = summary.TryGetProperty("matchedCount", out var matchedValue) ? matchedValue.GetInt32() : 0;
+        var updatedCount = summary.TryGetProperty("updatedCount", out var updatedValue) ? updatedValue.GetInt32() : 0;
+
+        var status = matchedCount == 0 ? "not-found" : updatedCount == 0 ? "already-populated" : "updated";
+        if (status == "updated")
+        {
+            updatedFileCount++;
+        }
+        else if (status == "not-found")
+        {
+            notFoundFileCount++;
+        }
+
+        results.Add(new
+        {
+            fileName = file.FileName,
+            noteSession = file.NoteSession,
+            matchKey,
+            documentType = "meeting_summary",
+            documentDate = documentDate?.ToString("yyyy-MM-dd"),
+            tags,
+            hasTags = HasNoteAssistantTags(tags),
+            matchedCount,
+            updatedCount,
+            detail = summary,
+            status
+        });
+    }
+
+    return Results.Ok(new
+    {
+        processed = results.Count,
+        updated = updatedFileCount,
+        notFound = notFoundFileCount,
+        results
+    });
 });
 
 app.MapPost("/api/documents/{documentId:long}/ingest", async (long documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
