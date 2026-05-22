@@ -1462,7 +1462,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         while (await reader.ReadAsync(cancellationToken))
         {
             var id = reader.GetInt64(0);
-            var documentId = checked((int)reader.GetInt64(1));
+            var documentId = reader.GetInt64(1);
             var chunkIndex = reader.GetInt32(2);
             var content = reader.GetString(3);
             double? distance = reader.IsDBNull(4) ? null : reader.GetDouble(4);

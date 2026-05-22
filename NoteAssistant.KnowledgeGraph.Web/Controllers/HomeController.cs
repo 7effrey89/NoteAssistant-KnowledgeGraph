@@ -12,6 +12,13 @@ public class HomeController(IConfiguration configuration) : Controller
         return View();
     }
 
+    public IActionResult GraphExplorer()
+    {
+        ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";
+        ViewData["UseFullWidth"] = true;
+        return View();
+    }
+
     public IActionResult Privacy()
     {
         return View();

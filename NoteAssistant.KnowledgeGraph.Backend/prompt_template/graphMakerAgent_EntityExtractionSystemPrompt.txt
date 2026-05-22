@@ -1,0 +1,1 @@
+Extract key entities from the user content. Return ONLY a JSON array of objects with 'label' and 'name'. Use labels like Company, Product, Platform, Technology, Concept, Person, or Organization. No prose.

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
 
@@ -9,7 +10,7 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionService
 {
     private const int MaxChunkCharacters = 280;
-    private static int _documentSeed = CreateInitialDocumentSeed();
+    private static long _documentSeed = CreateInitialDocumentSeed();
     private readonly IFoundryInferenceClient _foundry;
     private readonly DatabaseOptions _databaseOptions;
 
@@ -19,14 +20,14 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         _databaseOptions = databaseOptions.Value;
     }
 
-    public async Task<GraphIngestionPlan> CreateGraphPlanAsync(string fileName, string markdownContent, DocumentMetadata? metadata, CancellationToken cancellationToken)
+    public async Task<GraphIngestionPlan> CreateGraphPlanAsync(string fileName, string markdownContent, DocumentMetadata? metadata, string contentHash, CancellationToken cancellationToken)
     {
         if (!_foundry.IsConfigured)
         {
             throw new InvalidOperationException("Foundry inference is not configured. Set Copilot settings and credentials.");
         }
 
-        var documentId = Interlocked.Increment(ref _documentSeed);
+        var documentId = CreateDocumentId(contentHash);
         var title = Path.GetFileNameWithoutExtension(fileName);
         var chunks = ChunkMarkdown(markdownContent, documentId).ToList();
         var chunkEmbeddings = await _foundry.CreateEmbeddingsAsync(chunks.Select(c => c.Text).ToList(), cancellationToken);
@@ -36,20 +37,44 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var mentions = BuildMentions(enrichedChunks, entities).ToList();
 
         var normalizedMetadata = NormalizeMetadata(metadata);
-        var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, enrichedChunks, entities, mentions, normalizedMetadata);
+        var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, contentHash, enrichedChunks, entities, mentions, normalizedMetadata);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
-        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt);
+        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, contentHash, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt);
+    }
+
+    public GraphIngestionPlan ApplyDocumentIdentity(GraphIngestionPlan plan, string contentHash)
+    {
+        var documentId = CreateDocumentId(contentHash);
+        var chunkIdMap = plan.Chunks.ToDictionary(chunk => chunk.Id, chunk => BuildChunkId(documentId, chunk.ChunkIndex));
+        var chunks = plan.Chunks
+            .Select(chunk => chunk with { Id = chunkIdMap[chunk.Id] })
+            .ToList();
+        var mentions = plan.Mentions
+            .Select(mention => chunkIdMap.TryGetValue(mention.ChunkId, out var chunkId)
+                ? mention with { ChunkId = chunkId }
+                : mention)
+            .ToList();
+        var status = plan.Status with { DocumentId = documentId };
+
+        return plan with
+        {
+            DocumentId = documentId,
+            Chunks = chunks,
+            Mentions = mentions,
+            Status = status,
+            ContentHash = contentHash
+        };
     }
 
     public GraphIngestionPlan RefreshSql(GraphIngestionPlan plan)
     {
         var fileName = plan.Status.FileName;
-        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.Chunks, plan.Entities, plan.Mentions, NormalizeMetadata(plan.Metadata));
+        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.ContentHash, plan.Chunks, plan.Entities, plan.Mentions, NormalizeMetadata(plan.Metadata));
         return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql, DecompositionSystemPrompt = string.IsNullOrWhiteSpace(plan.DecompositionSystemPrompt) ? _foundry.EntityExtractionSystemPrompt : plan.DecompositionSystemPrompt };
     }
 
-    private static IEnumerable<ChunkDto> ChunkMarkdown(string content, int documentId)
+    private static IEnumerable<ChunkDto> ChunkMarkdown(string content, long documentId)
     {
         var normalized = (content ?? string.Empty).Replace("\r\n", "\n").Trim();
         if (string.IsNullOrWhiteSpace(normalized))
@@ -65,7 +90,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         if (blocks.Count == 0)
         {
-            yield return new ChunkDto(documentId * 1000 + 1, 1, CleanText(normalized));
+            yield return new ChunkDto(BuildChunkId(documentId, 1), 1, CleanText(normalized));
             yield break;
         }
 
@@ -74,7 +99,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         {
             if (block.Length <= MaxChunkCharacters)
             {
-                yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, block);
+                yield return new ChunkDto(BuildChunkId(documentId, chunkIndex), chunkIndex++, block);
                 continue;
             }
 
@@ -91,7 +116,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
                 if (current.Length > 0 && current.Length + candidate.Length + 1 > MaxChunkCharacters)
                 {
-                    yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, current.ToString());
+                    yield return new ChunkDto(BuildChunkId(documentId, chunkIndex), chunkIndex++, current.ToString());
                     current.Clear();
                 }
 
@@ -104,7 +129,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
             if (current.Length > 0)
             {
-                yield return new ChunkDto(documentId * 1000 + chunkIndex, chunkIndex++, current.ToString());
+                yield return new ChunkDto(BuildChunkId(documentId, chunkIndex), chunkIndex++, current.ToString());
             }
         }
     }
@@ -200,7 +225,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private List<string> BuildSql(int documentId, string fileName, string title, string rawContent, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions, DocumentMetadata metadata)
+    private List<string> BuildSql(long documentId, string fileName, string title, string rawContent, string contentHash, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions, DocumentMetadata metadata)
     {
         var graphName = _databaseOptions.GraphName;
         var extensions = _databaseOptions.Extensions;
@@ -208,6 +233,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var docTypeLiteral = string.IsNullOrWhiteSpace(metadata.DocumentType) ? "NULL" : $"'{EscapeSql(metadata.DocumentType)}'";
         var docDateLiteral = metadata.DocumentDate.HasValue ? $"DATE '{metadata.DocumentDate.Value:yyyy-MM-dd}'" : "NULL";
         var contentLiteral = string.IsNullOrWhiteSpace(rawContent) ? "NULL" : $"'{EscapeSql(rawContent)}'";
+        var contentHashLiteral = string.IsNullOrWhiteSpace(contentHash) ? "NULL" : $"'{EscapeSql(contentHash)}'";
         var tagsJsonLiteral = BuildTagsJsonLiteral(metadata.Tags);
         var cypherTagsLiteral = BuildCypherTagsLiteral(metadata.Tags);
         var statements = new List<string>
@@ -221,6 +247,7 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_type TEXT;",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_date DATE;",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS content TEXT;",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT;",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags JSONB;",
             "ALTER TABLE documents DROP COLUMN IF EXISTS source_created_at;",
             "CREATE TABLE IF NOT EXISTS entities (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
@@ -230,10 +257,11 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);",
             BuildDiskAnnIndexStatement(extensions),
             "CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON chunk_entities(entity_id);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash) WHERE content_hash IS NOT NULL AND content_hash <> '';",
             "CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);",
             "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'summary') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'content') THEN ALTER TABLE documents RENAME COLUMN summary TO content; END IF; END $$;",
-            $"INSERT INTO documents(id, title, file_name, document_type, document_date, content, tags) VALUES ({documentId}, '{EscapeSql(title)}', '{EscapeSql(fileName)}', {docTypeLiteral}, {docDateLiteral}, {contentLiteral}, {tagsJsonLiteral}) ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, file_name = EXCLUDED.file_name, document_type = EXCLUDED.document_type, document_date = EXCLUDED.document_date, content = EXCLUDED.content, tags = EXCLUDED.tags;",
-            $"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (d:Document {{id:{documentId}}}) SET d.title=\"{Escape(title)}\", d.file_name=\"{Escape(fileName)}\", d.document_type={(string.IsNullOrWhiteSpace(metadata.DocumentType) ? "null" : $"\"{Escape(metadata.DocumentType)}\"")}, d.document_date={(metadata.DocumentDate.HasValue ? $"\"{metadata.DocumentDate.Value:yyyy-MM-dd}\"" : "null")}, d.content={(string.IsNullOrWhiteSpace(rawContent) ? "null" : $"\"{Escape(rawContent)}\"")}, d.tags={cypherTagsLiteral} RETURN d $$) as (d agtype);"
+            $"INSERT INTO documents(id, title, file_name, document_type, document_date, content, content_hash, tags) VALUES ({documentId}, '{EscapeSql(title)}', '{EscapeSql(fileName)}', {docTypeLiteral}, {docDateLiteral}, {contentLiteral}, {contentHashLiteral}, {tagsJsonLiteral}) ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, file_name = EXCLUDED.file_name, document_type = EXCLUDED.document_type, document_date = EXCLUDED.document_date, content = EXCLUDED.content, content_hash = EXCLUDED.content_hash, tags = EXCLUDED.tags;",
+            $"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (d:Document {{id:{documentId}}}) SET d.title=\"{Escape(title)}\", d.file_name=\"{Escape(fileName)}\", d.document_type={(string.IsNullOrWhiteSpace(metadata.DocumentType) ? "null" : $"\"{Escape(metadata.DocumentType)}\"")}, d.document_date={(metadata.DocumentDate.HasValue ? $"\"{metadata.DocumentDate.Value:yyyy-MM-dd}\"" : "null")}, d.content={(string.IsNullOrWhiteSpace(rawContent) ? "null" : $"\"{Escape(rawContent)}\"")}, d.content_hash={(string.IsNullOrWhiteSpace(contentHash) ? "null" : $"\"{Escape(contentHash)}\"")}, d.tags={cypherTagsLiteral} RETURN d $$) as (d agtype);"
         };
 
         if (metadata.Tags is { Count: > 0 })
@@ -379,8 +407,34 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         return candidate is null ? string.Empty : candidate.ToLowerInvariant();
     }
 
-    private static int CreateInitialDocumentSeed()
-        => (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1_000_000);
+    private static long CreateInitialDocumentSeed()
+        => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1_000_000_000;
+
+    private static long CreateDocumentId(string contentHash)
+    {
+        if (string.IsNullOrWhiteSpace(contentHash))
+        {
+            return Interlocked.Increment(ref _documentSeed);
+        }
+
+        var normalized = contentHash.Trim().ToLowerInvariant();
+        var hash = Regex.IsMatch(normalized, "^[0-9a-f]{16,}$", RegexOptions.IgnoreCase)
+            ? normalized
+            : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+        return ParseSafeIdentifier(hash);
+    }
+
+    private static long BuildChunkId(long documentId, int chunkIndex)
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes($"{documentId}:{chunkIndex}"))).ToLowerInvariant();
+        return ParseSafeIdentifier(hash);
+    }
+
+    private static long ParseSafeIdentifier(string hexHash)
+    {
+        var value = long.Parse(hexHash[..13], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        return value == 0 ? 1 : value;
+    }
 
     private static string BuildExtensionStatement(string[] extensions, string extensionName)
         => extensions.Any(name => string.Equals(name, extensionName, StringComparison.OrdinalIgnoreCase))

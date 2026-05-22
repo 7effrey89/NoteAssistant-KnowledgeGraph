@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
 using NoteAssistant.KnowledgeGraph.Backend.Services;
@@ -46,6 +47,12 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapGet("/api/graph-maker-agent", (IFoundryInferenceClient foundry) => Results.Ok(new
+{
+    name = "Graph Maker Agent",
+    systemPrompt = foundry.EntityExtractionSystemPrompt
+}));
 
 static string NormalizeSchemaName(string? value)
 {
@@ -104,6 +111,38 @@ static DocumentMetadata ParseMetadata(IFormCollection form)
     return new DocumentMetadata(documentType, documentDate, tags);
 }
 
+static DocumentMetadata ParseBulkMetadata(BulkMetadataUpdateRequest request)
+{
+    var documentType = NormalizeOptional(request.DocumentType);
+    var documentDate = ParseDateOnly(request.DocumentDate);
+    var tags = ParseTags(request.Tags);
+
+    return new DocumentMetadata(documentType, documentDate, tags);
+}
+
+static bool HasMetadataValues(DocumentMetadata metadata)
+    => !string.IsNullOrWhiteSpace(metadata.DocumentType)
+       || metadata.DocumentDate.HasValue
+       || metadata.Tags is { Count: > 0 };
+
+static string ResolveContentHash(GraphIngestionPlan plan, IAnalysisCache cache)
+{
+    if (!string.IsNullOrWhiteSpace(plan.OriginalContent))
+    {
+        return cache.ComputeHash(plan.OriginalContent);
+    }
+
+    return !string.IsNullOrWhiteSpace(plan.ContentHash)
+        ? plan.ContentHash.Trim().ToLowerInvariant()
+        : cache.ComputeHash(string.Join("\n\n", plan.Chunks.Select(chunk => chunk.Text)));
+}
+
+var cacheJsonOptions = new JsonSerializerOptions
+{
+    PropertyNameCaseInsensitive = true,
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+};
+
 app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
@@ -137,7 +176,8 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
     if (cached is not null)
     {
         var title = Path.GetFileNameWithoutExtension(file.FileName);
-        var refreshed = ingestionService.RefreshSql(cached with { Metadata = metadata });
+        var identified = ingestionService.ApplyDocumentIdentity(cached, contentHash);
+        var refreshed = ingestionService.RefreshSql(identified with { Metadata = metadata });
         plan = refreshed with
         {
             Cached = true,
@@ -155,13 +195,13 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
         return Results.Ok(plan);
     }
 
-    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, metadata, cancellationToken);
+    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, metadata, contentHash, cancellationToken);
     var analyzed = plan.Status with
     {
         State = "Analyzed",
         Message = "Decomposition ready. Click 'Ingest' to push into PostgreSQL/AGE."
     };
-    plan = plan with { ContentHash = contentHash, Status = analyzed };
+    plan = plan with { Status = analyzed };
 
     store.Upsert(analyzed);
     store.SavePlan(plan);
@@ -170,7 +210,122 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
 })
 .DisableAntiforgery();
 
-app.MapPost("/api/documents/{documentId:int}/ingest", async (int documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+app.MapPost("/api/documents/upload-cache", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
+{
+    if (!request.HasFormContentType)
+    {
+        return Results.BadRequest(new { error = "Upload must use multipart/form-data." });
+    }
+
+    var form = await request.ReadFormAsync(cancellationToken);
+    var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+
+    if (file is null || file.Length == 0)
+    {
+        return Results.BadRequest(new { error = "An analysis cache JSON file is required." });
+    }
+
+    if (!file.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "Only cache analysis .json files are supported." });
+    }
+
+    GraphIngestionPlan? imported;
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        imported = await JsonSerializer.DeserializeAsync<GraphIngestionPlan>(stream, cacheJsonOptions, cancellationToken);
+    }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = $"Invalid analysis cache JSON: {ex.Message}" });
+    }
+
+    if (imported is null)
+    {
+        return Results.BadRequest(new { error = "Analysis cache JSON was empty or could not be read." });
+    }
+
+    if (imported.DocumentId <= 0 || imported.Chunks.Count == 0)
+    {
+        return Results.BadRequest(new { error = "Analysis cache JSON must contain a documentId and at least one chunk." });
+    }
+
+    var contentHash = ResolveContentHash(imported, cache);
+    var identified = ingestionService.ApplyDocumentIdentity(imported, contentHash);
+
+    var metadata = ParseMetadata(form);
+    var metadataToUse = HasMetadataValues(metadata) ? metadata : identified.Metadata;
+    var fileName = string.IsNullOrWhiteSpace(identified.Status.FileName)
+        ? Path.ChangeExtension(file.FileName, ".md")
+        : identified.Status.FileName;
+
+    var refreshed = ingestionService.RefreshSql(identified with { Metadata = metadataToUse });
+    var status = refreshed.Status with
+    {
+        FileName = fileName,
+        State = "Cached",
+        UpdatedAt = DateTimeOffset.UtcNow,
+        Message = "Loaded from uploaded analysis cache JSON (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
+    };
+    var plan = refreshed with
+    {
+        Cached = true,
+        Metadata = metadataToUse,
+        Status = status
+    };
+
+    store.Upsert(status);
+    store.SavePlan(plan);
+    return Results.Ok(plan);
+})
+.DisableAntiforgery();
+
+app.MapPost("/api/documents/metadata", (BulkMetadataUpdateRequest request, IMarkdownGraphIngestionService ingestionService, IngestionStore store) =>
+{
+    if (request.DocumentIds is null || request.DocumentIds.Count == 0)
+    {
+        return Results.BadRequest(new { error = "At least one documentId is required." });
+    }
+
+    var metadata = ParseBulkMetadata(request);
+    if (!HasMetadataValues(metadata))
+    {
+        return Results.BadRequest(new { error = "At least one metadata field is required." });
+    }
+
+    var updated = new List<GraphIngestionPlan>();
+    var missing = new List<long>();
+    foreach (var documentId in request.DocumentIds.Distinct())
+    {
+        var plan = store.GetPlan(documentId);
+        if (plan is null)
+        {
+            missing.Add(documentId);
+            continue;
+        }
+
+        var refreshed = ingestionService.RefreshSql(plan with { Metadata = metadata });
+        var status = refreshed.Status with
+        {
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Message = "Metadata updated. Click 'Ingest' to push into PostgreSQL/AGE."
+        };
+        var updatedPlan = refreshed with { Metadata = metadata, Status = status };
+        store.Upsert(status);
+        store.SavePlan(updatedPlan);
+        updated.Add(updatedPlan);
+    }
+
+    if (updated.Count == 0)
+    {
+        return Results.NotFound(new { error = "No uploaded plans were found for the provided documentIds.", missing });
+    }
+
+    return Results.Ok(new { updated, missing });
+});
+
+app.MapPost("/api/documents/{documentId:long}/ingest", async (long documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -210,7 +365,7 @@ app.MapPost("/api/documents/{documentId:int}/ingest", async (int documentId, Ing
     return execution.Success ? Results.Ok(ingestedPlan) : Results.Problem(updated.Message, statusCode: StatusCodes.Status500InternalServerError);
 });
 
-app.MapGet("/api/documents/{documentId:int}/ingest/preview", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/ingest/preview", (long documentId, IngestionStore store) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -228,7 +383,7 @@ app.MapGet("/api/documents/{documentId:int}/ingest/preview", (int documentId, In
     return Results.Ok(new { relationalStatements = relational, graphStatements = graph });
 });
 
-app.MapGet("/api/documents/{documentId:int}/ingest/log", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/ingest/log", (long documentId, IngestionStore store) =>
 {
     var log = store.GetExecutionLog(documentId);
     return log is null
@@ -236,7 +391,7 @@ app.MapGet("/api/documents/{documentId:int}/ingest/log", (int documentId, Ingest
         : Results.Ok(log);
 });
 
-app.MapPost("/api/documents/{documentId:int}/graph", async (int documentId, IngestionStore store, AgeGraphRepository repository, IOptions<DatabaseOptions> options, CancellationToken cancellationToken) =>
+app.MapPost("/api/documents/{documentId:long}/graph", async (long documentId, IngestionStore store, AgeGraphRepository repository, IOptions<DatabaseOptions> options, CancellationToken cancellationToken) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -270,7 +425,7 @@ app.MapPost("/api/documents/{documentId:int}/graph", async (int documentId, Inge
     return execution.Success ? Results.Ok(updatedPlan) : Results.Problem(updated.Message, statusCode: StatusCodes.Status500InternalServerError);
 });
 
-app.MapGet("/api/documents/{documentId:int}/status", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/status", (long documentId, IngestionStore store) =>
 {
     var status = store.Get(documentId);
     return status is null

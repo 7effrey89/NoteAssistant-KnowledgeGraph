@@ -100,6 +100,10 @@ Use the Foundry health endpoint to validate that embedding calls can reach the c
 curl https://localhost:<port>/api/health/foundry
 ```
 
+Foundry inference auth uses `Copilot.AuthMode`:
+- `EntraId` (default): use `DefaultAzureCredential`, which refreshes tokens automatically. Run `az login` if the local developer token expires.
+- `ApiKey`: use `Copilot.ApiKey`, or `AZURE_INFERENCE_CREDENTIAL` when `Copilot.ApiKey` is empty. Do not use this mode for resources with key-based authentication disabled.
+
 Use the database health endpoint to validate connectivity/auth:
 
 ```bash

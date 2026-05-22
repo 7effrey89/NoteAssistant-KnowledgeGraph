@@ -1,20 +1,26 @@
 namespace NoteAssistant.KnowledgeGraph.Backend.Models;
 
-public sealed record ChunkDto(int Id, int ChunkIndex, string Text, float[]? Embedding = null);
+public sealed record ChunkDto(long Id, int ChunkIndex, string Text, float[]? Embedding = null);
 
 public sealed record EntityDto(string Label, string Name);
 
-public sealed record ChunkEntityLinkDto(int ChunkId, string EntityLabel, string EntityName);
+public sealed record ChunkEntityLinkDto(long ChunkId, string EntityLabel, string EntityName);
 
-public sealed record IngestionStatusDto(int DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
+public sealed record IngestionStatusDto(long DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
 
 public sealed record DocumentMetadata(
     string? DocumentType,
     DateOnly? DocumentDate,
     IReadOnlyList<string>? Tags);
 
+public sealed record BulkMetadataUpdateRequest(
+    IReadOnlyList<long> DocumentIds,
+    string? DocumentType,
+    string? DocumentDate,
+    string? Tags);
+
 public sealed record GraphIngestionPlan(
-    int DocumentId,
+    long DocumentId,
     string GraphName,
     string Title,
     DocumentMetadata? Metadata,
@@ -74,7 +80,7 @@ public sealed record HybridRetrievalRequest(
     int ClarificationAttempts = 0,
     string? ClarificationResponse = null);
 
-public sealed record HybridChunkResultDto(long Id, int DocumentId, int ChunkIndex, string Content, double? Distance);
+public sealed record HybridChunkResultDto(long Id, long DocumentId, int ChunkIndex, string Content, double? Distance);
 
 public sealed record HybridTokenUsageDto(int? PromptTokens, int? CompletionTokens);
 

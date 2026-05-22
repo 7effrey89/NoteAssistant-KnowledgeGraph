@@ -17,6 +17,7 @@ public sealed class FoundryOptions
     public string? EmbeddingDeployment { get; init; }
     public string? AgentName { get; init; }
     public string? FoundryModelResourceId { get; init; }
+    public string AuthMode { get; init; } = "EntraId";
     public string? ApiKey { get; init; }
     public string? InferenceEndpoint { get; init; }
     public string EntraScope { get; init; } = "https://cognitiveservices.azure.com/.default";
@@ -51,6 +52,11 @@ public sealed record QuestionAnalysisResult(
 public sealed class FoundryInferenceClient : IFoundryInferenceClient
 {
     private const string CredentialEnvVar = "AZURE_INFERENCE_CREDENTIAL";
+    private const string PromptTemplateFolder = "prompt_template";
+    private const string AnswerSystemPromptFileName = "answerAgent_ContextAnswerSystemPrompt.txt";
+    private const string AnalysisSystemPromptFileName = "entityDetectionAgent_QuestionAnalysisSystemPrompt.txt";
+    private const string LegacyAnalysisSystemPromptFileName = "clarificationAgent_QuestionAnalysisSystemPrompt.txt";
+    private const string EntityExtractionSystemPromptFileName = "graphMakerAgent_EntityExtractionSystemPrompt.txt";
     private const string DefaultAnswerSystemPrompt =
         "You answer questions using the provided context. If the context is insufficient, say you do not have enough information.";
     private const string DefaultAnalysisSystemPrompt =
@@ -69,24 +75,35 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
     private readonly ILogger<FoundryInferenceClient> _logger;
     private readonly EmbeddingClient? _embeddingsClient;
     private readonly ChatClient? _chatClient;
+    private readonly string _answerSystemPrompt;
+    private readonly string _analysisSystemPrompt;
+    private readonly string _entityExtractionSystemPrompt;
 
-    public FoundryInferenceClient(IOptions<FoundryOptions> copilotOptions, ILogger<FoundryInferenceClient> logger)
+    public FoundryInferenceClient(IOptions<FoundryOptions> copilotOptions, ILogger<FoundryInferenceClient> logger, IHostEnvironment environment)
     {
         _copilot = copilotOptions.Value;
         _logger = logger;
+        _answerSystemPrompt = LoadPromptTemplate(environment, AnswerSystemPromptFileName, DefaultAnswerSystemPrompt);
+        _analysisSystemPrompt = LoadPromptTemplate(environment, AnalysisSystemPromptFileName, LegacyAnalysisSystemPromptFileName, DefaultAnalysisSystemPrompt);
+        _entityExtractionSystemPrompt = LoadPromptTemplate(environment, EntityExtractionSystemPromptFileName, DefaultEntityExtractionSystemPrompt);
 
         if (!TryBuildEndpoint(out var endpoint))
         {
             return;
         }
 
-        var apiKey = !string.IsNullOrWhiteSpace(_copilot.ApiKey)
-            ? _copilot.ApiKey
-            : Environment.GetEnvironmentVariable(CredentialEnvVar);
-
         AzureOpenAIClient azureClient;
-        if (!string.IsNullOrWhiteSpace(apiKey))
+        if (IsApiKeyAuthMode(_copilot.AuthMode))
         {
+            var apiKey = !string.IsNullOrWhiteSpace(_copilot.ApiKey)
+                ? _copilot.ApiKey
+                : Environment.GetEnvironmentVariable(CredentialEnvVar);
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                _logger.LogWarning("Foundry ApiKey auth mode is configured, but no API key was provided in Copilot:ApiKey or {CredentialEnvVar}.", CredentialEnvVar);
+                return;
+            }
+
             azureClient = new AzureOpenAIClient(endpoint, new ApiKeyCredential(apiKey));
         }
         else
@@ -112,11 +129,11 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
            && !string.IsNullOrWhiteSpace(_copilot.EmbeddingDeployment)
            && !string.IsNullOrWhiteSpace(_copilot.ModelDeployment);
 
-    public string AnswerSystemPrompt => DefaultAnswerSystemPrompt;
+    public string AnswerSystemPrompt => _answerSystemPrompt;
 
-    public string AnalysisSystemPrompt => DefaultAnalysisSystemPrompt;
+    public string AnalysisSystemPrompt => _analysisSystemPrompt;
 
-    public string EntityExtractionSystemPrompt => DefaultEntityExtractionSystemPrompt;
+    public string EntityExtractionSystemPrompt => _entityExtractionSystemPrompt;
 
     public async Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken)
     {
@@ -150,7 +167,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var messages = new List<ChatMessage>
         {
-            ChatMessage.CreateSystemMessage(DefaultEntityExtractionSystemPrompt),
+            ChatMessage.CreateSystemMessage(_entityExtractionSystemPrompt),
             ChatMessage.CreateUserMessage(markdownContent)
         };
 
@@ -175,7 +192,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var messages = new List<ChatMessage>
         {
-            ChatMessage.CreateSystemMessage(DefaultAnswerSystemPrompt),
+            ChatMessage.CreateSystemMessage(_answerSystemPrompt),
             ChatMessage.CreateUserMessage($"Context:\n{context}\n\nQuestion:\n{question}")
         };
 
@@ -195,7 +212,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         var userPrompt = $"Question: {question}{clarificationText}";
         var messages = new List<ChatMessage>
         {
-            ChatMessage.CreateSystemMessage(DefaultAnalysisSystemPrompt),
+            ChatMessage.CreateSystemMessage(_analysisSystemPrompt),
             ChatMessage.CreateUserMessage(userPrompt)
         };
 
@@ -206,15 +223,59 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         if (!TryParseQuestionAnalysis(content ?? string.Empty, out var result))
         {
             _logger.LogWarning("Failed to parse question analysis JSON from Foundry response.");
-            return new QuestionAnalysisResult([], null, question, DefaultAnalysisSystemPrompt, userPrompt, tokenUsage);
+            return new QuestionAnalysisResult([], null, question, _analysisSystemPrompt, userPrompt, tokenUsage);
         }
 
         return result with
         {
-            SystemPrompt = DefaultAnalysisSystemPrompt,
+            SystemPrompt = _analysisSystemPrompt,
             UserPrompt = userPrompt,
             TokenUsage = tokenUsage
         };
+    }
+
+    private string LoadPromptTemplate(IHostEnvironment environment, string fileName, string fallback)
+        => LoadPromptTemplate(environment, fileName, legacyFileName: null, fallback);
+
+    private string LoadPromptTemplate(IHostEnvironment environment, string fileName, string? legacyFileName, string fallback)
+    {
+        var path = Path.Combine(environment.ContentRootPath, PromptTemplateFolder, fileName);
+        try
+        {
+            if (!File.Exists(path))
+            {
+                if (!string.IsNullOrWhiteSpace(legacyFileName))
+                {
+                    var legacyPath = Path.Combine(environment.ContentRootPath, PromptTemplateFolder, legacyFileName);
+                    if (File.Exists(legacyPath))
+                    {
+                        var legacyPrompt = File.ReadAllText(legacyPath).Trim();
+                        if (!string.IsNullOrWhiteSpace(legacyPrompt))
+                        {
+                            _logger.LogWarning("Prompt template {PromptTemplatePath} was not found. Using legacy prompt template {LegacyPromptTemplatePath}.", path, legacyPath);
+                            return legacyPrompt;
+                        }
+                    }
+                }
+
+                _logger.LogWarning("Prompt template {PromptTemplatePath} was not found. Using built-in fallback.", path);
+                return fallback;
+            }
+
+            var prompt = File.ReadAllText(path).Trim();
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                _logger.LogWarning("Prompt template {PromptTemplatePath} is empty. Using built-in fallback.", path);
+                return fallback;
+            }
+
+            return prompt;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read prompt template {PromptTemplatePath}. Using built-in fallback.", path);
+            return fallback;
+        }
     }
 
     private static LlmTokenUsage? ExtractTokenUsage(OpenAI.Chat.ChatTokenUsage? usage)
@@ -275,6 +336,10 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         return new DefaultAzureCredential(credentialOptions);
     }
+
+    private static bool IsApiKeyAuthMode(string? authMode)
+        => string.Equals(authMode, "ApiKey", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(authMode, "Key", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseEntities(string content, out List<EntityDto> entities)
     {

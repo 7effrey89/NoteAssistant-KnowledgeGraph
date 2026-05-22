@@ -24,12 +24,14 @@ CREATE TABLE IF NOT EXISTS kg_data.documents (
     document_type TEXT NULL,
     document_date DATE NULL,
     content TEXT NULL,
+    content_hash TEXT NULL,
     tags JSONB NULL
 );
 
 ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS document_type TEXT;
 ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS document_date DATE;
 ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS content TEXT;
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS content_hash TEXT;
 ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS tags JSONB;
 
 ALTER TABLE kg_data.documents DROP COLUMN IF EXISTS source_created_at;
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS kg_data.chunk_entities (
 CREATE INDEX IF NOT EXISTS idx_chunks_document ON kg_data.chunks(document_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_entities_name ON kg_data.entities(name);
 CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON kg_data.chunk_entities(entity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_content_hash ON kg_data.documents(content_hash) WHERE content_hash IS NOT NULL AND content_hash <> '';
 CREATE INDEX IF NOT EXISTS idx_documents_tags ON kg_data.documents USING GIN (tags);
 
 DO $$ BEGIN

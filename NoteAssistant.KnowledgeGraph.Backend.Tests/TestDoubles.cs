@@ -9,12 +9,15 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
     public bool IsConfigured { get; init; } = true;
     public IReadOnlyList<float[]> Embeddings { get; init; } = Array.Empty<float[]>();
     public IReadOnlyList<EntityDto> Entities { get; init; } = Array.Empty<EntityDto>();
+    public int CreateEmbeddingsCallCount { get; private set; }
+    public int ExtractEntitiesCallCount { get; private set; }
 
     public Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken)
         => Task.FromResult(Embeddings.FirstOrDefault() ?? new float[1536]);
 
     public Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken)
     {
+        CreateEmbeddingsCallCount++;
         if (Embeddings.Count == inputs.Count)
         {
             return Task.FromResult(Embeddings);
@@ -25,7 +28,10 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
     }
 
     public Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken)
-        => Task.FromResult(Entities);
+    {
+        ExtractEntitiesCallCount++;
+        return Task.FromResult(Entities);
+    }
 
     public string AnswerSystemPrompt => "test-answer-system-prompt";
 

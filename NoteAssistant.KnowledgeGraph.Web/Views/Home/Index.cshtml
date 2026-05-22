@@ -34,77 +34,137 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">1) Upload markdown document</div>
+        <div class="card-header">1) Upload document(s)</div>
         <div class="card-body">
-            <div class="input-group">
-                <input class="form-control" type="file" id="markdownFile" accept=".md" />
-                <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+            <div class="upload-tabs-panel">
+                <ul class="nav nav-tabs" id="uploadTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="upload-markdown-tab" data-bs-toggle="tab" data-bs-target="#upload-markdown-pane" type="button" role="tab" aria-controls="upload-markdown-pane" aria-selected="true">Markdown</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="upload-cache-tab" data-bs-toggle="tab" data-bs-target="#upload-cache-pane" type="button" role="tab" aria-controls="upload-cache-pane" aria-selected="false">Cache JSON</button>
+                    </li>
+                </ul>
+                <div class="tab-content border border-top-0 p-3 upload-tab-content">
+                    <div class="tab-pane fade show active" id="upload-markdown-pane" role="tabpanel" aria-labelledby="upload-markdown-tab">
+                        <div class="input-group">
+                            <input class="form-control" type="file" id="markdownFile" accept=".md" multiple />
+                            <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+                        </div>
+                        <div class="form-text">Select one or more markdown files. Use the file list in Section 2 to view each document and manage metadata.</div>
+                    </div>
+                    <div class="tab-pane fade" id="upload-cache-pane" role="tabpanel" aria-labelledby="upload-cache-tab">
+                        <div class="input-group">
+                            <input class="form-control" type="file" id="cacheFile" accept=".json,application/json" multiple />
+                            <button class="btn btn-outline-primary" id="uploadCacheBtn">Upload Cache</button>
+                        </div>
+                        <div class="form-text">Select one or more cache/analysis JSON files. This loads saved decomposition and skips Foundry/LLM processing.</div>
+                    </div>
+                </div>
             </div>
             <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
+            <ul class="upload-batch-results mt-2 mb-0" id="uploadBatchResults"></ul>
+            <details class="mt-3 decomposition-prompt-details" open>
+                <summary>Graph Maker Agent</summary>
+                <pre id="graphMakerAgentPrompt" class="decomposition-prompt mb-0">Upload a document to see the system prompt used to generate chunks, entities, and links.</pre>
+            </details>
         </div>
     </div>
 
     <div class="card mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span>2) Decomposition & ingestion status</span>
+            <span>2) Documents, decomposition & metadata</span>
             <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
         </div>
         <div class="card-body">
-            <button class="btn btn-outline-secondary mb-3" id="refreshStatusBtn">Refresh Status</button>
-            <div id="statusOutput" class="mb-3"></div>
-
-            <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Chunks · Entities · Links</button>
-                </li>
-            </ul>
-            <div class="tab-content border border-top-0 p-3">
-                <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
-                    <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
+            <div class="row g-3 document-workbench-layout">
+                <div class="col-lg-3">
+                    <div class="uploaded-documents-panel h-100">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <strong>Uploaded files</strong>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-sm btn-outline-secondary" type="button" id="selectAllDocsBtn">Select all</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" id="clearSelectedDocsBtn">Clear</button>
+                            </div>
+                        </div>
+                        <div id="uploadedDocumentsList" class="uploaded-documents-list text-muted small">Upload one or more files to manage document-specific decomposition and metadata.</div>
+                    </div>
                 </div>
-                <div class="tab-pane fade" id="tab-decomp" role="tabpanel">
-                    <details class="mb-3 decomposition-prompt-details">
-                        <summary>System prompt</summary>
-                        <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
-                    </details>
-                    <h5>Chunks</h5>
-                    <ul id="chunksOutput"></ul>
-                    <h5>Entities</h5>
-                    <ul id="entitiesOutput"></ul>
-                    <h5>Chunk → Entity links</h5>
-                    <ul id="mentionsOutput"></ul>
+                <div class="col-lg-9">
+                    <div id="statusOutput" class="mb-3"></div>
+
+                    <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Decomposition</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content border border-top-0 p-3">
+                        <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
+                            <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
+                        </div>
+                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel">
+                            <details class="mb-3 decomposition-prompt-details">
+                                <summary>Graph Maker Agent (System Prompt)</summary>
+                                <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
+                            </details>
+                            <ul class="nav nav-pills decomposition-subtabs" id="decompositionSubtabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="tab-chunks-btn" data-bs-toggle="tab" data-bs-target="#tab-chunks" type="button" role="tab" aria-controls="tab-chunks" aria-selected="true">Chunks</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-entities-btn" data-bs-toggle="tab" data-bs-target="#tab-entities" type="button" role="tab" aria-controls="tab-entities" aria-selected="false">Entities</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-links-btn" data-bs-toggle="tab" data-bs-target="#tab-links" type="button" role="tab" aria-controls="tab-links" aria-selected="false">Links</button>
+                                </li>
+                            </ul>
+                            <div class="tab-content decomposition-subtab-content">
+                                <div class="tab-pane fade show active" id="tab-chunks" role="tabpanel" aria-labelledby="tab-chunks-btn">
+                                    <ul id="chunksOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-entities" role="tabpanel" aria-labelledby="tab-entities-btn">
+                                    <ul id="entitiesOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-links" role="tabpanel" aria-labelledby="tab-links-btn">
+                                    <ul id="mentionsOutput" class="mb-0"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="metadata-panel mt-3">
+                        <div class="fw-semibold mb-2">Metadata for viewed document</div>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label" for="metadataDocumentType">Document type</label>
+                                <select class="form-select" id="metadataDocumentType">
+                                    <option value="">(select)</option>
+                                    <option value="transcription">Transcription</option>
+                                    <option value="meeting_summary">Meeting summary</option>
+                                    <option value="product_notes">Product notes</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="metadataDocumentDate">Document date</label>
+                                <input class="form-control" type="date" id="metadataDocumentDate" />
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label" for="metadataTags">Tags (comma-separated)</label>
+                                <input class="form-control" id="metadataTags" placeholder="e.g. power bi, external sharing" />
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                            <button class="btn btn-primary btn-sm" type="button" id="applyMetadataBtn" disabled>Apply metadata to selected documents</button>
+                            <small id="metadataMessage" class="text-muted">Select uploaded documents, define metadata, then apply it to that subset.</small>
+                        </div>
+                        <div class="mt-2 text-muted small">Metadata drafts are remembered as you switch viewed documents. Applying metadata updates the selected checked documents.</div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <div class="card mb-4">
-        <div class="card-header">2.5) Metadata</div>
-        <div class="card-body">
-            <div class="row g-3">
-                <div class="col-md-4">
-                    <label class="form-label" for="metadataDocumentType">Document type</label>
-                    <select class="form-select" id="metadataDocumentType">
-                        <option value="">(select)</option>
-                        <option value="transcription">Transcription</option>
-                        <option value="meeting_summary">Meeting summary</option>
-                        <option value="product_notes">Product notes</option>
-                        <option value="other">Other</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label" for="metadataDocumentDate">Document date</label>
-                    <input class="form-control" type="date" id="metadataDocumentDate" />
-                </div>
-                <div class="col-md-12">
-                    <label class="form-label" for="metadataTags">Tags (comma-separated)</label>
-                    <input class="form-control" id="metadataTags" placeholder="e.g. power bi, external sharing" />
-                </div>
-            </div>
-            <div class="mt-2 text-muted small">Metadata is stored with the document to support queries like "latest meeting".</div>
         </div>
     </div>
 
@@ -198,13 +258,6 @@
                                         <select class="form-select form-select-sm" id="graphEngineSelect" data-graph-setting="engine">
                                             <option value="cytoscape" selected>Cytoscape.js</option>
                                             <option value="vis">vis-network</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label class="form-label" for="graphCytoscapeRendererSelect">Renderer</label>
-                                        <select class="form-select form-select-sm" id="graphCytoscapeRendererSelect" data-graph-setting="cytoscapeRenderer">
-                                            <option value="canvas">Canvas</option>
-                                            <option value="webgl" selected>WebGL preview</option>
                                         </select>
                                     </div>
                                     <div>
@@ -416,6 +469,9 @@
         let currentDocumentId = null;
         let currentGraphName = 'knowledge_graph';
         let graphReady = false;
+        const uploadedDocuments = new Map();
+        const selectedDocumentIds = new Set();
+        const metadataDrafts = new Map();
         let hybridClarificationAttempts = 0;
         let graphCy = null;
         let graphNetwork = null;
@@ -444,7 +500,6 @@
         ]);
         const defaultGraphSettings = Object.freeze({
             engine: 'cytoscape',
-            cytoscapeRenderer: 'webgl',
             layout: 'cose',
             colorMode: 'legacyVis',
             nodeScale: 1,
@@ -467,7 +522,6 @@
         const visDefaultGraphSettings = Object.freeze({
             ...defaultGraphSettings,
             engine: 'vis',
-            cytoscapeRenderer: 'canvas',
             layout: 'visDefault',
             colorMode: 'legacyVis',
             nodeScale: 1,
@@ -490,7 +544,6 @@
         const graphSettings = { ...defaultGraphSettings };
         const graphSettingDescriptions = Object.freeze({
             engine: 'Choose the graph renderer. Cytoscape.js enables richer layouts; vis-network restores the previous renderer.',
-            cytoscapeRenderer: 'Choose the Cytoscape.js drawing backend. WebGL preview uses the GPU when supported and falls back to canvas if unavailable.',
             layout: 'Choose how nodes are positioned. Some layouts are geometric, some are physics-based, and some are hierarchical.',
             colorMode: 'Choose how node colors are assigned: by kind, legacy vis-network groups, label, degree, or neutral styling.',
             nodeScale: 'Scale node size up or down without changing graph data.',
@@ -524,7 +577,14 @@
         });
 
         const uploadBtn = document.getElementById('uploadBtn');
-        const refreshStatusBtn = document.getElementById('refreshStatusBtn');
+        const uploadCacheBtn = document.getElementById('uploadCacheBtn');
+        const uploadedDocumentsList = document.getElementById('uploadedDocumentsList');
+        const selectAllDocsBtn = document.getElementById('selectAllDocsBtn');
+        const clearSelectedDocsBtn = document.getElementById('clearSelectedDocsBtn');
+        const applyMetadataBtn = document.getElementById('applyMetadataBtn');
+        const metadataDocumentType = document.getElementById('metadataDocumentType');
+        const metadataDocumentDate = document.getElementById('metadataDocumentDate');
+        const metadataTags = document.getElementById('metadataTags');
         const ingestBtn = document.getElementById('ingestBtn');
         const ingestSqlBtn = document.getElementById('ingestSqlBtn');
         const ingestLogBtn = document.getElementById('ingestLogBtn');
@@ -553,8 +613,12 @@
         const graphSettingsToggleBtn = document.getElementById('graphSettingsToggleBtn');
         const querySidebarToggleBtn = document.getElementById('querySidebarToggleBtn');
 
-        uploadBtn.addEventListener('click', uploadFile);
-        refreshStatusBtn.addEventListener('click', refreshStatus);
+        uploadBtn.addEventListener('click', () => uploadFile(false));
+        uploadCacheBtn.addEventListener('click', () => uploadFile(true));
+        selectAllDocsBtn.addEventListener('click', selectAllUploadedDocuments);
+        clearSelectedDocsBtn.addEventListener('click', clearSelectedDocuments);
+        applyMetadataBtn.addEventListener('click', applyMetadataToSelectedDocuments);
+        [metadataDocumentType, metadataDocumentDate, metadataTags].forEach((input) => input.addEventListener('input', saveCurrentMetadataDraft));
         ingestBtn.addEventListener('click', ingestToDatabase);
         ingestSqlBtn.addEventListener('click', loadIngestSql);
         ingestLogBtn.addEventListener('click', refreshIngestLog);
@@ -591,6 +655,7 @@
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
         window.addEventListener('load', () => {
             checkBackendStatus();
+            loadGraphMakerAgentPrompt();
             setInterval(checkBackendStatus, 15000);
             loadGraphOnStartup();
         });
@@ -605,10 +670,137 @@
 
         function getMetadataPayload() {
             return {
-                documentType: document.getElementById('metadataDocumentType').value.trim(),
-                documentDate: document.getElementById('metadataDocumentDate').value.trim(),
-                tags: document.getElementById('metadataTags').value.trim()
+                documentType: metadataDocumentType.value.trim(),
+                documentDate: metadataDocumentDate.value.trim(),
+                tags: metadataTags.value.trim()
             };
+        }
+
+        function setMetadataForm(metadata) {
+            metadataDocumentType.value = metadata?.documentType || '';
+            metadataDocumentDate.value = metadata?.documentDate || '';
+            metadataTags.value = Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '');
+        }
+
+        function normalizeMetadataDraft(metadata) {
+            return {
+                documentType: metadata?.documentType || '',
+                documentDate: metadata?.documentDate || '',
+                tags: Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '')
+            };
+        }
+
+        function saveCurrentMetadataDraft() {
+            if (!currentDocumentId) return;
+            metadataDrafts.set(currentDocumentId, getMetadataPayload());
+        }
+
+        function hasMetadataPayload(metadata) {
+            return Boolean(metadata.documentType || metadata.documentDate || metadata.tags);
+        }
+
+        function formatMetadataSummary(metadata) {
+            const parts = [];
+            if (metadata?.documentType) parts.push(metadata.documentType);
+            if (metadata?.documentDate) parts.push(metadata.documentDate);
+            if (Array.isArray(metadata?.tags) && metadata.tags.length) parts.push(metadata.tags.join(', '));
+            return parts.length ? parts.join(' | ') : 'metadata not set';
+        }
+
+        function selectAllUploadedDocuments() {
+            uploadedDocuments.forEach((_, id) => selectedDocumentIds.add(Number(id)));
+            renderUploadedDocuments();
+        }
+
+        function clearSelectedDocuments() {
+            selectedDocumentIds.clear();
+            renderUploadedDocuments();
+        }
+
+        function showDocumentPlan(documentId, options = {}) {
+            if (currentDocumentId && currentDocumentId !== Number(documentId)) {
+                saveCurrentMetadataDraft();
+            }
+
+            const plan = uploadedDocuments.get(Number(documentId));
+            if (!plan) return;
+
+            currentDocumentId = plan.documentId;
+            if (plan.graphName) currentGraphName = plan.graphName;
+            document.getElementById('cachedBadge').style.display = plan.cached ? 'inline-block' : 'none';
+            ingestBtn.disabled = false;
+            ingestSqlBtn.disabled = false;
+            ingestLogBtn.disabled = false;
+            initGraphBtn.disabled = false;
+            setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
+            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
+            renderDecomposition(plan);
+            renderStatus(plan.status);
+            if (options.loadMetadata !== false) {
+                setMetadataForm(metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata));
+            }
+            renderUploadedDocuments();
+        }
+
+        function renderUploadedDocuments() {
+            if (uploadedDocuments.size === 0) {
+                uploadedDocumentsList.className = 'uploaded-documents-list text-muted small';
+                uploadedDocumentsList.innerText = 'Upload one or more files to manage document-specific decomposition and metadata.';
+                applyMetadataBtn.disabled = true;
+                return;
+            }
+
+            uploadedDocumentsList.className = 'uploaded-documents-list';
+            uploadedDocumentsList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            uploadedDocuments.forEach((plan) => {
+                const item = document.createElement('div');
+                item.className = `uploaded-document-item${plan.documentId === currentDocumentId ? ' active' : ''}`;
+                item.tabIndex = 0;
+                item.role = 'button';
+                item.setAttribute('aria-current', plan.documentId === currentDocumentId ? 'true' : 'false');
+                item.setAttribute('aria-label', `View ${plan.status.fileName || plan.title || `Document ${plan.documentId}`}`);
+                item.addEventListener('click', () => showDocumentPlan(plan.documentId));
+                item.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        showDocumentPlan(plan.documentId);
+                    }
+                });
+
+                const checkbox = document.createElement('input');
+                checkbox.className = 'form-check-input';
+                checkbox.type = 'checkbox';
+                checkbox.checked = selectedDocumentIds.has(plan.documentId);
+                checkbox.setAttribute('aria-label', `Select ${plan.status.fileName}`);
+                checkbox.addEventListener('click', (event) => event.stopPropagation());
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) selectedDocumentIds.add(plan.documentId);
+                    else selectedDocumentIds.delete(plan.documentId);
+                    renderUploadedDocuments();
+                });
+
+                const text = document.createElement('div');
+                text.className = 'min-w-0';
+                const title = document.createElement('div');
+                title.className = 'uploaded-document-title';
+                title.innerText = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                const meta = document.createElement('div');
+                meta.className = 'uploaded-document-meta';
+                meta.innerText = `Document ${plan.documentId} | ${plan.status.state} | ${formatMetadataSummary(plan.metadata)}`;
+                text.appendChild(title);
+                text.appendChild(meta);
+
+                item.appendChild(checkbox);
+                item.appendChild(text);
+                fragment.appendChild(item);
+            });
+            uploadedDocumentsList.appendChild(fragment);
+            applyMetadataBtn.disabled = selectedDocumentIds.size === 0;
+            document.getElementById('metadataMessage').innerText = selectedDocumentIds.size === 0
+                ? 'Select uploaded documents, define metadata, then apply it to that subset.'
+                : `${selectedDocumentIds.size} document${selectedDocumentIds.size === 1 ? '' : 's'} selected for metadata update.`;
+            document.getElementById('metadataMessage').className = 'text-muted';
         }
 
         function setBackendStatus(state, text) {
@@ -633,14 +825,72 @@
             }
         }
 
-        async function uploadFile() {
-            const fileInput = document.getElementById('markdownFile');
-            const file = fileInput.files[0];
-            if (!file) {
-                setMessage('uploadMessage', 'Please select a .md file first.', 'text-danger');
+        async function loadGraphMakerAgentPrompt() {
+            const promptElement = document.getElementById('graphMakerAgentPrompt');
+            promptElement.textContent = 'Loading Graph Maker Agent system prompt...';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/graph-maker-agent`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    promptElement.textContent = (payload && (payload.error || payload.detail)) || `Graph Maker Agent prompt unavailable (status ${response.status}).`;
+                    return;
+                }
+
+                promptElement.textContent = payload?.systemPrompt || '(no system prompt returned)';
+            } catch (err) {
+                promptElement.textContent = `Graph Maker Agent prompt unavailable: ${err.message}`;
+            }
+        }
+
+        async function uploadFile(cacheMode) {
+            const fileInput = document.getElementById(cacheMode ? 'cacheFile' : 'markdownFile');
+            const activeUploadButton = cacheMode ? uploadCacheBtn : uploadBtn;
+            const files = Array.from(fileInput.files || []);
+            const resultsList = document.getElementById('uploadBatchResults');
+            resultsList.innerHTML = '';
+
+            if (files.length === 0) {
+                setMessage('uploadMessage', `Please select at least one ${cacheMode ? 'cache analysis .json' : '.md'} file first.`, 'text-danger');
                 return;
             }
 
+            const expectedExtension = cacheMode ? '.json' : '.md';
+            const invalidFiles = files.filter(file => !file.name.toLowerCase().endsWith(expectedExtension));
+            if (invalidFiles.length > 0) {
+                setMessage('uploadMessage', `Only ${expectedExtension} files are supported in this mode. Remove: ${invalidFiles.map(file => file.name).join(', ')}.`, 'text-danger');
+                return;
+            }
+
+            activeUploadButton.disabled = true;
+            setMessage('uploadMessage', cacheMode
+                ? `Uploading ${files.length} cache file${files.length === 1 ? '' : 's'} without LLM processing...`
+                : `Uploading and analyzing ${files.length} file${files.length === 1 ? '' : 's'}...`, 'text-muted');
+
+            let succeeded = 0;
+            let failed = 0;
+            for (let index = 0; index < files.length; index++) {
+                const file = files[index];
+                const resultItem = appendUploadBatchResult(file.name, 'Uploading...', 'text-muted');
+                setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Analyzing'} ${index + 1}/${files.length}: ${file.name}`, 'text-muted');
+
+                const result = await uploadSingleFile(file, cacheMode);
+                if (result.ok) {
+                    succeeded++;
+                    handleUploadSuccess(result.payload);
+                    const cachedSuffix = result.payload.cached ? ' [from cache, no LLM]' : '';
+                    updateUploadBatchResult(resultItem, `Document ${result.payload.documentId} analyzed (${result.payload.status.state})${cachedSuffix}.`, result.payload.cached ? 'text-warning' : 'text-success');
+                } else {
+                    failed++;
+                    updateUploadBatchResult(resultItem, result.error, 'text-danger');
+                }
+            }
+
+            activeUploadButton.disabled = false;
+            const summaryClass = failed > 0 ? (succeeded > 0 ? 'text-warning' : 'text-danger') : 'text-success';
+            setMessage('uploadMessage', `${cacheMode ? 'Loaded cache for' : 'Analyzed'} ${succeeded}/${files.length} file${files.length === 1 ? '' : 's'}${failed > 0 ? `; ${failed} failed` : ''}.`, summaryClass);
+        }
+
+        async function uploadSingleFile(file, cacheMode) {
             const formData = new FormData();
             formData.append('file', file);
             const metadata = getMetadataPayload();
@@ -648,18 +898,15 @@
             formData.append('documentDate', metadata.documentDate || '');
             formData.append('tags', metadata.tags || '');
 
-            setMessage('uploadMessage', `Uploading ${file.name}…`, 'text-muted');
-
             let response;
             try {
-                response = await fetch(`${backendBaseUrl}/api/documents/upload`, {
+                response = await fetch(`${backendBaseUrl}${cacheMode ? '/api/documents/upload-cache' : '/api/documents/upload'}`, {
                     method: 'POST',
                     body: formData
                 });
             } catch (err) {
                 console.error('Upload network error', err);
-                setMessage('uploadMessage', `Network error calling ${backendBaseUrl}: ${err.message}. Check the backend is running and CORS allows ${window.location.origin}.`, 'text-danger');
-                return;
+                return { ok: false, error: `Network error calling ${backendBaseUrl}: ${err.message}. Check the backend is running and CORS allows ${window.location.origin}.` };
             }
 
             let payload;
@@ -667,30 +914,95 @@
                 payload = await response.json();
             } catch (err) {
                 console.error('Upload parse error', err, response.status);
-                setMessage('uploadMessage', `Backend returned non-JSON (status ${response.status}).`, 'text-danger');
-                return;
+                return { ok: false, error: `Backend returned non-JSON (status ${response.status}).` };
             }
 
             if (!response.ok) {
-                setMessage('uploadMessage', payload.error || `Upload failed with status ${response.status}.`, 'text-danger');
+                return { ok: false, error: payload.error || `Upload failed with status ${response.status}.` };
+            }
+
+            return { ok: true, payload };
+        }
+
+        function handleUploadSuccess(payload) {
+            uploadedDocuments.set(payload.documentId, payload);
+            selectedDocumentIds.add(payload.documentId);
+            showDocumentPlan(payload.documentId);
+        }
+
+        function appendUploadBatchResult(fileName, message, cssClass) {
+            const list = document.getElementById('uploadBatchResults');
+            const item = document.createElement('li');
+            const name = document.createElement('strong');
+            const status = document.createElement('span');
+            name.innerText = fileName;
+            status.className = cssClass;
+            status.innerText = message;
+            item.appendChild(name);
+            item.appendChild(document.createTextNode(': '));
+            item.appendChild(status);
+            list.appendChild(item);
+            return item;
+        }
+
+        function updateUploadBatchResult(item, message, cssClass) {
+            const status = item.querySelector('span');
+            status.className = cssClass;
+            status.innerText = message;
+        }
+
+        async function applyMetadataToSelectedDocuments() {
+            saveCurrentMetadataDraft();
+            const documentIds = Array.from(selectedDocumentIds);
+            if (documentIds.length === 0) {
+                setMessage('metadataMessage', 'Select one or more uploaded documents first.', 'text-danger');
                 return;
             }
 
-            currentDocumentId = payload.documentId;
-            if (payload.graphName) {
-                currentGraphName = payload.graphName;
+            const metadata = getMetadataPayload();
+            if (!hasMetadataPayload(metadata)) {
+                setMessage('metadataMessage', 'Define at least one metadata field before applying.', 'text-danger');
+                return;
             }
-            const cachedSuffix = payload.cached ? ' [from cache]' : '';
-            setMessage('uploadMessage', `Document ${payload.documentId} analyzed (${payload.status.state})${cachedSuffix}.`, payload.cached ? 'text-warning' : 'text-success');
-            document.getElementById('cachedBadge').style.display = payload.cached ? 'inline-block' : 'none';
-            ingestBtn.disabled = false;
-            ingestSqlBtn.disabled = false;
-            ingestLogBtn.disabled = false;
-            initGraphBtn.disabled = false;
-            setMessage('ingestMessage', `Ready to ingest document ${payload.documentId} (${payload.chunks.length} chunks, ${payload.entities.length} entities).`, 'text-muted');
-            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
-            renderDecomposition(payload);
-            renderStatus(payload.status);
+
+            applyMetadataBtn.disabled = true;
+            setMessage('metadataMessage', `Applying metadata to ${documentIds.length} document${documentIds.length === 1 ? '' : 's'}...`, 'text-muted');
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documentIds, ...metadata })
+                });
+            } catch (err) {
+                setMessage('metadataMessage', `Metadata update failed: ${err.message}`, 'text-danger');
+                applyMetadataBtn.disabled = false;
+                renderUploadedDocuments();
+                return;
+            }
+
+            const payload = await response.json().catch(() => null);
+            if (!response.ok) {
+                setMessage('metadataMessage', (payload && (payload.error || payload.detail)) || `Metadata update failed (status ${response.status}).`, 'text-danger');
+                applyMetadataBtn.disabled = false;
+                renderUploadedDocuments();
+                return;
+            }
+
+            (payload.updated || []).forEach((plan) => {
+                uploadedDocuments.set(plan.documentId, plan);
+                metadataDrafts.set(plan.documentId, normalizeMetadataDraft(plan.metadata));
+            });
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
+            } else {
+                renderUploadedDocuments();
+            }
+
+            const missing = payload.missing || [];
+            const suffix = missing.length ? ` (${missing.length} missing: ${missing.join(', ')})` : '';
+            setMessage('metadataMessage', `Metadata applied to ${(payload.updated || []).length} document${(payload.updated || []).length === 1 ? '' : 's'}.${suffix}`, missing.length ? 'text-warning' : 'text-success');
+            applyMetadataBtn.disabled = selectedDocumentIds.size === 0;
         }
 
         async function ingestToDatabase() {
@@ -785,18 +1097,6 @@
                 output.innerText = lines.join('\n');
             } catch (err) {
                 output.innerText = `Failed to load log: ${err.message}`;
-            }
-        }
-
-        async function refreshStatus() {
-            if (!currentDocumentId) {
-                return;
-            }
-
-            const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/status`);
-            const payload = await response.json();
-            if (response.ok) {
-                renderStatus(payload);
             }
         }
 
@@ -976,7 +1276,11 @@
 
             currentDocumentId = null;
             graphReady = false;
+            uploadedDocuments.clear();
+            selectedDocumentIds.clear();
+            metadataDrafts.clear();
             setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
+            setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
             setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
             setMessage('resetDbMessage', `Database reset completed. Cache for document-to-entity breakdown files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
@@ -984,9 +1288,12 @@
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
             document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
+            await loadGraphMakerAgentPrompt();
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
+            setMetadataForm(null);
+            renderUploadedDocuments();
             renderResults([]);
             renderGraph([], []);
             document.getElementById('graphCheckStatus').innerText = 'Graph counts not loaded.';
@@ -1292,8 +1599,10 @@
         }
 
         function renderDecomposition(payload) {
+            const systemPrompt = payload.decompositionSystemPrompt || '(no system prompt returned)';
             document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
-            document.getElementById('decompositionSystemPrompt').textContent = payload.decompositionSystemPrompt || '(no system prompt returned)';
+            document.getElementById('graphMakerAgentPrompt').textContent = systemPrompt;
+            document.getElementById('decompositionSystemPrompt').textContent = systemPrompt;
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
@@ -1411,7 +1720,7 @@
                 const details = document.createElement('details');
                 details.className = 'process-bubble-systemprompt';
                 const summary = document.createElement('summary');
-                summary.innerText = 'System Prompt';
+                summary.innerText = 'Graph Maker Agent (System Prompt)';
                 details.appendChild(summary);
                 const pre = document.createElement('pre');
                 pre.innerText = item.systemPrompt;
@@ -1612,7 +1921,7 @@
                 return;
             }
 
-            const cytoscapeOptions = {
+            graphCy = cytoscape({
                 container,
                 elements: buildCytoscapeElements(currentGraphNodes, currentGraphEdges, degreeById),
                 style: buildCytoscapeStyle(),
@@ -1620,24 +1929,7 @@
                 minZoom: 0.08,
                 maxZoom: 3,
                 wheelSensitivity: 0.18
-            };
-
-            if (graphSettings.cytoscapeRenderer === 'webgl') {
-                cytoscapeOptions.webgl = true;
-            }
-
-            try {
-                graphCy = cytoscape(cytoscapeOptions);
-            } catch (err) {
-                if (graphSettings.cytoscapeRenderer !== 'webgl') {
-                    throw err;
-                }
-
-                console.warn('Cytoscape.js WebGL renderer failed; falling back to canvas.', err);
-                graphSettings.cytoscapeRenderer = 'canvas';
-                syncGraphSettingsControls();
-                graphCy = cytoscape({ ...cytoscapeOptions, webgl: false });
-            }
+            });
 
             graphCy.nodes().grabify();
 
@@ -2257,13 +2549,6 @@
                 return;
             }
 
-            if (setting === 'cytoscapeRenderer') {
-                if (graphSettings.engine === 'cytoscape') {
-                    renderGraph(currentGraphNodes, currentGraphEdges);
-                }
-                return;
-            }
-
             if (graphSettings.engine === 'vis') {
                 if (setting === 'highlightNeighborhood') {
                     clearGraphHighlight();
@@ -2570,7 +2855,9 @@
             syncGraphSettingsControls();
 
             if (graphCy) {
-                renderGraph(currentGraphNodes, currentGraphEdges);
+                graphCy.style(buildCytoscapeStyle()).update();
+                runGraphLayout(true);
+                clearGraphHighlight();
             } else if (graphNetwork && currentGraphNodes.length) {
                 renderGraph(currentGraphNodes, currentGraphEdges);
             }
@@ -2579,8 +2866,7 @@
         function setGraphStats(nodeCount, edgeCount) {
             const stats = document.getElementById('graphRenderStats');
             if (stats) {
-                const cytoscapeRendererSuffix = graphSettings.cytoscapeRenderer === 'webgl' ? ' (WebGL preview)' : ' (canvas)';
-                const engineName = graphSettings.engine === 'vis' ? 'vis-network' : `Cytoscape.js${cytoscapeRendererSuffix}`;
+                const engineName = graphSettings.engine === 'vis' ? 'vis-network' : 'Cytoscape.js';
                 stats.innerText = `${nodeCount} nodes, ${edgeCount} edges rendered with ${engineName}.`;
             }
         }
