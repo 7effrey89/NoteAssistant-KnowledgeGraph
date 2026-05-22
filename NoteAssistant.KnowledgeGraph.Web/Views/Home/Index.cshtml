@@ -173,7 +173,7 @@
         <div class="card-body">
             <p class="text-muted small mb-2">Stores documents, chunks, entities, and embeddings in PostgreSQL. Requires <code>ConnectionStrings:AgeDatabase</code>.</p>
             <div class="d-flex flex-wrap gap-2">
-                <button class="btn btn-primary" id="ingestBtn" disabled>Ingest to PostgreSQL</button>
+                <button class="btn btn-primary" id="ingestBtn" disabled>Ingest all to PostgreSQL</button>
                 <button class="btn btn-outline-secondary" id="ingestSqlBtn" disabled>Show SQL</button>
                 <button class="btn btn-outline-secondary" id="ingestLogBtn" disabled>Refresh log</button>
             </div>
@@ -754,12 +754,16 @@
             uploadedDocumentsList.innerHTML = '';
             const fragment = document.createDocumentFragment();
             uploadedDocuments.forEach((plan) => {
+                const fileName = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                const metadataSummary = formatMetadataSummary(plan.metadata);
+                const tooltipText = `${fileName}\nDocument ${plan.documentId}\n${plan.status.state}: ${plan.status.message || ''}\nMetadata: ${metadataSummary}`;
                 const item = document.createElement('div');
                 item.className = `uploaded-document-item${plan.documentId === currentDocumentId ? ' active' : ''}`;
                 item.tabIndex = 0;
                 item.role = 'button';
+                item.title = tooltipText;
                 item.setAttribute('aria-current', plan.documentId === currentDocumentId ? 'true' : 'false');
-                item.setAttribute('aria-label', `View ${plan.status.fileName || plan.title || `Document ${plan.documentId}`}`);
+                item.setAttribute('aria-label', `View ${fileName}`);
                 item.addEventListener('click', () => showDocumentPlan(plan.documentId));
                 item.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -772,7 +776,8 @@
                 checkbox.className = 'form-check-input';
                 checkbox.type = 'checkbox';
                 checkbox.checked = selectedDocumentIds.has(plan.documentId);
-                checkbox.setAttribute('aria-label', `Select ${plan.status.fileName}`);
+                checkbox.title = `Select ${fileName}`;
+                checkbox.setAttribute('aria-label', `Select ${fileName}`);
                 checkbox.addEventListener('click', (event) => event.stopPropagation());
                 checkbox.addEventListener('change', () => {
                     if (checkbox.checked) selectedDocumentIds.add(plan.documentId);
@@ -784,10 +789,12 @@
                 text.className = 'min-w-0';
                 const title = document.createElement('div');
                 title.className = 'uploaded-document-title';
-                title.innerText = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                title.title = fileName;
+                title.innerText = fileName;
                 const meta = document.createElement('div');
                 meta.className = 'uploaded-document-meta';
-                meta.innerText = `Document ${plan.documentId} | ${plan.status.state} | ${formatMetadataSummary(plan.metadata)}`;
+                meta.title = tooltipText;
+                meta.innerText = `Document ${plan.documentId} | ${plan.status.state} | ${metadataSummary}`;
                 text.appendChild(title);
                 text.appendChild(meta);
 
@@ -1006,34 +1013,52 @@
         }
 
         async function ingestToDatabase() {
-            if (!currentDocumentId) {
-                setMessage('ingestMessage', 'Upload a document first.', 'text-danger');
+            const plans = Array.from(uploadedDocuments.values());
+            if (plans.length === 0) {
+                setMessage('ingestMessage', 'Upload one or more documents first.', 'text-danger');
                 return;
             }
             ingestBtn.disabled = true;
-            setMessage('ingestMessage', `Ingesting document ${currentDocumentId} into PostgreSQL/AGE…`, 'text-muted');
-            let response;
-            try {
-                response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/ingest`, { method: 'POST' });
-            } catch (err) {
-                setMessage('ingestMessage', `Network error: ${err.message}`, 'text-danger');
-                ingestBtn.disabled = false;
-                return;
+            let completed = 0;
+            const failures = [];
+
+            for (const plan of plans) {
+                const label = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                setMessage('ingestMessage', `Ingesting ${completed + 1} of ${plans.length}: ${label}`, 'text-muted');
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/${plan.documentId}/ingest`, { method: 'POST' });
+                } catch (err) {
+                    failures.push(`${label}: ${err.message}`);
+                    continue;
+                }
+
+                let payload;
+                try { payload = await response.json(); } catch { payload = null; }
+                if (!response.ok) {
+                    failures.push(`${label}: ${(payload && (payload.error || payload.detail)) || `status ${response.status}`}`);
+                    continue;
+                }
+
+                if (payload?.graphName) {
+                    currentGraphName = payload.graphName;
+                }
+                if (payload?.documentId) {
+                    uploadedDocuments.set(payload.documentId, payload);
+                    if (payload.documentId === currentDocumentId) {
+                        renderStatus(payload.status);
+                    }
+                }
+                completed += 1;
             }
-            let payload;
-            try { payload = await response.json(); } catch { payload = null; }
-            if (!response.ok) {
-                setMessage('ingestMessage', (payload && (payload.error || payload.detail)) || `Ingest failed (status ${response.status}).`, 'text-danger');
-                ingestBtn.disabled = false;
-                return;
+
+            renderUploadedDocuments();
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
             }
-            if (payload?.graphName) {
-                currentGraphName = payload.graphName;
-            }
-            const state = payload.status.state;
-            const cls = state === 'Completed' ? 'text-success' : state === 'Ready' ? 'text-warning' : 'text-info';
-            setMessage('ingestMessage', `${state}: ${payload.status.message}`, cls);
-            renderStatus(payload.status);
+            const failureSuffix = failures.length ? ` ${failures.length} failed: ${failures.join(' | ')}` : '';
+            const messageClass = failures.length ? (completed ? 'text-warning' : 'text-danger') : 'text-success';
+            setMessage('ingestMessage', `Ingested ${completed} of ${plans.length} uploaded document${plans.length === 1 ? '' : 's'}.${failureSuffix}`, messageClass);
             ingestBtn.disabled = false;
             await refreshIngestLog();
         }

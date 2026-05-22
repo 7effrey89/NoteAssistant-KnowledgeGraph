@@ -821,6 +821,7 @@ body.kg-inspector-resizing {
 
 .kg-query-input {
   min-height: 116px;
+  overflow-y: hidden;
   resize: vertical;
   font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.84rem;
@@ -837,6 +838,90 @@ body.kg-inspector-resizing {
 .kg-layout-buttons .btn {
   min-height: 31px;
   white-space: normal;
+}
+
+.kg-checkbox-dropdown {
+  position: relative;
+}
+
+.kg-checkbox-dropdown summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 31px;
+  padding: 0.25rem 1.8rem 0.25rem 0.5rem;
+  border: 1px solid #ced4da;
+  border-radius: 0.375rem;
+  background-color: #ffffff;
+  color: #212529;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.kg-checkbox-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.kg-checkbox-dropdown summary::after {
+  content: "";
+  position: absolute;
+  right: 0.65rem;
+  top: 50%;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 1.5px solid #334155;
+  border-bottom: 1.5px solid #334155;
+  transform: translateY(-65%) rotate(45deg);
+}
+
+.kg-checkbox-dropdown[open] summary {
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.18);
+}
+
+.kg-checkbox-dropdown-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.375rem;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+.kg-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: #1f2937;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.kg-checkbox-option:hover {
+  background: #eff6ff;
+}
+
+.kg-checkbox-option input {
+  flex: 0 0 auto;
+}
+
+.kg-checkbox-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kg-layout-group-title {
@@ -1096,33 +1181,33 @@ body.kg-inspector-resizing {
   top: 72px;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 5px 4px;
-  border-color: rgba(148, 163, 184, 0.28);
+  gap: 6px;
+  padding: 6px 5px;
+  border-color: rgba(100, 116, 139, 0.38);
   border-radius: 999px;
-  background: rgba(248, 250, 252, 0.86);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.14);
 }
 
 .kg-canvas-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: #64748b;
-  font-size: 0.68rem;
-  font-weight: 800;
+  color: #1f2937;
+  font-size: 1.05rem;
+  font-weight: 900;
   line-height: 1;
 }
 
 .kg-canvas-control:hover:not(:disabled) {
   background: #e2e8f0;
-  color: #1d4ed8;
+  color: #0f3ea8;
 }
 
 .kg-canvas-control:disabled {

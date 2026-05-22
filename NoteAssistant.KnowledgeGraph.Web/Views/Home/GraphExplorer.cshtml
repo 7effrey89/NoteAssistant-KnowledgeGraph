@@ -42,12 +42,18 @@ LIMIT 150</textarea>
                 <input class="form-control form-control-sm mb-2" id="kgSearchInput" placeholder="Name, label, property" />
                 <div class="kg-control-grid">
                     <div>
-                        <label class="form-label" for="kgNodeTypeFilter">Node label</label>
-                        <select class="form-select form-select-sm" id="kgNodeTypeFilter"><option value="">All</option></select>
+                        <div class="form-label" id="kgNodeTypeFilterLabel">Node label</div>
+                        <details class="kg-checkbox-dropdown" id="kgNodeTypeFilter">
+                            <summary id="kgNodeTypeFilterSummary" aria-labelledby="kgNodeTypeFilterLabel kgNodeTypeFilterSummary">All</summary>
+                            <div class="kg-checkbox-dropdown-menu" id="kgNodeTypeFilterList" role="group" aria-labelledby="kgNodeTypeFilterLabel"></div>
+                        </details>
                     </div>
                     <div>
-                        <label class="form-label" for="kgEdgeTypeFilter">Relationship</label>
-                        <select class="form-select form-select-sm" id="kgEdgeTypeFilter"><option value="">All</option></select>
+                        <div class="form-label" id="kgEdgeTypeFilterLabel">Relationship</div>
+                        <details class="kg-checkbox-dropdown" id="kgEdgeTypeFilter">
+                            <summary id="kgEdgeTypeFilterSummary" aria-labelledby="kgEdgeTypeFilterLabel kgEdgeTypeFilterSummary">All</summary>
+                            <div class="kg-checkbox-dropdown-menu" id="kgEdgeTypeFilterList" role="group" aria-labelledby="kgEdgeTypeFilterLabel"></div>
+                        </details>
                     </div>
                     <div>
                         <label class="form-label" for="kgMinDegreeInput">Min degree</label>
@@ -65,6 +71,10 @@ LIMIT 150</textarea>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="kgLabelsToggle" checked />
                         <label class="form-check-label" for="kgLabelsToggle">Node labels</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgNodeNamesInsideToggle" />
+                        <label class="form-check-label" for="kgNodeNamesInsideToggle">Names inside nodes</label>
                     </div>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="kgEdgeLabelsToggle" checked />
@@ -121,7 +131,8 @@ LIMIT 150</textarea>
             </div>
         </main>
 
-        <aside class="kg-inspector" aria-label="Selected graph element details">
+        <div class="kg-inspector-resize-handle" id="kgInspectorResizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize inspector panel" tabindex="0" title="Drag to resize inspector"></div>
+        <aside class="kg-inspector" id="kgInspectorPanel" aria-label="Selected graph element details">
             <div class="kg-section-title">Inspector</div>
             <div id="kgInspectorContent" class="kg-inspector-empty">Select a node or relationship in the graph.</div>
         </aside>

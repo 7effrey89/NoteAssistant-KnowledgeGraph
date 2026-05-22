@@ -8,6 +8,9 @@ import NoverlapLayout from "https://esm.sh/graphology-layout-noverlap@0.4.2/work
 
 const backendBaseUrl = window.noteAssistantGraphExplorer?.backendBaseUrl || "http://localhost:5070";
 const palette = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#0891b2", "#ca8a04", "#db2777", "#4f46e5", "#0f766e", "#ea580c"];
+const inspectorWidthStorageKey = "noteAssistantGraphExplorer.inspectorWidth";
+const inspectorMinWidth = 260;
+const inspectorMaxWidth = 640;
 const state = {
   graphName: "knowledge_graph",
   graph: null,
@@ -19,8 +22,8 @@ const state = {
   selectedNode: null,
   selectedEdge: null,
   hoveredNode: null,
-  filters: { search: "", nodeType: "", edgeType: "", minDegree: 0 },
-  settings: { showLabels: true, showEdgeLabels: true, highlightNeighborhood: true, sizeMode: "degree" },
+  filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
+  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, highlightNeighborhood: true, sizeMode: "degree" },
   currentLayout: "random",
   currentWorkerLayout: null,
   lastWorkerLayout: null,
@@ -43,10 +46,15 @@ const el = {
   queryMessage: document.getElementById("kgQueryMessage"),
   searchInput: document.getElementById("kgSearchInput"),
   nodeTypeFilter: document.getElementById("kgNodeTypeFilter"),
+  nodeTypeFilterSummary: document.getElementById("kgNodeTypeFilterSummary"),
+  nodeTypeFilterList: document.getElementById("kgNodeTypeFilterList"),
   edgeTypeFilter: document.getElementById("kgEdgeTypeFilter"),
+  edgeTypeFilterSummary: document.getElementById("kgEdgeTypeFilterSummary"),
+  edgeTypeFilterList: document.getElementById("kgEdgeTypeFilterList"),
   minDegreeInput: document.getElementById("kgMinDegreeInput"),
   sizeModeSelect: document.getElementById("kgSizeModeSelect"),
   labelsToggle: document.getElementById("kgLabelsToggle"),
+  nodeNamesInsideToggle: document.getElementById("kgNodeNamesInsideToggle"),
   edgeLabelsToggle: document.getElementById("kgEdgeLabelsToggle"),
   neighborToggle: document.getElementById("kgNeighborToggle"),
   searchResults: document.getElementById("kgSearchResults"),
@@ -61,20 +69,23 @@ const el = {
   canvasCenterBtn: document.getElementById("kgCanvasCenterBtn"),
   stats: document.getElementById("kgStats"),
   legend: document.getElementById("kgLegend"),
+  explorerLayout: document.querySelector(".kg-explorer-layout"),
   sigmaContainer: document.getElementById("kgSigmaContainer"),
   emptyState: document.getElementById("kgEmptyState"),
+  inspectorPanel: document.getElementById("kgInspectorPanel"),
+  inspectorResizeHandle: document.getElementById("kgInspectorResizeHandle"),
   inspectorContent: document.getElementById("kgInspectorContent")
 };
 
 el.runQueryBtn.addEventListener("click", runQuery);
 el.loadSampleBtn.addEventListener("click", () => {
   el.queryInput.value = "MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 150";
+  autosizeQueryInput();
 });
 el.exportBtn.addEventListener("click", exportGraphJson);
 el.refreshStatusBtn.addEventListener("click", refreshStatus);
+el.queryInput.addEventListener("input", autosizeQueryInput);
 el.searchInput.addEventListener("input", () => updateFilters({ search: el.searchInput.value.trim() }));
-el.nodeTypeFilter.addEventListener("change", () => updateFilters({ nodeType: el.nodeTypeFilter.value }));
-el.edgeTypeFilter.addEventListener("change", () => updateFilters({ edgeType: el.edgeTypeFilter.value }));
 el.minDegreeInput.addEventListener("input", () => updateFilters({ minDegree: Number(el.minDegreeInput.value) || 0 }));
 el.sizeModeSelect.addEventListener("change", () => {
   state.settings.sizeMode = el.sizeModeSelect.value;
@@ -82,6 +93,10 @@ el.sizeModeSelect.addEventListener("change", () => {
 });
 el.labelsToggle.addEventListener("change", () => {
   state.settings.showLabels = el.labelsToggle.checked;
+  updateRendererSettings();
+});
+el.nodeNamesInsideToggle.addEventListener("change", () => {
+  state.settings.nodeNamesInside = el.nodeNamesInsideToggle.checked;
   updateRendererSettings();
 });
 el.edgeLabelsToggle.addEventListener("change", () => {
@@ -105,9 +120,91 @@ document.querySelectorAll("[data-kg-layout]").forEach(button => {
 document.querySelectorAll("[data-kg-worker-layout]").forEach(button => {
   button.addEventListener("click", () => toggleWorkerLayout(button.dataset.kgWorkerLayout || "force"));
 });
+document.addEventListener("click", event => {
+  [el.nodeTypeFilter, el.edgeTypeFilter].forEach(dropdown => {
+    if (dropdown?.open && !dropdown.contains(event.target)) dropdown.open = false;
+  });
+});
+initInspectorResize();
+autosizeQueryInput();
 updateLayoutStatus();
 
 await refreshStatus();
+
+function autosizeQueryInput() {
+  el.queryInput.style.height = "auto";
+  el.queryInput.style.height = `${el.queryInput.scrollHeight}px`;
+}
+
+function initInspectorResize() {
+  if (!el.explorerLayout || !el.inspectorPanel || !el.inspectorResizeHandle) return;
+
+  const storedWidth = Number(localStorage.getItem(inspectorWidthStorageKey));
+  if (Number.isFinite(storedWidth) && storedWidth > 0) {
+    setInspectorWidth(storedWidth, { persist: false, refresh: false });
+  }
+
+  let dragStartX = 0;
+  let dragStartWidth = 0;
+
+  el.inspectorResizeHandle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragStartX = event.clientX;
+    dragStartWidth = getInspectorWidth();
+    el.inspectorResizeHandle.classList.add("is-dragging");
+    document.body.classList.add("kg-inspector-resizing");
+    el.inspectorResizeHandle.setPointerCapture(event.pointerId);
+  });
+
+  el.inspectorResizeHandle.addEventListener("pointermove", event => {
+    if (!el.inspectorResizeHandle.classList.contains("is-dragging")) return;
+    const delta = dragStartX - event.clientX;
+    setInspectorWidth(dragStartWidth + delta, { persist: false });
+  });
+
+  const finishDrag = event => {
+    if (!el.inspectorResizeHandle.classList.contains("is-dragging")) return;
+    el.inspectorResizeHandle.classList.remove("is-dragging");
+    document.body.classList.remove("kg-inspector-resizing");
+    if (el.inspectorResizeHandle.hasPointerCapture(event.pointerId)) {
+      el.inspectorResizeHandle.releasePointerCapture(event.pointerId);
+    }
+    setInspectorWidth(getInspectorWidth(), { persist: true });
+  };
+
+  el.inspectorResizeHandle.addEventListener("pointerup", finishDrag);
+  el.inspectorResizeHandle.addEventListener("pointercancel", finishDrag);
+
+  el.inspectorResizeHandle.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 50 : 20;
+    if (event.key === "ArrowLeft") setInspectorWidth(getInspectorWidth() + step);
+    if (event.key === "ArrowRight") setInspectorWidth(getInspectorWidth() - step);
+    if (event.key === "Home") setInspectorWidth(inspectorMinWidth);
+    if (event.key === "End") setInspectorWidth(inspectorMaxWidth);
+  });
+}
+
+function getInspectorWidth() {
+  return el.inspectorPanel?.getBoundingClientRect().width || 320;
+}
+
+function setInspectorWidth(width, options = {}) {
+  if (!el.explorerLayout) return;
+  const viewportLimit = Math.max(inspectorMinWidth, Math.min(inspectorMaxWidth, Math.round(window.innerWidth * 0.45)));
+  const nextWidth = Math.round(Math.min(Math.max(width, inspectorMinWidth), viewportLimit));
+  el.explorerLayout.style.setProperty("--kg-inspector-width", `${nextWidth}px`);
+  el.inspectorResizeHandle?.setAttribute("aria-valuemin", String(inspectorMinWidth));
+  el.inspectorResizeHandle?.setAttribute("aria-valuemax", String(viewportLimit));
+  el.inspectorResizeHandle?.setAttribute("aria-valuenow", String(nextWidth));
+  if (options.persist !== false) localStorage.setItem(inspectorWidthStorageKey, String(nextWidth));
+  if (options.refresh !== false) requestAnimationFrame(() => {
+    state.renderer?.resize?.();
+    refreshRenderer();
+  });
+}
 
 async function refreshStatus() {
   setStatus(el.backendStatus, "checking", "Checking backend");
@@ -253,7 +350,36 @@ function buildEdgeAttributes(edge) {
 }
 
 function buildSigmaSettings() {
-  return { allowInvalidContainer: true, renderLabels: state.settings.showLabels, renderEdgeLabels: state.settings.showEdgeLabels, labelRenderedSizeThreshold: 0, labelSize: 12, edgeLabelSize: 10, minCameraRatio: 0.03, maxCameraRatio: 8, defaultEdgeType: "arrow", labelColor: { color: "#1f2937" }, edgeLabelColor: { color: "#475569" } };
+  return { allowInvalidContainer: true, renderLabels: state.settings.showLabels, renderEdgeLabels: state.settings.showEdgeLabels, labelRenderer: state.settings.nodeNamesInside ? renderNodeNameInside : undefined, labelRenderedSizeThreshold: 0, labelSize: 12, edgeLabelSize: 10, minCameraRatio: 0.03, maxCameraRatio: 8, defaultEdgeType: "arrow", labelColor: { color: "#1f2937" }, edgeLabelColor: { color: "#475569" } };
+}
+
+function renderNodeNameInside(context, data) {
+  if (!data.label) return;
+  const radius = Math.max(6, data.size || 0);
+  const maxWidth = Math.max(10, radius * 1.72);
+  const fontSize = Math.max(7, Math.min(12, radius * 0.66));
+  context.save();
+  context.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#ffffff";
+  context.strokeStyle = "rgba(15, 23, 42, 0.55)";
+  context.lineWidth = Math.max(2, fontSize * 0.22);
+  const text = fitCanvasText(context, data.label, maxWidth);
+  context.strokeText(text, data.x, data.y);
+  context.fillText(text, data.x, data.y);
+  context.restore();
+}
+
+function fitCanvasText(context, text, maxWidth) {
+  const value = String(text ?? "");
+  if (context.measureText(value).width <= maxWidth) return value;
+  const ellipsis = "...";
+  let trimmed = value;
+  while (trimmed.length > 1 && context.measureText(`${trimmed}${ellipsis}`).width > maxWidth) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed.length > 1 ? `${trimmed}${ellipsis}` : value.slice(0, 1);
 }
 
 function registerGraphEvents() {
@@ -332,6 +458,7 @@ function updateRendererSettings() {
   if (!state.renderer) return;
   state.renderer.setSetting("renderLabels", state.settings.showLabels);
   state.renderer.setSetting("renderEdgeLabels", state.settings.showEdgeLabels);
+  state.renderer.setSetting("labelRenderer", state.settings.nodeNamesInside ? renderNodeNameInside : undefined);
   updateReducers();
 }
 
@@ -397,7 +524,7 @@ function edgeReducer(edge, data) {
 
 function isNodeHidden(node, data) {
   if (state.selectedNode === node || state.hoveredNode === node) return false;
-  if (state.filters.nodeType && data.kgLabel !== state.filters.nodeType) return true;
+  if (state.filters.nodeTypes.length && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
   if (state.filters.minDegree && (data.degree || 0) < state.filters.minDegree) return true;
   if (state.filters.search && !nodeMatchesSearch(node, data, state.filters.search)) {
     const hasMatchingNeighbor = state.rawEdges.some(edge => {
@@ -412,7 +539,7 @@ function isNodeHidden(node, data) {
 }
 
 function isEdgeHidden(data) {
-  return Boolean(state.filters.edgeType && data.relationship !== state.filters.edgeType);
+  return Boolean(state.filters.edgeTypes.length && !state.filters.edgeTypes.includes(data.relationship));
 }
 
 function nodeMatchesSearch(node, data, query) {
@@ -588,20 +715,69 @@ function assignGridLayout(graph) {
 }
 
 function rebuildFilterOptions() {
-  rebuildSelect(el.nodeTypeFilter, uniqueSorted(state.rawNodes.map(node => node.label)));
-  rebuildSelect(el.edgeTypeFilter, uniqueSorted(state.rawEdges.map(edge => edge.label)));
+  rebuildCheckboxDropdown({
+    list: el.nodeTypeFilterList,
+    summary: el.nodeTypeFilterSummary,
+    values: uniqueSorted(state.rawNodes.map(node => node.label)),
+    selectedValues: state.filters.nodeTypes,
+    onChange: selected => updateFilters({ nodeTypes: selected })
+  });
+  rebuildCheckboxDropdown({
+    list: el.edgeTypeFilterList,
+    summary: el.edgeTypeFilterSummary,
+    values: uniqueSorted(state.rawEdges.map(edge => edge.label)),
+    selectedValues: state.filters.edgeTypes,
+    onChange: selected => updateFilters({ edgeTypes: selected })
+  });
 }
 
-function rebuildSelect(select, values) {
-  const previous = select.value;
-  select.innerHTML = '<option value="">All</option>';
+function rebuildCheckboxDropdown({ list, summary, values, selectedValues, onChange }) {
+  if (!list || !summary) return;
+  const selected = selectedValues.filter(value => values.includes(value));
+  list.innerHTML = "";
+  list.appendChild(createCheckboxOption("All", "", selected.length === 0, checked => {
+    if (!checked) return;
+    list.querySelectorAll('input[data-filter-value]').forEach(input => { input.checked = false; });
+    updateCheckboxDropdownSummary(summary, []);
+    onChange([]);
+  }));
   values.forEach(value => {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value;
-    select.appendChild(option);
+    list.appendChild(createCheckboxOption(value, value, selected.includes(value), () => {
+      const next = Array.from(list.querySelectorAll('input[data-filter-value]:checked')).map(input => input.dataset.filterValue);
+      const allCheckbox = list.querySelector('input:not([data-filter-value])');
+      if (allCheckbox) allCheckbox.checked = next.length === 0;
+      updateCheckboxDropdownSummary(summary, next);
+      onChange(next);
+    }));
   });
-  select.value = values.includes(previous) ? previous : "";
+  updateCheckboxDropdownSummary(summary, selected);
+  if (selected.length !== selectedValues.length) onChange(selected);
+}
+
+function createCheckboxOption(labelText, value, checked, onChange) {
+  const label = document.createElement("label");
+  label.className = "kg-checkbox-option";
+  label.title = labelText;
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = checked;
+  if (value) checkbox.dataset.filterValue = value;
+  checkbox.addEventListener("change", () => onChange(checkbox.checked));
+  const text = document.createElement("span");
+  text.textContent = labelText;
+  label.appendChild(checkbox);
+  label.appendChild(text);
+  return label;
+}
+
+function updateCheckboxDropdownSummary(summary, selected) {
+  if (!selected.length) {
+    summary.textContent = "All";
+    summary.title = "All";
+    return;
+  }
+  summary.textContent = selected.length === 1 ? selected[0] : `${selected.length} selected`;
+  summary.title = selected.join(", ");
 }
 
 function updateSearchResults() {
