@@ -20,8 +20,28 @@ CREATE TABLE IF NOT EXISTS kg_data.documents (
     id BIGINT PRIMARY KEY,
     title TEXT NOT NULL,
     file_name TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    document_type TEXT NULL,
+    document_date DATE NULL,
+    content TEXT NULL,
+    content_hash TEXT NULL,
+    tags JSONB NULL
 );
+
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS document_type TEXT;
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS document_date DATE;
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS content TEXT;
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS content_hash TEXT;
+ALTER TABLE kg_data.documents ADD COLUMN IF NOT EXISTS tags JSONB;
+
+ALTER TABLE kg_data.documents DROP COLUMN IF EXISTS source_created_at;
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'kg_data' AND table_name = 'documents' AND column_name = 'summary')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'kg_data' AND table_name = 'documents' AND column_name = 'content') THEN
+        ALTER TABLE kg_data.documents RENAME COLUMN summary TO content;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS kg_data.entities (
     id BIGSERIAL PRIMARY KEY,
@@ -49,6 +69,8 @@ CREATE TABLE IF NOT EXISTS kg_data.chunk_entities (
 CREATE INDEX IF NOT EXISTS idx_chunks_document ON kg_data.chunks(document_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_entities_name ON kg_data.entities(name);
 CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON kg_data.chunk_entities(entity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_content_hash ON kg_data.documents(content_hash) WHERE content_hash IS NOT NULL AND content_hash <> '';
+CREATE INDEX IF NOT EXISTS idx_documents_tags ON kg_data.documents USING GIN (tags);
 
 DO $$ BEGIN
     CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON kg_data.chunks USING diskann (embedding vector_cosine_ops);

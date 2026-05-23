@@ -1,0 +1,136 @@
+@{
+    ViewData["Title"] = "Token Statistics";
+    var backendBaseUrl = (string)(ViewData["BackendBaseUrl"] ?? "http://localhost:5070");
+}
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div>
+        <h1 class="h3 mb-1">Token Statistics</h1>
+        <div class="text-muted">LLM input/output token usage by timestamp, agent, and operation.</div>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0" for="daysSelect">Range</label>
+        <select class="form-select form-select-sm" id="daysSelect" style="width: 120px;">
+            <option value="1">1 day</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">365 days</option>
+        </select>
+        <button class="btn btn-sm btn-primary" id="refreshBtn" type="button">Refresh</button>
+    </div>
+</div>
+
+<div id="statsError" class="text-danger mb-2"></div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="card h-100"><div class="card-body"><div class="text-muted small">Calls</div><div class="h4 mb-0" id="callsTotal">-</div></div></div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100"><div class="card-body"><div class="text-muted small">Input Tokens</div><div class="h4 mb-0" id="promptTotal">-</div></div></div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100"><div class="card-body"><div class="text-muted small">Output Tokens</div><div class="h4 mb-0" id="completionTotal">-</div></div></div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100"><div class="card-body"><div class="text-muted small">Total Tokens</div><div class="h4 mb-0" id="tokensTotal">-</div></div></div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Usage By Agent</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>Agent</th><th>Operation</th><th class="text-end">Calls</th><th class="text-end">Input</th><th class="text-end">Output</th><th class="text-end">Total</th><th>Last Seen</th></tr></thead>
+                <tbody id="agentRows"><tr><td colspan="7" class="text-muted">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Daily Usage</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>Day</th><th class="text-end">Calls</th><th class="text-end">Total Tokens</th></tr></thead>
+                <tbody id="dailyRows"><tr><td colspan="3" class="text-muted">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Recent Calls</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>Timestamp</th><th>Agent</th><th>Operation</th><th>Model</th><th class="text-end">Input</th><th class="text-end">Output</th><th class="text-end">Total</th></tr></thead>
+                <tbody id="recentRows"><tr><td colspan="7" class="text-muted">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const backendBaseUrl = '@backendBaseUrl';
+    const fmt = new Intl.NumberFormat();
+
+    document.getElementById('refreshBtn').addEventListener('click', loadStats);
+    document.getElementById('daysSelect').addEventListener('change', loadStats);
+    loadStats();
+
+    async function loadStats() {
+        const days = document.getElementById('daysSelect').value;
+        const error = document.getElementById('statsError');
+        error.textContent = '';
+        try {
+            const response = await fetch(`${backendBaseUrl}/api/tokens/stats?days=${encodeURIComponent(days)}`);
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.detail || payload.error || 'Failed to load token statistics.');
+            }
+
+            document.getElementById('callsTotal').textContent = fmt.format(payload.summary.calls || 0);
+            document.getElementById('promptTotal').textContent = fmt.format(payload.summary.promptTokens || 0);
+            document.getElementById('completionTotal').textContent = fmt.format(payload.summary.completionTokens || 0);
+            document.getElementById('tokensTotal').textContent = fmt.format(payload.summary.totalTokens || 0);
+            renderAgentRows(payload.byAgent || []);
+            renderDailyRows(payload.daily || []);
+            renderRecentRows(payload.recent || []);
+        } catch (err) {
+            error.textContent = err.message;
+        }
+    }
+
+    function renderAgentRows(rows) {
+        const body = document.getElementById('agentRows');
+        body.innerHTML = rows.length ? rows.map(row => `<tr><td>${esc(row.agent)}</td><td>${esc(row.operation)}</td><td class="text-end">${fmt.format(row.calls || 0)}</td><td class="text-end">${fmt.format(row.promptTokens || 0)}</td><td class="text-end">${fmt.format(row.completionTokens || 0)}</td><td class="text-end">${fmt.format(row.totalTokens || 0)}</td><td>${formatDateTime(row.lastSeen)}</td></tr>`).join('') : '<tr><td colspan="7" class="text-muted">No token usage recorded for this range.</td></tr>';
+    }
+
+    function renderDailyRows(rows) {
+        const body = document.getElementById('dailyRows');
+        body.innerHTML = rows.length ? rows.map(row => `<tr><td>${formatDate(row.day)}</td><td class="text-end">${fmt.format(row.calls || 0)}</td><td class="text-end">${fmt.format(row.totalTokens || 0)}</td></tr>`).join('') : '<tr><td colspan="3" class="text-muted">No daily usage recorded for this range.</td></tr>';
+    }
+
+    function renderRecentRows(rows) {
+        const body = document.getElementById('recentRows');
+        body.innerHTML = rows.length ? rows.map(row => `<tr><td>${formatDateTime(row.occurredAt)}</td><td>${esc(row.agent)}</td><td>${esc(row.operation)}</td><td>${esc(row.modelDeployment || '')}</td><td class="text-end">${fmt.format(row.promptTokens || 0)}</td><td class="text-end">${fmt.format(row.completionTokens || 0)}</td><td class="text-end">${fmt.format(row.totalTokens || 0)}</td></tr>`).join('') : '<tr><td colspan="7" class="text-muted">No recent calls recorded for this range.</td></tr>';
+    }
+
+    function formatDateTime(value) {
+        return value ? new Date(value).toLocaleString() : '';
+    }
+
+    function formatDate(value) {
+        return value ? new Date(value).toLocaleDateString() : '';
+    }
+
+    function esc(value) {
+        return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+</script>
+}

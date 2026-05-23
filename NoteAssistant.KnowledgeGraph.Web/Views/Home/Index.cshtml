@@ -20,7 +20,7 @@
     <div class="card mb-4">
         <div class="card-header">0) Optional: Reset PostgreSQL (dev only)</div>
         <div class="card-body">
-            <p class="text-muted small mb-2">Drops relational tables, the AGE graph, and the AGE extension (ag_catalog), and clears the analysis cache.</p>
+            <p class="text-muted small mb-2">Drops the AGE graph, the graph schema, the kg_data schema (documents, chunks, entities, chunk_entities), the public fallback tables (documents, chunks, entities, chunk_entities), the AGE extension (ag_catalog), and clears the cache for document-to-entity breakdown.</p>
             <div class="d-flex flex-wrap gap-2">
                 <button class="btn btn-outline-danger" id="resetDbBtn">Reset database</button>
                 <button class="btn btn-outline-secondary" id="initScriptBtn">Run init script</button>
@@ -34,44 +34,141 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">1) Upload markdown document</div>
+        <div class="card-header">1) Upload document(s)</div>
         <div class="card-body">
-            <div class="input-group">
-                <input class="form-control" type="file" id="markdownFile" accept=".md" />
-                <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+            <div class="upload-tabs-panel">
+                <ul class="nav nav-tabs" id="uploadTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="upload-markdown-tab" data-bs-toggle="tab" data-bs-target="#upload-markdown-pane" type="button" role="tab" aria-controls="upload-markdown-pane" aria-selected="true">Markdown</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="upload-cache-tab" data-bs-toggle="tab" data-bs-target="#upload-cache-pane" type="button" role="tab" aria-controls="upload-cache-pane" aria-selected="false">Cache JSON</button>
+                    </li>
+                </ul>
+                <div class="tab-content border border-top-0 p-3 upload-tab-content">
+                    <div class="tab-pane fade show active" id="upload-markdown-pane" role="tabpanel" aria-labelledby="upload-markdown-tab">
+                        <div class="input-group">
+                            <input class="form-control" type="file" id="markdownFile" accept=".md" multiple />
+                            <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+                        </div>
+                        <div class="form-text">Select one or more markdown files. Use the file list in Section 2 to view each document and manage metadata.</div>
+                    </div>
+                    <div class="tab-pane fade" id="upload-cache-pane" role="tabpanel" aria-labelledby="upload-cache-tab">
+                        <div class="input-group">
+                            <input class="form-control" type="file" id="cacheFile" accept=".json,application/json" multiple />
+                            <button class="btn btn-outline-primary" id="uploadCacheBtn">Upload Cache</button>
+                        </div>
+                        <div class="form-text">Select one or more cache/analysis JSON files. This loads saved decomposition and skips Foundry/LLM processing.</div>
+                    </div>
+                </div>
             </div>
             <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
+            <ul class="upload-batch-results mt-2 mb-0" id="uploadBatchResults"></ul>
+            <details class="mt-3 decomposition-prompt-details" open>
+                <summary>Graph Maker Agent</summary>
+                <pre id="graphMakerAgentPrompt" class="decomposition-prompt mb-0">Upload a document to see the system prompt used to generate chunks, entities, and links.</pre>
+            </details>
         </div>
     </div>
 
     <div class="card mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span>2) Decomposition & ingestion status</span>
+            <span>2) Documents, decomposition & metadata</span>
             <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
         </div>
         <div class="card-body">
-            <button class="btn btn-outline-secondary mb-3" id="refreshStatusBtn">Refresh Status</button>
-            <div id="statusOutput" class="mb-3"></div>
-
-            <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Chunks · Entities · Links</button>
-                </li>
-            </ul>
-            <div class="tab-content border border-top-0 p-3">
-                <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
-                    <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
+            <div class="row g-3 document-workbench-layout">
+                <div class="col-lg-3">
+                    <div class="uploaded-documents-panel h-100">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <strong>Uploaded files</strong>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-sm btn-outline-secondary" type="button" id="selectAllDocsBtn">Select all</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" id="clearSelectedDocsBtn">Clear</button>
+                            </div>
+                        </div>
+                        <div id="uploadedDocumentsList" class="uploaded-documents-list text-muted small">Upload one or more files to manage document-specific decomposition and metadata.</div>
+                    </div>
                 </div>
-                <div class="tab-pane fade" id="tab-decomp" role="tabpanel">
-                    <h5>Chunks</h5>
-                    <ul id="chunksOutput"></ul>
-                    <h5>Entities</h5>
-                    <ul id="entitiesOutput"></ul>
-                    <h5>Chunk → Entity links</h5>
-                    <ul id="mentionsOutput"></ul>
+                <div class="col-lg-9">
+                    <div id="statusOutput" class="mb-3"></div>
+
+                    <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Decomposition</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content border border-top-0 p-3">
+                        <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
+                            <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
+                        </div>
+                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel">
+                            <details class="mb-3 decomposition-prompt-details">
+                                <summary>Graph Maker Agent (System Prompt)</summary>
+                                <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
+                            </details>
+                            <ul class="nav nav-pills decomposition-subtabs" id="decompositionSubtabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="tab-chunks-btn" data-bs-toggle="tab" data-bs-target="#tab-chunks" type="button" role="tab" aria-controls="tab-chunks" aria-selected="true">Chunks</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-entities-btn" data-bs-toggle="tab" data-bs-target="#tab-entities" type="button" role="tab" aria-controls="tab-entities" aria-selected="false">Entities</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-links-btn" data-bs-toggle="tab" data-bs-target="#tab-links" type="button" role="tab" aria-controls="tab-links" aria-selected="false">Links</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-relationships-btn" data-bs-toggle="tab" data-bs-target="#tab-relationships" type="button" role="tab" aria-controls="tab-relationships" aria-selected="false">Relationships</button>
+                                </li>
+                            </ul>
+                            <div class="tab-content decomposition-subtab-content">
+                                <div class="tab-pane fade show active" id="tab-chunks" role="tabpanel" aria-labelledby="tab-chunks-btn">
+                                    <ul id="chunksOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-entities" role="tabpanel" aria-labelledby="tab-entities-btn">
+                                    <ul id="entitiesOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-links" role="tabpanel" aria-labelledby="tab-links-btn">
+                                    <ul id="mentionsOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-relationships" role="tabpanel" aria-labelledby="tab-relationships-btn">
+                                    <ul id="relationshipsOutput" class="mb-0"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="metadata-panel mt-3">
+                        <div class="fw-semibold mb-2">Metadata for viewed document</div>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label" for="metadataDocumentType">Document type</label>
+                                <select class="form-select" id="metadataDocumentType">
+                                    <option value="">(select)</option>
+                                    <option value="transcription">Transcription</option>
+                                    <option value="meeting_summary">Meeting summary</option>
+                                    <option value="product_notes">Product notes</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="metadataDocumentDate">Document date</label>
+                                <input class="form-control" type="date" id="metadataDocumentDate" />
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label" for="metadataTags">Tags (comma-separated)</label>
+                                <input class="form-control" id="metadataTags" placeholder="e.g. power bi, external sharing" />
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                            <button class="btn btn-primary btn-sm" type="button" id="applyMetadataBtn" disabled>Apply metadata to selected documents</button>
+                            <small id="metadataMessage" class="text-muted">Select uploaded documents, define metadata, then apply it to that subset.</small>
+                        </div>
+                        <div class="mt-2 text-muted small">Metadata drafts are remembered as you switch viewed documents. Applying metadata updates the selected checked documents.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -82,11 +179,12 @@
         <div class="card-body">
             <p class="text-muted small mb-2">Stores documents, chunks, entities, and embeddings in PostgreSQL. Requires <code>ConnectionStrings:AgeDatabase</code>.</p>
             <div class="d-flex flex-wrap gap-2">
-                <button class="btn btn-primary" id="ingestBtn" disabled>Ingest to PostgreSQL</button>
+                <button class="btn btn-primary" id="ingestBtn" disabled>Ingest all to PostgreSQL</button>
                 <button class="btn btn-outline-secondary" id="ingestSqlBtn" disabled>Show SQL</button>
                 <button class="btn btn-outline-secondary" id="ingestLogBtn" disabled>Refresh log</button>
             </div>
             <div class="mt-2"><small id="ingestMessage" class="text-muted">Upload a document first.</small></div>
+            <ul class="upload-batch-results mt-2 mb-0" id="ingestBatchResults"></ul>
             <details class="mt-3">
                 <summary>Ingest SQL</summary>
                 <pre id="ingestSqlOutput" class="mt-2 p-2 bg-light border rounded" style="max-height: 240px; overflow:auto;"></pre>
@@ -108,53 +206,236 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">5) Query editor + assistant</div>
+        <div class="card-header">5) Query editor + graph explorer</div>
         <div class="card-body">
-            <div class="mb-2">
-                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
-                <div class="input-group">
-                    <input class="form-control" id="assistantPrompt" placeholder="e.g. show all chunks and mentioned entities" />
-                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+            <div class="row g-3 query-workbench-layout">
+                <div class="col-lg-3 query-workbench-sidebar">
+                    <div class="query-sidebar-panel">
+                        <div class="query-sidebar-header">
+                            <div class="query-sidebar-title">Query tools</div>
+                            <button class="btn btn-sm btn-outline-secondary query-sidebar-toggle" type="button" id="querySidebarToggleBtn" aria-expanded="true" aria-controls="querySidebarContent">Minimize</button>
+                        </div>
+                        <div id="querySidebarContent" class="query-sidebar-content">
+                            <div class="mb-2">
+                                <label class="form-label" for="assistantPrompt">Assistant prompt</label>
+                                <div class="assistant-prompt-group">
+                                    <textarea class="form-control" id="assistantPrompt" rows="3" placeholder="e.g. show all chunks and mentioned entities"></textarea>
+                                    <button class="btn btn-outline-primary" id="assistBtn">Suggest query</button>
+                                </div>
+                                <div class="mt-2 d-flex flex-column gap-2">
+                                    <span class="text-muted small">Quick prompts:</span>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt1">Show all chunks with entities</button>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt2">Find entities related to Power BI</button>
+                                    <button class="btn btn-sm btn-outline-secondary text-start" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                                </div>
+                                <small class="text-muted" id="assistExplanation"></small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="queryInput">Cypher query</label>
+                                <textarea id="queryInput" class="form-control" rows="12"></textarea>
+                            </div>
+                            <button class="btn btn-success w-100" id="runQueryBtn">Run query</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="mt-2 d-flex flex-wrap gap-2">
-                    <span class="text-muted small">Quick prompts:</span>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt1">Show all chunks with entities</button>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt2">Find entities related to Power BI</button>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" id="quickPrompt3">List documents and chunk counts</button>
+                <div class="col-lg-9 query-workbench-main">
+                    <div id="queryError" class="text-danger mb-2"></div>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <div id="graphCheckStatus" class="text-muted small flex-grow-1">Graph counts not loaded.</div>
+                        <button class="btn btn-sm btn-outline-secondary" id="graphCheckBtn">Refresh counts</button>
+                    </div>
+                    <details class="query-workbench-details mb-2">
+                        <summary>Cypher results</summary>
+                        <div class="table-responsive query-results-panel mt-2">
+                            <table class="table table-sm table-bordered mb-0" id="resultsTable"></table>
+                        </div>
+                    </details>
+                    <details class="query-workbench-details mb-2" open>
+                        <summary>Graph</summary>
+                        <div class="graph-workbench mt-2">
+                            <aside class="graph-settings-pane" aria-label="Graph visual settings">
+                                <div class="graph-settings-header">
+                                    <div class="graph-settings-title">Graph settings</div>
+                                    <button class="btn btn-sm btn-outline-secondary graph-settings-toggle" type="button" id="graphSettingsToggleBtn" aria-expanded="true" aria-controls="graphSettingsContent">Minimize</button>
+                                </div>
+                                <div id="graphSettingsContent" class="graph-settings-content">
+                                <div class="graph-settings-grid">
+                                    <div>
+                                        <label class="form-label" for="graphEngineSelect">Engine</label>
+                                        <select class="form-select form-select-sm" id="graphEngineSelect" data-graph-setting="engine">
+                                            <option value="cytoscape" selected>Cytoscape.js</option>
+                                            <option value="vis">vis-network</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutSelect">Layout</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutSelect" data-graph-setting="layout">
+                                            <optgroup label="Discrete">
+                                                <option value="grid">Grid</option>
+                                                <option value="circle">Circle</option>
+                                                <option value="concentric">Concentric</option>
+                                                <option value="breadthfirst">Breadthfirst</option>
+                                                <option value="random">Random</option>
+                                            </optgroup>
+                                            <optgroup label="Force-directed">
+                                                <option value="visDefault">Original vis-network</option>
+                                                <option value="physics">Physics simulation</option>
+                                                <option value="fcose">fCoSE</option>
+                                                <option value="cose" selected>CoSE</option>
+                                                <option value="cose-bilkent">CoSE-Bilkent</option>
+                                                <option value="cola">Cola</option>
+                                            </optgroup>
+                                            <optgroup label="Hierarchical">
+                                                <option value="dagre">Dagre</option>
+                                                <option value="elk">ELK</option>
+                                                <option value="cise">CiSE</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphColorModeSelect">Color</label>
+                                        <select class="form-select form-select-sm" id="graphColorModeSelect" data-graph-setting="colorMode">
+                                            <option value="kind">By kind</option>
+                                            <option value="legacyVis" selected>Legacy vis-network</option>
+                                            <option value="type">By label</option>
+                                            <option value="degree">By degree</option>
+                                            <option value="neutral">Neutral</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphNodeScaleRange">Node size</label>
+                                        <input class="form-range" type="range" id="graphNodeScaleRange" min="0.7" max="1.8" step="0.1" value="1" data-graph-setting="nodeScale" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphEdgeWidthRange">Edge width</label>
+                                        <input class="form-range" type="range" id="graphEdgeWidthRange" min="1" max="6" step="1" value="2" data-graph-setting="edgeWidth" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsStrengthRange">Physics strength</label>
+                                        <input class="form-range" type="range" id="graphPhysicsStrengthRange" min="0.5" max="2.5" step="0.1" value="1" data-graph-setting="physicsStrength" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsSpringRange">Spring length</label>
+                                        <input class="form-range" type="range" id="graphPhysicsSpringRange" min="60" max="220" step="10" value="110" data-graph-setting="physicsSpringLength" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphPhysicsGravityRange">Gravity</label>
+                                        <input class="form-range" type="range" id="graphPhysicsGravityRange" min="0.1" max="1.5" step="0.1" value="0.7" data-graph-setting="physicsGravity" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutQualitySelect">Quality</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutQualitySelect" data-graph-setting="layoutQuality">
+                                            <option value="draft">Draft</option>
+                                            <option value="default">Default</option>
+                                            <option value="proof" selected>Proof</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutDirectionSelect">Direction</label>
+                                        <select class="form-select form-select-sm" id="graphLayoutDirectionSelect" data-graph-setting="layoutDirection">
+                                            <option value="TB" selected>Top to bottom</option>
+                                            <option value="LR">Left to right</option>
+                                            <option value="BT">Bottom to top</option>
+                                            <option value="RL">Right to left</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutPaddingRange">Padding</label>
+                                        <input class="form-range" type="range" id="graphLayoutPaddingRange" min="10" max="90" step="5" value="35" data-graph-setting="layoutPadding" />
+                                    </div>
+                                    <div>
+                                        <label class="form-label" for="graphLayoutSpacingRange">Spacing</label>
+                                        <input class="form-range" type="range" id="graphLayoutSpacingRange" min="0.8" max="2.4" step="0.1" value="1.35" data-graph-setting="layoutSpacing" />
+                                    </div>
+                                </div>
+                                <div class="graph-settings-checks">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphAnimateLayoutToggle" checked data-graph-setting="animateLayout" />
+                                        <label class="form-check-label" for="graphAnimateLayoutToggle">Animate layout</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphAutoFitLayoutToggle" checked data-graph-setting="autoFitLayout" />
+                                        <label class="form-check-label" for="graphAutoFitLayoutToggle">Auto fit layout</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphNodeLabelsToggle" checked data-graph-setting="showNodeLabels" />
+                                        <label class="form-check-label" for="graphNodeLabelsToggle">Node labels</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphNodeTextInsideToggle" data-graph-setting="nodeTextInside" />
+                                        <label class="form-check-label" for="graphNodeTextInsideToggle">Text inside nodes</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphEdgeLabelsToggle" checked data-graph-setting="showEdgeLabels" />
+                                        <label class="form-check-label" for="graphEdgeLabelsToggle">Edge labels</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphArrowsToggle" checked data-graph-setting="showArrows" />
+                                        <label class="form-check-label" for="graphArrowsToggle">Direction arrows</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="graphHighlightToggle" checked data-graph-setting="highlightNeighborhood" />
+                                        <label class="form-check-label" for="graphHighlightToggle">Highlight neighborhood</label>
+                                    </div>
+                                </div>
+                                <div class="d-flex flex-wrap gap-2 mt-3">
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphZoomInBtn">Zoom in</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphZoomOutBtn">Zoom out</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphFitBtn">Fit</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphCenterBtn">Center</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphRelayoutBtn">Re-layout</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphSelectionLayoutBtn">Layout selection</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphBackgroundForceBtn">Start force</button>
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" id="graphResetStyleBtn">Reset</button>
+                                </div>
+                                <div id="graphRenderStats" class="graph-render-stats text-muted small mt-2">Run a query to render a graph.</div>
+                                </div>
+                            </aside>
+                            <div id="graphView" class="query-graph-view"></div>
+                        </div>
+                    </details>
                 </div>
-                <small class="text-muted" id="assistExplanation"></small>
             </div>
-            <div class="mb-3">
-                <label class="form-label" for="queryInput">Cypher query</label>
-                <textarea id="queryInput" class="form-control" rows="7"></textarea>
-            </div>
-            <button class="btn btn-success" id="runQueryBtn">Run query</button>
+            <details id="graphSelectionDetails" class="graph-selection-details mt-3">
+                <summary id="graphSelectionSummary">Selected graph item details</summary>
+                <div id="graphSelectionContent" class="graph-selection-content text-muted small">Click a node or edge in the graph to inspect it.</div>
+            </details>
         </div>
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">6) Query result + graph explorer</div>
+        <div class="card-header">6) Build Graph Communities (Optional - needed for Global Search in GraphRAG)</div>
         <div class="card-body">
-            <div id="queryError" class="text-danger mb-2"></div>
-            <div class="d-flex align-items-center gap-2 mb-2">
-                <div id="graphCheckStatus" class="text-muted small">Graph counts not loaded.</div>
-                <button class="btn btn-sm btn-outline-secondary" id="graphCheckBtn">Refresh counts</button>
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <div>
+                    <div class="fw-semibold">Build Communities</div>
+                    <div class="text-muted small">Optional. Needed for Global / Temporal GraphRAG search. Builds community summaries and embeddings from the entity relationship graph.</div>
+                </div>
+                <button class="btn btn-outline-primary" type="button" id="buildCommunitiesBtn">Build Communities</button>
             </div>
-            <div class="table-responsive mb-3" style="max-height: 360px; overflow:auto;">
-                <table class="table table-sm table-bordered" id="resultsTable"></table>
-            </div>
-            <div id="graphView" style="height: 420px; border: 1px solid #ddd;"></div>
+            <div class="mt-2"><small id="communityStatus" class="text-muted"></small></div>
+            <div id="communityError" class="text-danger mb-2"></div>
+            <h6>Process map</h6>
+            <div id="communityProcessMap" class="process-map"></div>
         </div>
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">7) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
+        <div class="card-header">7) Hybrid GraphRAG (Graph context → Hybrid retrieval → LLM context)</div>
         <div class="card-body">
             <div class="mb-2">
                 <label class="form-label" for="hybridQuestion">Question</label>
                 <div class="input-group">
                     <input class="form-control" id="hybridQuestion" value="What did Microsoft do with OpenAI?" />
                     <button class="btn btn-primary" id="runHybridBtn">Run Hybrid Retrieval</button>
+                </div>
+                <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
+                    <label class="form-label mb-0" for="hybridModeSelect">Mode</label>
+                    <select class="form-select form-select-sm" id="hybridModeSelect" style="max-width: 220px;">
+                        <option value="auto" selected>Auto</option>
+                        <option value="hybrid">Local / Hybrid</option>
+                        <option value="global">Global / Temporal</option>
+                    </select>
                 </div>
                 <div class="mt-2 d-flex flex-wrap gap-2">
                     <span class="text-muted small">Quick questions:</span>
@@ -169,7 +450,7 @@
                         <label class="form-check-label" for="hybridTraceToggle">Show retrieval trace</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="checkbox" id="hybridAnswerToggle" />
+                        <input class="form-check-input" type="checkbox" id="hybridAnswerToggle" checked />
                         <label class="form-check-label" for="hybridAnswerToggle">Ask LLM for answer</label>
                     </div>
                 </div>
@@ -183,24 +464,172 @@
 
 @section Scripts {
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/layout-base/layout-base.js"></script>
+    <script src="https://unpkg.com/cose-base/cose-base.js"></script>
+    <script src="https://unpkg.com/avsdf-base/avsdf-base.js"></script>
+    <script src="https://unpkg.com/webcola/WebCola/cola.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+    <script src="https://unpkg.com/cytoscape-cola/cytoscape-cola.js"></script>
+    <script src="https://unpkg.com/dagre/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre/cytoscape-dagre.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+    <script src="https://unpkg.com/cytoscape-elk@2.3.0/dist/cytoscape-elk.js"></script>
+    <script src="https://unpkg.com/cytoscape-cose-bilkent/cytoscape-cose-bilkent.js"></script>
+    <script src="https://unpkg.com/cytoscape-cise/cytoscape-cise.js"></script>
     <script>
+        const findCytoscapeExtension = (...candidates) => candidates.find(candidate => typeof candidate === 'function') || null;
+        const cytoscapeExtensions = {
+            fcose: findCytoscapeExtension(window.cytoscapeFcose, window.fcose),
+            cola: findCytoscapeExtension(window.cytoscapeCola, window.cola),
+            dagre: findCytoscapeExtension(window.cytoscapeDagre),
+            elk: findCytoscapeExtension(window.cytoscapeElk),
+            coseBilkent: findCytoscapeExtension(window.cytoscapeCoseBilkent, window.coseBilkent),
+            cise: findCytoscapeExtension(window.cytoscapeCise, window.cise)
+        };
+        if (window.cytoscape) {
+            Object.values(cytoscapeExtensions).forEach((extension) => {
+                if (extension) {
+                    cytoscape.use(extension);
+                }
+            });
+        }
+
         const backendBaseUrl = document.getElementById('backendBaseUrl').innerText.trim().replace(/\/$/, '');
         const backendLamp = document.getElementById('backendLamp');
         const backendStatusText = document.getElementById('backendStatusText');
         let currentDocumentId = null;
         let currentGraphName = 'knowledge_graph';
         let graphReady = false;
+        const uploadedDocuments = new Map();
+        const selectedDocumentIds = new Set();
+        const metadataDrafts = new Map();
         let hybridClarificationAttempts = 0;
+        let graphCy = null;
+        let graphNetwork = null;
+        let backgroundCytoscapeLayout = null;
+        let querySidebarCollapsed = false;
+        let graphSettingsCollapsed = false;
+        let currentVisNodeDataSet = null;
+        let currentVisEdgeDataSet = null;
+        let currentVisNodeItems = [];
+        let currentVisEdgeItems = [];
+        let currentGraphNodes = [];
+        let currentGraphEdges = [];
+        let currentGraphNodeMap = new Map();
+        let currentGraphEdgeMap = new Map();
+        let currentGraphLabelColorMap = new Map();
+        const legacyVisNetworkPalette = Object.freeze([
+            { background: '#97C2FC', border: '#2B7CE9' },
+            { background: '#FFFF00', border: '#FFA500' },
+            { background: '#FB7E81', border: '#FA0A10' },
+            { background: '#7BE141', border: '#41A906' },
+            { background: '#6E6EFD', border: '#0000FF' },
+            { background: '#C2FABC', border: '#4AD63A' },
+            { background: '#FFA807', border: '#FFA500' },
+            { background: '#F5A45D', border: '#FA0A10' },
+            { background: '#A5A5A5', border: '#7C7C7C' }
+        ]);
+        const defaultGraphSettings = Object.freeze({
+            engine: 'cytoscape',
+            layout: 'cose',
+            colorMode: 'legacyVis',
+            nodeScale: 1,
+            edgeWidth: 2,
+            physicsStrength: 1,
+            physicsSpringLength: 110,
+            physicsGravity: 0.7,
+            layoutQuality: 'proof',
+            layoutDirection: 'TB',
+            layoutPadding: 35,
+            layoutSpacing: 1.35,
+            animateLayout: true,
+            autoFitLayout: true,
+            showNodeLabels: true,
+            nodeTextInside: false,
+            showEdgeLabels: true,
+            showArrows: true,
+            highlightNeighborhood: true
+        });
+        const visDefaultGraphSettings = Object.freeze({
+            ...defaultGraphSettings,
+            engine: 'vis',
+            layout: 'visDefault',
+            colorMode: 'legacyVis',
+            nodeScale: 1,
+            edgeWidth: 1,
+            physicsStrength: 1,
+            physicsSpringLength: 100,
+            physicsGravity: 0.7,
+            layoutQuality: 'default',
+            layoutDirection: 'TB',
+            layoutPadding: 35,
+            layoutSpacing: 1.35,
+            animateLayout: true,
+            autoFitLayout: true,
+            showNodeLabels: true,
+            nodeTextInside: false,
+            showEdgeLabels: true,
+            showArrows: false,
+            highlightNeighborhood: true
+        });
+        const graphSettings = { ...defaultGraphSettings };
+        let metadataAutoSaveTimer = null;
+        let metadataAutoSaveSequence = 0;
+        let isSettingMetadataForm = false;
+        const graphSettingDescriptions = Object.freeze({
+            engine: 'Choose the graph renderer. Cytoscape.js enables richer layouts; vis-network restores the previous renderer.',
+            layout: 'Choose how nodes are positioned. Some layouts are geometric, some are physics-based, and some are hierarchical.',
+            colorMode: 'Choose how node colors are assigned: by kind, legacy vis-network groups, label, degree, or neutral styling.',
+            nodeScale: 'Scale node size up or down without changing graph data.',
+            edgeWidth: 'Change edge line thickness for readability.',
+            physicsStrength: 'Tune repulsion and simulation force for physics-based layouts.',
+            physicsSpringLength: 'Set the preferred distance between connected nodes in force and hierarchy layouts.',
+            physicsGravity: 'Tune how strongly layouts pull nodes toward the center.',
+            layoutQuality: 'Choose the speed/detail tradeoff for layouts that support quality modes.',
+            layoutDirection: 'Choose the direction used by hierarchical layouts such as Dagre, ELK, and breadthfirst.',
+            layoutPadding: 'Set empty space around the graph when a layout fits the viewport.',
+            layoutSpacing: 'Scale spacing between nodes for layouts that support spacing.',
+            animateLayout: 'Animate layout changes instead of jumping directly to new positions.',
+            autoFitLayout: 'Automatically fit the graph into the viewport after layout runs.',
+            showNodeLabels: 'Show or hide node labels.',
+            nodeTextInside: 'Render node labels inside node shapes when supported by the selected engine.',
+            showEdgeLabels: 'Show or hide relationship labels on edges.',
+            showArrows: 'Show or hide edge direction arrows.',
+            highlightNeighborhood: 'In Cytoscape.js, keep related nodes and edges prominent and dim unrelated graph items. vis-network uses its native selection behavior.'
+        });
+        const graphActionDescriptions = Object.freeze({
+            querySidebarToggleBtn: 'Collapse or expand the query tools column so the graph and results area can use more width.',
+            graphSettingsToggleBtn: 'Collapse or expand the graph settings pane so the graph canvas can use more space.',
+            graphZoomInBtn: 'Zoom into the graph viewport.',
+            graphZoomOutBtn: 'Zoom out of the graph viewport.',
+            graphFitBtn: 'Fit all graph elements into the visible canvas.',
+            graphCenterBtn: 'Center the graph in the current canvas.',
+            graphRelayoutBtn: 'Run the selected layout again with the current settings.',
+            graphSelectionLayoutBtn: 'Apply the selected Cytoscape layout to selected nodes and their neighborhood.',
+            graphBackgroundForceBtn: 'Start or stop a continuous Cytoscape force layout. Nodes remain draggable while the simulation runs, and stopping keeps the current positions.',
+            graphResetStyleBtn: 'Reset graph settings to the defaults for the selected engine.'
+        });
 
         const uploadBtn = document.getElementById('uploadBtn');
-        const refreshStatusBtn = document.getElementById('refreshStatusBtn');
+        const uploadCacheBtn = document.getElementById('uploadCacheBtn');
+        const uploadedDocumentsList = document.getElementById('uploadedDocumentsList');
+        const selectAllDocsBtn = document.getElementById('selectAllDocsBtn');
+        const clearSelectedDocsBtn = document.getElementById('clearSelectedDocsBtn');
+        const applyMetadataBtn = document.getElementById('applyMetadataBtn');
+        const metadataDocumentType = document.getElementById('metadataDocumentType');
+        const metadataDocumentDate = document.getElementById('metadataDocumentDate');
+        const metadataTags = document.getElementById('metadataTags');
         const ingestBtn = document.getElementById('ingestBtn');
         const ingestSqlBtn = document.getElementById('ingestSqlBtn');
         const ingestLogBtn = document.getElementById('ingestLogBtn');
+        const ingestBatchResults = document.getElementById('ingestBatchResults');
         const initGraphBtn = document.getElementById('initGraphBtn');
         const assistBtn = document.getElementById('assistBtn');
         const runQueryBtn = document.getElementById('runQueryBtn');
         const runHybridBtn = document.getElementById('runHybridBtn');
+        const buildCommunitiesBtn = document.getElementById('buildCommunitiesBtn');
+        const hybridModeSelect = document.getElementById('hybridModeSelect');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
         const initScriptBtn = document.getElementById('initScriptBtn');
@@ -211,9 +640,26 @@
         const hybridQuick1 = document.getElementById('hybridQuick1');
         const hybridQuick2 = document.getElementById('hybridQuick2');
         const hybridQuick3 = document.getElementById('hybridQuick3');
+        const graphZoomInBtn = document.getElementById('graphZoomInBtn');
+        const graphZoomOutBtn = document.getElementById('graphZoomOutBtn');
+        const graphFitBtn = document.getElementById('graphFitBtn');
+        const graphCenterBtn = document.getElementById('graphCenterBtn');
+        const graphRelayoutBtn = document.getElementById('graphRelayoutBtn');
+        const graphSelectionLayoutBtn = document.getElementById('graphSelectionLayoutBtn');
+        const graphBackgroundForceBtn = document.getElementById('graphBackgroundForceBtn');
+        const graphResetStyleBtn = document.getElementById('graphResetStyleBtn');
+        const graphSettingsToggleBtn = document.getElementById('graphSettingsToggleBtn');
+        const querySidebarToggleBtn = document.getElementById('querySidebarToggleBtn');
 
-        uploadBtn.addEventListener('click', uploadFile);
-        refreshStatusBtn.addEventListener('click', refreshStatus);
+        uploadBtn.addEventListener('click', () => uploadFile(false));
+        uploadCacheBtn.addEventListener('click', () => uploadFile(true));
+        selectAllDocsBtn.addEventListener('click', selectAllUploadedDocuments);
+        clearSelectedDocsBtn.addEventListener('click', clearSelectedDocuments);
+        applyMetadataBtn.addEventListener('click', applyMetadataToSelectedDocuments);
+        [metadataDocumentType, metadataDocumentDate, metadataTags].forEach((input) => {
+            input.addEventListener('input', onMetadataFieldChanged);
+            input.addEventListener('change', onMetadataFieldChanged);
+        });
         ingestBtn.addEventListener('click', ingestToDatabase);
         ingestSqlBtn.addEventListener('click', loadIngestSql);
         ingestLogBtn.addEventListener('click', refreshIngestLog);
@@ -221,6 +667,7 @@
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
         runHybridBtn.addEventListener('click', runHybridRetrieval);
+        buildCommunitiesBtn.addEventListener('click', buildCommunities);
         graphCheckBtn.addEventListener('click', refreshGraphCheck);
         resetDbBtn.addEventListener('click', resetDatabase);
         initScriptBtn.addEventListener('click', runInitScript);
@@ -230,10 +677,27 @@
         hybridQuick1.addEventListener('click', () => setHybridQuickQuestion('Can F8 support them?'));
         hybridQuick2.addEventListener('click', () => setHybridQuickQuestion('What is the meeting about?'));
         hybridQuick3.addEventListener('click', () => setHybridQuickQuestion('What were the key takeaways?'));
+        document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+            control.addEventListener('input', updateGraphSettingFromControl);
+            control.addEventListener('change', updateGraphSettingFromControl);
+        });
+        graphZoomInBtn.addEventListener('click', () => zoomGraphView(1.2));
+        graphZoomOutBtn.addEventListener('click', () => zoomGraphView(0.8));
+        graphFitBtn.addEventListener('click', fitGraphView);
+        graphCenterBtn.addEventListener('click', centerGraphView);
+        graphRelayoutBtn.addEventListener('click', () => runGraphLayout(true));
+        graphSelectionLayoutBtn.addEventListener('click', () => applyLayoutToSelectedNeighborhood());
+        graphBackgroundForceBtn.addEventListener('click', toggleBackgroundForceLayout);
+        graphResetStyleBtn.addEventListener('click', resetGraphSettings);
+        graphSettingsToggleBtn.addEventListener('click', toggleGraphSettingsPane);
+        querySidebarToggleBtn.addEventListener('click', toggleQuerySidebarPane);
+        applyGraphSettingTooltips();
+        updateBackgroundForceButton();
 
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
         window.addEventListener('load', () => {
             checkBackendStatus();
+            loadGraphMakerAgentPrompt();
             setInterval(checkBackendStatus, 15000);
             loadGraphOnStartup();
         });
@@ -246,9 +710,254 @@
             document.getElementById('hybridQuestion').value = text;
         }
 
+        function getMetadataPayload() {
+            return {
+                documentType: metadataDocumentType.value.trim(),
+                documentDate: metadataDocumentDate.value.trim(),
+                tags: metadataTags.value.trim()
+            };
+        }
+
+        function setMetadataForm(metadata) {
+            isSettingMetadataForm = true;
+            metadataDocumentType.value = metadata?.documentType || '';
+            metadataDocumentDate.value = metadata?.documentDate || '';
+            metadataTags.value = Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '');
+            isSettingMetadataForm = false;
+        }
+
+        function normalizeMetadataDraft(metadata) {
+            return {
+                documentType: metadata?.documentType || '',
+                documentDate: metadata?.documentDate || '',
+                tags: Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '')
+            };
+        }
+
+        function saveCurrentMetadataDraft() {
+            if (!currentDocumentId) return;
+            metadataDrafts.set(currentDocumentId, getMetadataPayload());
+        }
+
+        function onMetadataFieldChanged() {
+            if (isSettingMetadataForm) {
+                return;
+            }
+
+            saveCurrentMetadataDraft();
+            queueAutoSaveCurrentMetadata();
+        }
+
+        function queueAutoSaveCurrentMetadata() {
+            const documentId = currentDocumentId;
+            if (!documentId) {
+                return;
+            }
+
+            const metadata = getMetadataPayload();
+            if (!hasMetadataPayload(metadata)) {
+                return;
+            }
+
+            if (metadataAutoSaveTimer) {
+                clearTimeout(metadataAutoSaveTimer);
+            }
+
+            metadataAutoSaveTimer = setTimeout(() => {
+                metadataAutoSaveTimer = null;
+                autoSaveMetadataForDocument(documentId, metadata);
+            }, 450);
+        }
+
+        async function autoSaveMetadataForDocument(documentId, metadata) {
+            const sequence = ++metadataAutoSaveSequence;
+            setMessage('metadataMessage', `Saving metadata for document ${documentId}...`, 'text-muted');
+
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documentIds: [documentId], ...metadata })
+                });
+            } catch (err) {
+                if (sequence !== metadataAutoSaveSequence) {
+                    return;
+                }
+                setMessage('metadataMessage', `Metadata auto-save failed: ${err.message}`, 'text-danger');
+                return;
+            }
+
+            const payload = await response.json().catch(() => null);
+            if (sequence !== metadataAutoSaveSequence) {
+                return;
+            }
+
+            if (!response.ok) {
+                setMessage('metadataMessage', (payload && (payload.error || payload.detail)) || `Metadata auto-save failed (status ${response.status}).`, 'text-danger');
+                return;
+            }
+
+            const updatedPlan = (payload?.updated || [])[0];
+            if (updatedPlan) {
+                uploadedDocuments.set(updatedPlan.documentId, updatedPlan);
+                metadataDrafts.set(updatedPlan.documentId, normalizeMetadataDraft(updatedPlan.metadata));
+                if (currentDocumentId === updatedPlan.documentId) {
+                    renderStatus(updatedPlan.status);
+                }
+                renderUploadedDocuments();
+            }
+
+            setMessage('metadataMessage', `Metadata auto-saved for document ${documentId}. Use the blue button only when you want bulk apply.`, 'text-success');
+        }
+
+        function hasMetadataPayload(metadata) {
+            return Boolean(metadata.documentType || metadata.documentDate || metadata.tags);
+        }
+
+        function formatMetadataSummary(metadata) {
+            const parts = [];
+            if (metadata?.documentType) parts.push(metadata.documentType);
+            if (metadata?.documentDate) parts.push(metadata.documentDate);
+            if (Array.isArray(metadata?.tags) && metadata.tags.length) parts.push(metadata.tags.join(', '));
+            return parts.length ? parts.join(' | ') : 'metadata not set';
+        }
+
+        function selectAllUploadedDocuments() {
+            uploadedDocuments.forEach((_, id) => selectedDocumentIds.add(Number(id)));
+            renderUploadedDocuments();
+        }
+
+        function clearSelectedDocuments() {
+            selectedDocumentIds.clear();
+            renderUploadedDocuments();
+        }
+
+        function showDocumentPlan(documentId, options = {}) {
+            if (currentDocumentId && currentDocumentId !== Number(documentId)) {
+                saveCurrentMetadataDraft();
+            }
+
+            const plan = uploadedDocuments.get(Number(documentId));
+            if (!plan) return;
+
+            currentDocumentId = plan.documentId;
+            if (plan.graphName) currentGraphName = plan.graphName;
+            document.getElementById('cachedBadge').style.display = plan.cached ? 'inline-block' : 'none';
+            ingestBtn.disabled = false;
+            ingestSqlBtn.disabled = false;
+            ingestLogBtn.disabled = false;
+            initGraphBtn.disabled = false;
+            setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
+            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
+            renderDecomposition(plan);
+            renderStatus(plan.status);
+            if (options.loadMetadata !== false) {
+                setMetadataForm(metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata));
+            }
+            renderUploadedDocuments();
+        }
+
+        function renderUploadedDocuments() {
+            if (uploadedDocuments.size === 0) {
+                uploadedDocumentsList.className = 'uploaded-documents-list text-muted small';
+                uploadedDocumentsList.innerText = 'Upload one or more files to manage document-specific decomposition and metadata.';
+                applyMetadataBtn.disabled = true;
+                return;
+            }
+
+            uploadedDocumentsList.className = 'uploaded-documents-list';
+            uploadedDocumentsList.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            uploadedDocuments.forEach((plan) => {
+                const fileName = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                const metadataSummary = formatMetadataSummary(plan.metadata);
+                const tooltipText = `${fileName}\nDocument ${plan.documentId}\n${plan.status.state}: ${plan.status.message || ''}\nMetadata: ${metadataSummary}`;
+                const item = document.createElement('div');
+                item.className = `uploaded-document-item${plan.documentId === currentDocumentId ? ' active' : ''}`;
+                item.tabIndex = 0;
+                item.role = 'button';
+                item.title = tooltipText;
+                item.setAttribute('aria-current', plan.documentId === currentDocumentId ? 'true' : 'false');
+                item.setAttribute('aria-label', `View ${fileName}`);
+                item.addEventListener('click', () => showDocumentPlan(plan.documentId));
+                item.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        showDocumentPlan(plan.documentId);
+                    }
+                });
+
+                const checkbox = document.createElement('input');
+                checkbox.className = 'form-check-input';
+                checkbox.type = 'checkbox';
+                checkbox.checked = selectedDocumentIds.has(plan.documentId);
+                checkbox.title = `Select ${fileName}`;
+                checkbox.setAttribute('aria-label', `Select ${fileName}`);
+                checkbox.addEventListener('click', (event) => event.stopPropagation());
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) selectedDocumentIds.add(plan.documentId);
+                    else selectedDocumentIds.delete(plan.documentId);
+                    renderUploadedDocuments();
+                });
+
+                const text = document.createElement('div');
+                text.className = 'min-w-0';
+                const title = document.createElement('div');
+                title.className = 'uploaded-document-title';
+                title.title = fileName;
+                title.innerText = fileName;
+                const meta = document.createElement('div');
+                meta.className = 'uploaded-document-meta';
+                meta.title = tooltipText;
+                meta.innerText = `Document ${plan.documentId} | ${plan.status.state} | ${metadataSummary}`;
+                text.appendChild(title);
+                text.appendChild(meta);
+
+                item.appendChild(checkbox);
+                item.appendChild(text);
+                fragment.appendChild(item);
+            });
+            uploadedDocumentsList.appendChild(fragment);
+            applyMetadataBtn.disabled = selectedDocumentIds.size === 0;
+            document.getElementById('metadataMessage').innerText = selectedDocumentIds.size === 0
+                ? 'Select uploaded documents, define metadata, then apply it to that subset.'
+                : `${selectedDocumentIds.size} document${selectedDocumentIds.size === 1 ? '' : 's'} selected for metadata update.`;
+            document.getElementById('metadataMessage').className = 'text-muted';
+        }
+
         function setBackendStatus(state, text) {
             backendLamp.className = `status-lamp status-lamp-${state}`;
             backendStatusText.innerText = text;
+        }
+
+        function resetUploadedDocumentsForNewBatch() {
+            currentDocumentId = null;
+            uploadedDocuments.clear();
+            selectedDocumentIds.clear();
+            metadataDrafts.clear();
+
+            document.getElementById('statusOutput').innerText = '';
+            document.getElementById('cachedBadge').style.display = 'none';
+            document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
+            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
+            renderList('chunksOutput', []);
+            renderList('entitiesOutput', []);
+            renderList('mentionsOutput', []);
+            renderList('relationshipsOutput', []);
+            setMetadataForm(null);
+            renderUploadedDocuments();
+
+            ingestBtn.disabled = true;
+            ingestSqlBtn.disabled = true;
+            ingestLogBtn.disabled = true;
+            initGraphBtn.disabled = true;
+            setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
+            setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
+            setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
+            document.getElementById('ingestSqlOutput').innerText = '';
+            document.getElementById('ingestLogOutput').innerText = '';
+            ingestBatchResults.innerHTML = '';
         }
 
         async function checkBackendStatus() {
@@ -268,29 +977,91 @@
             }
         }
 
-        async function uploadFile() {
-            const fileInput = document.getElementById('markdownFile');
-            const file = fileInput.files[0];
-            if (!file) {
-                setMessage('uploadMessage', 'Please select a .md file first.', 'text-danger');
+        async function loadGraphMakerAgentPrompt() {
+            const promptElement = document.getElementById('graphMakerAgentPrompt');
+            promptElement.textContent = 'Loading Graph Maker Agent system prompt...';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/graph-maker-agent`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    promptElement.textContent = (payload && (payload.error || payload.detail)) || `Graph Maker Agent prompt unavailable (status ${response.status}).`;
+                    return;
+                }
+
+                promptElement.textContent = payload?.systemPrompt || '(no system prompt returned)';
+            } catch (err) {
+                promptElement.textContent = `Graph Maker Agent prompt unavailable: ${err.message}`;
+            }
+        }
+
+        async function uploadFile(cacheMode) {
+            const fileInput = document.getElementById(cacheMode ? 'cacheFile' : 'markdownFile');
+            const activeUploadButton = cacheMode ? uploadCacheBtn : uploadBtn;
+            const files = Array.from(fileInput.files || []);
+            const resultsList = document.getElementById('uploadBatchResults');
+            resultsList.innerHTML = '';
+
+            if (files.length === 0) {
+                setMessage('uploadMessage', `Please select at least one ${cacheMode ? 'cache analysis .json' : '.md'} file first.`, 'text-danger');
                 return;
             }
 
+            const expectedExtension = cacheMode ? '.json' : '.md';
+            const invalidFiles = files.filter(file => !file.name.toLowerCase().endsWith(expectedExtension));
+            if (invalidFiles.length > 0) {
+                setMessage('uploadMessage', `Only ${expectedExtension} files are supported in this mode. Remove: ${invalidFiles.map(file => file.name).join(', ')}.`, 'text-danger');
+                return;
+            }
+
+            activeUploadButton.disabled = true;
+            resetUploadedDocumentsForNewBatch();
+            setMessage('uploadMessage', cacheMode
+                ? `Uploading ${files.length} cache file${files.length === 1 ? '' : 's'} without LLM processing...`
+                : `Uploading and analyzing ${files.length} file${files.length === 1 ? '' : 's'}...`, 'text-muted');
+
+            let succeeded = 0;
+            let failed = 0;
+            for (let index = 0; index < files.length; index++) {
+                const file = files[index];
+                const resultItem = appendUploadBatchResult(file.name, 'Uploading...', 'text-muted');
+                setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Analyzing'} ${index + 1}/${files.length}: ${file.name}`, 'text-muted');
+
+                const result = await uploadSingleFile(file, cacheMode);
+                if (result.ok) {
+                    succeeded++;
+                    handleUploadSuccess(result.payload);
+                    const statusMessage = result.payload.cached
+                        ? `Document ${result.payload.documentId} loaded from cache (${result.payload.status.state}). Analysis step skipped by duplicate/content-hash handling.`
+                        : `Document ${result.payload.documentId} analyzed (${result.payload.status.state}).`;
+                    updateUploadBatchResult(resultItem, statusMessage, result.payload.cached ? 'text-warning' : 'text-success');
+                } else {
+                    failed++;
+                    updateUploadBatchResult(resultItem, result.error, 'text-danger');
+                }
+            }
+
+            activeUploadButton.disabled = false;
+            const summaryClass = failed > 0 ? (succeeded > 0 ? 'text-warning' : 'text-danger') : 'text-success';
+            setMessage('uploadMessage', `Batch complete: ${succeeded} succeeded, ${failed} failed. See detailed file results above.`, summaryClass);
+        }
+
+        async function uploadSingleFile(file, cacheMode) {
             const formData = new FormData();
             formData.append('file', file);
-
-            setMessage('uploadMessage', `Uploading ${file.name}…`, 'text-muted');
+            const metadata = getMetadataPayload();
+            formData.append('documentType', metadata.documentType || '');
+            formData.append('documentDate', metadata.documentDate || '');
+            formData.append('tags', metadata.tags || '');
 
             let response;
             try {
-                response = await fetch(`${backendBaseUrl}/api/documents/upload`, {
+                response = await fetch(`${backendBaseUrl}${cacheMode ? '/api/documents/upload-cache' : '/api/documents/upload'}`, {
                     method: 'POST',
                     body: formData
                 });
             } catch (err) {
                 console.error('Upload network error', err);
-                setMessage('uploadMessage', `Network error calling ${backendBaseUrl}: ${err.message}. Check the backend is running and CORS allows ${window.location.origin}.`, 'text-danger');
-                return;
+                return { ok: false, error: `Network error calling ${backendBaseUrl}: ${err.message}. Check the backend is running and CORS allows ${window.location.origin}.` };
             }
 
             let payload;
@@ -298,61 +1069,162 @@
                 payload = await response.json();
             } catch (err) {
                 console.error('Upload parse error', err, response.status);
-                setMessage('uploadMessage', `Backend returned non-JSON (status ${response.status}).`, 'text-danger');
-                return;
+                return { ok: false, error: `Backend returned non-JSON (status ${response.status}).` };
             }
 
             if (!response.ok) {
-                setMessage('uploadMessage', payload.error || `Upload failed with status ${response.status}.`, 'text-danger');
+                return { ok: false, error: payload.error || `Upload failed with status ${response.status}.` };
+            }
+
+            return { ok: true, payload };
+        }
+
+        function handleUploadSuccess(payload) {
+            uploadedDocuments.set(payload.documentId, payload);
+            selectedDocumentIds.add(payload.documentId);
+            showDocumentPlan(payload.documentId);
+        }
+
+        function appendUploadBatchResult(fileName, message, cssClass) {
+            return appendBatchResult(document.getElementById('uploadBatchResults'), fileName, message, cssClass);
+        }
+
+        function appendBatchResult(list, fileName, message, cssClass) {
+            const item = document.createElement('li');
+            const name = document.createElement('strong');
+            const status = document.createElement('span');
+            name.innerText = fileName;
+            status.className = cssClass;
+            status.innerText = message;
+            item.appendChild(name);
+            item.appendChild(document.createTextNode(': '));
+            item.appendChild(status);
+            list.appendChild(item);
+            return item;
+        }
+
+        function updateUploadBatchResult(item, message, cssClass) {
+            const status = item.querySelector('span');
+            status.className = cssClass;
+            status.innerText = message;
+        }
+
+        async function applyMetadataToSelectedDocuments() {
+            saveCurrentMetadataDraft();
+            const documentIds = Array.from(selectedDocumentIds);
+            if (documentIds.length === 0) {
+                setMessage('metadataMessage', 'Select one or more uploaded documents first.', 'text-danger');
                 return;
             }
 
-            currentDocumentId = payload.documentId;
-            if (payload.graphName) {
-                currentGraphName = payload.graphName;
+            const metadata = getMetadataPayload();
+            if (!hasMetadataPayload(metadata)) {
+                setMessage('metadataMessage', 'Define at least one metadata field before applying.', 'text-danger');
+                return;
             }
-            const cachedSuffix = payload.cached ? ' [from cache]' : '';
-            setMessage('uploadMessage', `Document ${payload.documentId} analyzed (${payload.status.state})${cachedSuffix}.`, payload.cached ? 'text-warning' : 'text-success');
-            document.getElementById('cachedBadge').style.display = payload.cached ? 'inline-block' : 'none';
-            ingestBtn.disabled = false;
-            ingestSqlBtn.disabled = false;
-            ingestLogBtn.disabled = false;
-            initGraphBtn.disabled = false;
-            setMessage('ingestMessage', `Ready to ingest document ${payload.documentId} (${payload.chunks.length} chunks, ${payload.entities.length} entities).`, 'text-muted');
-            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
-            renderDecomposition(payload);
-            renderStatus(payload.status);
+
+            applyMetadataBtn.disabled = true;
+            setMessage('metadataMessage', `Applying metadata to ${documentIds.length} document${documentIds.length === 1 ? '' : 's'}...`, 'text-muted');
+            let response;
+            try {
+                response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documentIds, ...metadata })
+                });
+            } catch (err) {
+                setMessage('metadataMessage', `Metadata update failed: ${err.message}`, 'text-danger');
+                applyMetadataBtn.disabled = false;
+                renderUploadedDocuments();
+                return;
+            }
+
+            const payload = await response.json().catch(() => null);
+            if (!response.ok) {
+                setMessage('metadataMessage', (payload && (payload.error || payload.detail)) || `Metadata update failed (status ${response.status}).`, 'text-danger');
+                applyMetadataBtn.disabled = false;
+                renderUploadedDocuments();
+                return;
+            }
+
+            (payload.updated || []).forEach((plan) => {
+                uploadedDocuments.set(plan.documentId, plan);
+                metadataDrafts.set(plan.documentId, normalizeMetadataDraft(plan.metadata));
+            });
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
+            } else {
+                renderUploadedDocuments();
+            }
+
+            const missing = payload.missing || [];
+            const suffix = missing.length ? ` (${missing.length} missing: ${missing.join(', ')})` : '';
+            setMessage('metadataMessage', `Metadata applied to ${(payload.updated || []).length} document${(payload.updated || []).length === 1 ? '' : 's'}.${suffix}`, missing.length ? 'text-warning' : 'text-success');
+            applyMetadataBtn.disabled = selectedDocumentIds.size === 0;
         }
 
         async function ingestToDatabase() {
-            if (!currentDocumentId) {
-                setMessage('ingestMessage', 'Upload a document first.', 'text-danger');
+            const plans = Array.from(uploadedDocuments.values());
+            if (plans.length === 0) {
+                setMessage('ingestMessage', 'Upload one or more documents first.', 'text-danger');
                 return;
             }
+
+            ingestBatchResults.innerHTML = '';
             ingestBtn.disabled = true;
-            setMessage('ingestMessage', `Ingesting document ${currentDocumentId} into PostgreSQL/AGE…`, 'text-muted');
-            let response;
-            try {
-                response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/ingest`, { method: 'POST' });
-            } catch (err) {
-                setMessage('ingestMessage', `Network error: ${err.message}`, 'text-danger');
-                ingestBtn.disabled = false;
-                return;
+            let succeeded = 0;
+            let failed = 0;
+            let skipped = 0;
+
+            for (let index = 0; index < plans.length; index++) {
+                const plan = plans[index];
+                const label = plan.status.fileName || plan.title || `Document ${plan.documentId}`;
+                setMessage('ingestMessage', `Ingesting ${index + 1} of ${plans.length}: ${label}`, 'text-muted');
+                const resultItem = appendBatchResult(ingestBatchResults, label, 'Ingesting...', 'text-muted');
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/${plan.documentId}/ingest`, { method: 'POST' });
+                } catch (err) {
+                    failed++;
+                    updateUploadBatchResult(resultItem, `Failed: ${err.message}`, 'text-danger');
+                    continue;
+                }
+
+                let payload;
+                try { payload = await response.json(); } catch { payload = null; }
+                if (!response.ok) {
+                    failed++;
+                    updateUploadBatchResult(resultItem, `Failed: ${(payload && (payload.error || payload.detail)) || `status ${response.status}`}`, 'text-danger');
+                    continue;
+                }
+
+                if (payload?.graphName) {
+                    currentGraphName = payload.graphName;
+                }
+                if (payload?.documentId) {
+                    uploadedDocuments.set(payload.documentId, payload);
+                    if (payload.documentId === currentDocumentId) {
+                        renderStatus(payload.status);
+                    }
+                }
+
+                if ((payload?.status?.state || '').toLowerCase() === 'skipped') {
+                    skipped += 1;
+                    updateUploadBatchResult(resultItem, `Skipped: ${payload?.status?.message || 'No changes were applied.'}`, 'text-warning');
+                } else {
+                    succeeded += 1;
+                    updateUploadBatchResult(resultItem, `Succeeded: ${payload?.status?.message || 'Ingest completed.'}`, 'text-success');
+                }
             }
-            let payload;
-            try { payload = await response.json(); } catch { payload = null; }
-            if (!response.ok) {
-                setMessage('ingestMessage', (payload && (payload.error || payload.detail)) || `Ingest failed (status ${response.status}).`, 'text-danger');
-                ingestBtn.disabled = false;
-                return;
+
+            renderUploadedDocuments();
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
             }
-            if (payload?.graphName) {
-                currentGraphName = payload.graphName;
-            }
-            const state = payload.status.state;
-            const cls = state === 'Completed' ? 'text-success' : state === 'Ready' ? 'text-warning' : 'text-info';
-            setMessage('ingestMessage', `${state}: ${payload.status.message}`, cls);
-            renderStatus(payload.status);
+
+            const hasIssues = failed > 0;
+            const messageClass = hasIssues ? ((succeeded + skipped) > 0 ? 'text-warning' : 'text-danger') : 'text-success';
+            setMessage('ingestMessage', `Ingest batch complete: ${succeeded} succeeded, ${skipped} skipped, ${failed} failed.`, messageClass);
             ingestBtn.disabled = false;
             await refreshIngestLog();
         }
@@ -416,18 +1288,6 @@
                 output.innerText = lines.join('\n');
             } catch (err) {
                 output.innerText = `Failed to load log: ${err.message}`;
-            }
-        }
-
-        async function refreshStatus() {
-            if (!currentDocumentId) {
-                return;
-            }
-
-            const response = await fetch(`${backendBaseUrl}/api/documents/${currentDocumentId}/status`);
-            const payload = await response.json();
-            if (response.ok) {
-                renderStatus(payload);
             }
         }
 
@@ -581,12 +1441,12 @@
         }
 
         async function resetDatabase() {
-            if (!confirm('This will delete relational data, drop the AGE graph, and remove the AGE extension (ag_catalog). Continue?')) {
+            if (!confirm('This will drop the AGE graph and graph schema, drop the kg_data schema (documents, chunks, entities, chunk_entities), drop the public fallback tables (documents, chunks, entities, chunk_entities), drop the AGE extension (ag_catalog), and clear the cache for document-to-entity breakdown. Continue?')) {
                 return;
             }
 
             resetDbBtn.disabled = true;
-            setMessage('resetDbMessage', 'Resetting database and clearing cache…', 'text-muted');
+            setMessage('resetDbMessage', 'Resetting database and clearing the cache for document-to-entity breakdown…', 'text-muted');
 
             let response;
             try {
@@ -607,16 +1467,25 @@
 
             currentDocumentId = null;
             graphReady = false;
+            uploadedDocuments.clear();
+            selectedDocumentIds.clear();
+            metadataDrafts.clear();
             setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
+            setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
             setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
-            setMessage('resetDbMessage', `Database reset completed. Cache files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
+            setMessage('resetDbMessage', `Database reset completed. Cache for document-to-entity breakdown files cleared: ${payload?.cacheCleared ?? 0}.`, 'text-success');
             initScriptOutput.innerText = '';
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
+            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
+            await loadGraphMakerAgentPrompt();
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
+            renderList('relationshipsOutput', []);
+            setMetadataForm(null);
+            renderUploadedDocuments();
             renderResults([]);
             renderGraph([], []);
             document.getElementById('graphCheckStatus').innerText = 'Graph counts not loaded.';
@@ -674,6 +1543,12 @@
                 return;
             }
 
+            const selectedMode = hybridModeSelect.value;
+            if (!isClarification && (selectedMode === 'global' || (selectedMode === 'auto' && shouldUseGlobalMode(question)))) {
+                await runGlobalGraphRag(question);
+                return;
+            }
+
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
@@ -683,8 +1558,8 @@
                 renderProcessMap([], false);
             }
 
-            runHybridBtn.disabled = true;
-            hybridStatus.innerText = 'Processing retrieval...';
+            setButtonLoading(runHybridBtn, true, 'Running...');
+            setInlineStatus(hybridStatus, 'Processing retrieval...', 'text-muted');
 
             const response = await fetch(`${backendBaseUrl}/api/retrieval/hybrid`, {
                 method: 'POST',
@@ -705,8 +1580,8 @@
             if (!response.ok) {
                 document.getElementById('hybridError').innerText = payload.error || 'Hybrid retrieval failed.';
                 appendProcessMap([{ title: 'Retrieval failed', body: payload.error || 'Hybrid retrieval failed.' }]);
-                hybridStatus.innerText = 'Retrieval failed.';
-                runHybridBtn.disabled = false;
+                setInlineStatus(hybridStatus, 'Retrieval failed.', 'text-danger');
+                setButtonLoading(runHybridBtn, false);
                 return;
             }
 
@@ -714,61 +1589,120 @@
 
             const trace = payload.trace;
             const mapItems = [];
-            mapItems.push({ title: 'User question received', body: question });
 
+            // Helpers ------------------------------------------------------
+            const analysisSystemPrompt = payload.analysisSystemPrompt || '(not available)';
+            const answerSystemPrompt = payload.systemPrompt || '(not available)';
+            const entityLlmStep = getTraceStep(trace, 'entity-llm');
+            const answerStep = getTraceStep(trace, 'llm-answer');
+            const matchStep = getTraceStep(trace, 'entity-match');
+            const expansionStep = getTraceStep(trace, 'graph-expansion');
+            const relationshipsStep = getTraceStep(trace, 'graph-relationships');
+            const embeddingStep = getTraceStep(trace, 'embedding');
+            const vectorStep = getTraceStep(trace, 'vector-search');
+            const fallbackStep = getTraceStep(trace, 'entity-fallback');
+
+            function buildAgentBubble(title, role, systemPrompt, step) {
+                return {
+                    title,
+                    variant: 'agent',
+                    role,
+                    systemPrompt,
+                    systemPromptTitle: `${title} (System Prompt)`,
+                    tokenUsage: step && step.tokenUsage ? step.tokenUsage : null
+                };
+            }
+
+            function buildSqlBubble(title, detail, indent = true) {
+                const sql = parseSqlSections(detail);
+                if (sql) {
+                    return {
+                        title,
+                        indent,
+                        bodyHtml: buildSqlToggleHtml(sql.parameterized, sql.executable)
+                    };
+                }
+                return {
+                    title,
+                    indent,
+                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`
+                };
+            }
+
+            // Phase 0: User question (only on initial call, not on clarification resubmits)
+            if (!isClarification) {
+                mapItems.push({ title: 'User question received', body: question });
+            }
+
+            // Phase 1: Clarification required path -------------------------
             if (payload.clarificationQuestion) {
+                mapItems.push(buildAgentBubble(
+                    'Clarification Agent',
+                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    analysisSystemPrompt,
+                    entityLlmStep));
                 mapItems.push({
                     title: 'Clarification needed',
+                    indent: true,
                     body: `${payload.clarificationQuestion} (attempt ${hybridClarificationAttempts + 1} of 3)`,
                     clarification: true,
                     baseQuestion: payload.rewrittenQuestion || question
                 });
                 appendProcessMap(mapItems);
-                hybridStatus.innerText = 'Clarification required.';
-                runHybridBtn.disabled = false;
+                setInlineStatus(hybridStatus, 'Clarification required.', 'text-warning');
+                setButtonLoading(runHybridBtn, false);
                 return;
             }
 
-            const effectiveQuestion = payload.rewrittenQuestion || question;
-            if (payload.rewrittenQuestion && (payload.rewrittenQuestion !== question || (window.lastClarificationResponse && window.lastClarificationResponse.length > 0))) {
+            // Phase 2: Clarification received + question rewrite ----------
+            if (isClarification && window.lastClarificationResponse) {
+                mapItems.push(buildAgentBubble(
+                    'Clarification Agent',
+                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    analysisSystemPrompt,
+                    entityLlmStep));
                 mapItems.push({
-                    title: 'Question rewrite',
+                    title: 'Clarification received',
                     indent: true,
-                    body: payload.rewrittenQuestion
+                    body: window.lastClarificationResponse
+                });
+                if (payload.rewrittenQuestion) {
+                    mapItems.push({
+                        title: 'Question rewrite',
+                        indent: true,
+                        body: payload.rewrittenQuestion
+                    });
+                }
+            }
+
+            const effectiveQuestion = payload.rewrittenQuestion || question;
+
+            // Phase 3: Entity detection -----------------------------------
+            mapItems.push(buildAgentBubble(
+                'Entity detection Agent',
+                'Extract entities from the user question. Falls back to a heuristic detector if the agent fails.',
+                analysisSystemPrompt,
+                entityLlmStep));
+
+            const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
+            mapItems.push({
+                title: 'Entity detected',
+                indent: true,
+                body: detectedList.length ? detectedList.join(', ') : '(none)'
+            });
+
+            if (matchStep || (payload.matchedEntities && payload.matchedEntities.length)) {
+                const matchDetail = includeTrace && matchStep?.detail ? matchStep.detail : '(trace disabled)';
+                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true));
+                mapItems.push({
+                    title: 'Entity match output',
+                    indent: true,
+                    body: (payload.matchedEntities || []).join(', ') || '(none)'
                 });
             }
 
-            mapItems.push({ title: 'Entity detection input', body: effectiveQuestion, indent: true });
-            mapItems.push({
-                title: 'Entity detection logic',
-                body: 'LLM extracts entities and flags ambiguous pronouns; heuristic is fallback if LLM fails.'
-            });
-            const llmStep = getTraceStep(trace, 'entity-llm');
-            const detectionStep = getTraceStep(trace, 'entity-detection');
-            const detectionDetail = includeTrace && (llmStep?.detail || detectionStep?.detail)
-                ? (llmStep?.detail || detectionStep?.detail)
-                : '(trace disabled)';
-            mapItems.push({
-                title: 'Entity detection output',
-                indent: true,
-                body: (() => {
-                    const fallbackStep = getTraceStep(trace, 'entity-fallback');
-                    const detectedList = fallbackStep ? [] : (payload.detectedEntities || []);
-                    const lines = [detectedList.length ? detectedList.join(', ') : '(none)'];
-                    if (detectionDetail) {
-                        lines.push(truncateText(detectionDetail, 500));
-                    }
-                    return lines.join('\n');
-                })()
-            });
-
-            const fallbackStep = getTraceStep(trace, 'entity-fallback');
             if (fallbackStep) {
                 const fallbackDetail = includeTrace && fallbackStep.detail ? fallbackStep.detail : '(trace disabled)';
-                mapItems.push({
-                    title: 'Fallback rule',
-                    body: 'If no entities are detected, load the most recent entities from the database.'
-                });
                 mapItems.push({
                     title: 'Entity fallback output',
                     indent: true,
@@ -776,53 +1710,439 @@
                 });
             }
 
-            const matchStep = getTraceStep(trace, 'entity-match');
-            const matched = (payload.matchedEntities || []).join(', ');
-            if (matchStep || matched) {
-                const matchDetail = includeTrace && matchStep?.detail
-                    ? matchStep.detail
-                    : (matched || '(trace disabled)');
-                mapItems.push({
-                    title: 'Entity match output',
-                    indent: true,
-                    body: truncateText(matchDetail, 500)
-                });
-            }
-
-            const expansionStep = getTraceStep(trace, 'graph-expansion');
-            const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
-            mapItems.push({ title: 'Graph expansion query', body: truncateText(expansionDetail, 600), indent: true });
-            mapItems.push({ title: 'Graph-expanded entities', body: (payload.graphEntities || []).join(', ') || '(none)' });
-
-            const vectorStep = getTraceStep(trace, 'vector-search');
-            const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
-            mapItems.push({ title: 'Vector search input', body: truncateText(vectorDetail, 600), indent: true });
-
-            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`);
+            // Phase 4: Graph-expanded entities ----------------------------
             mapItems.push({
-                title: 'Vector search output',
+                title: 'Graph-expanded entities',
+                variant: 'purpose',
+                purpose: 'Traverse the knowledge graph from matched entities to discover related entities to broaden retrieval.'
+            });
+            const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
+            mapItems.push({
+                title: 'Graph expansion query',
+                indent: true,
+                scroll: true,
+                body: truncateText(expansionDetail, 1200)
+            });
+            mapItems.push({
+                title: 'Graph-expanded entities',
+                indent: true,
+                body: (payload.graphEntities || []).join(', ') || '(none)'
+            });
+
+            const relationshipDetail = includeTrace && relationshipsStep?.detail ? relationshipsStep.detail : '(trace disabled)';
+            mapItems.push({
+                title: 'Graph relationship context',
+                variant: 'purpose',
+                purpose: 'Load entity → relationship → entity triples with source chunk evidence so the answer agent can reason over graph structure, not just use the graph as a filter.'
+            });
+            mapItems.push({
+                title: 'Graph relationship query',
+                indent: true,
+                scroll: true,
+                body: truncateText(relationshipDetail, 1600)
+            });
+            const relationshipLines = (payload.graphRelationships || []).map(r => {
+                const doc = r.documentId ?? 'n/a';
+                const chunk = r.chunkIndex ?? 'n/a';
+                const text = r.sourceText ? `\n  evidence: ${truncateText(r.sourceText, 220)}` : '';
+                return `${r.source} -[${r.relationship}]-> ${r.target} (doc:${doc} chunk:${chunk})${text}`;
+            });
+            mapItems.push({
+                title: 'Graph relationship output',
+                indent: true,
+                scroll: true,
+                body: relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n')
+            });
+
+            // Phase 5: Question Embedding ---------------------------------
+            mapItems.push({
+                title: 'Question Embedding',
+                variant: 'purpose',
+                purpose: 'Vectorize the question for similarity search.',
+                inputText: effectiveQuestion
+            });
+            const embeddingDetail = includeTrace && embeddingStep?.detail ? embeddingStep.detail : '';
+            const embeddingOutputText = (() => {
+                if (!embeddingDetail) {
+                    return '(trace disabled)';
+                }
+                const outputIdx = embeddingDetail.indexOf('Output:');
+                const tail = outputIdx >= 0 ? embeddingDetail.slice(outputIdx + 'Output:'.length).trim() : embeddingDetail;
+                return truncateText(tail, 600);
+            })();
+            mapItems.push({
+                title: 'Question Embedding Output',
+                indent: true,
+                scroll: true,
+                body: embeddingOutputText
+            });
+
+            // Phase 6: Hybrid Chunk Retrieval -----------------------------
+            const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
+            const vectorSql = parseSqlSections(vectorDetail);
+            const vectorBubble = {
+                title: 'Hybrid Chunk Retrieval',
+                variant: 'purpose',
+                purpose: 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
+            };
+            if (vectorSql) {
+                vectorBubble.bodyHtml = buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable);
+            } else {
+                vectorBubble.bodyHtml = `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`;
+            }
+            mapItems.push(vectorBubble);
+
+            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
+            mapItems.push({
+                title: 'Hybrid Retrieval Output',
                 indent: true,
                 scroll: true,
                 body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
             });
 
-            mapItems.push({ title: 'System prompt', body: payload.systemPrompt || '(none)', indent: true, scroll: true });
-            mapItems.push({ title: 'Prompt context', body: payload.promptContext || '(empty)', indent: true, scroll: true });
-            mapItems.push({ title: 'LLM answer', body: payload.answer || (includeAnswer ? '(no answer returned)' : '(answer disabled)'), indent: true });
+            // Phase 7: Answer Agent ---------------------------------------
+            if (includeAnswer) {
+                mapItems.push(buildAgentBubble(
+                    'Answer Agent',
+                    'Synthesize an answer for the user question using the retrieved chunks. Falls back to a heuristic response if the agent fails.',
+                    answerSystemPrompt,
+                    answerStep));
+                mapItems.push({
+                    title: 'Agent Answer',
+                    indent: true,
+                    scroll: true,
+                    body: payload.answer || '(no answer returned)'
+                });
+            }
 
             appendProcessMap(mapItems);
 
-            hybridStatus.innerText = 'Retrieval complete.';
+            setInlineStatus(hybridStatus, 'Retrieval complete.', 'text-success');
             hybridClarificationAttempts = 0;
             window.lastClarificationResponse = '';
-            runHybridBtn.disabled = false;
+            setButtonLoading(runHybridBtn, false);
+        }
+
+        function shouldUseGlobalMode(question) {
+            return /\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i.test(question);
+        }
+
+        async function buildCommunities() {
+            const communityStatus = document.getElementById('communityStatus');
+            document.getElementById('communityError').innerText = '';
+            setButtonLoading(buildCommunitiesBtn, true, 'Building...');
+            setInlineStatus(communityStatus, 'Building communities...', 'text-muted');
+            document.getElementById('communityProcessMap').innerHTML = '';
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/build`, { method: 'POST' });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    throw new Error(payload.error || 'Community build failed.');
+                }
+
+                const items = [];
+                if (payload.trace?.steps) {
+                    payload.trace.steps.forEach(step => items.push(buildCommunityTraceItem(step)));
+                }
+                appendCommunityProcessMap(items);
+                setInlineStatus(communityStatus, 'Communities built.', 'text-success');
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
+                setInlineStatus(communityStatus, 'Community build failed.', 'text-danger');
+            } finally {
+                setButtonLoading(buildCommunitiesBtn, false);
+            }
+        }
+
+        function buildCommunityTraceItem(step) {
+            const detail = step.detail || '';
+            if (step.name === 'community-schema') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySchemaTabs(detail) };
+            }
+            if (step.name === 'community-load') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunityLoadTabs(detail) };
+            }
+            if (step.name === 'community-clustering') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunityClusteringTabs(detail) };
+            }
+            if (step.name === 'community-summary') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySummaryTabs(detail) };
+            }
+
+            return { title: step.summary || step.name, scroll: true, body: detail };
+        }
+
+        function buildCommunitySchemaTabs(detail) {
+            const sql = sectionAfter(detail, 'SQL:');
+            const overview = sectionBefore(detail, 'SQL:') || detail;
+            const tabs = [
+                { title: 'communities', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS communities'), pre: true },
+                { title: 'community_members', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS community_members'), pre: true },
+                { title: 'community_sources', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS community_sources'), pre: true },
+                { title: 'indexes', content: sql.split(';').map(s => s.trim()).filter(s => /^CREATE INDEX|^DO \$\$/i.test(s)).map(s => `${s};`).join('\n\n'), pre: true }
+            ];
+            return `<div class="fw-semibold mb-1">Tables:</div>${buildTabsHtml('community-schema-tabs', tabs, overview)}`;
+        }
+
+        function buildCommunityLoadTabs(detail) {
+            const overview = sectionBefore(detail, 'Entity SQL:') || detail;
+            const entitySql = betweenSections(detail, 'Entity SQL:', 'Entity output sample (top 50):');
+            const entityOutput = betweenSections(detail, 'Entity output sample (top 50):', 'Relationship SQL:');
+            const relationshipSql = betweenSections(detail, 'Relationship SQL:', 'Relationship output sample (top 50):');
+            const relationshipOutput = sectionAfter(detail, 'Relationship output sample (top 50):');
+            const entityContent = buildSqlAndResultsetHtml('Entity details', entitySql, entityOutput);
+            const relationshipContent = buildSqlAndResultsetHtml('Relationship details', relationshipSql, relationshipOutput);
+            return buildTabsHtml('community-load-tabs', [
+                { title: 'Entity', contentHtml: entityContent },
+                { title: 'Relationship', contentHtml: relationshipContent }
+            ], overview);
+        }
+
+        function buildCommunityClusteringTabs(detail) {
+            const allLines = detail.split(/\r?\n/);
+            const componentStart = allLines.findIndex(line => line.startsWith('Components') || line.startsWith('Largest components'));
+            const overview = componentStart >= 0 ? allLines.slice(0, componentStart).join('\n') : detail;
+            const components = componentStart >= 0 ? allLines.slice(componentStart + 1).filter(Boolean) : [];
+            const multi = components.filter(line => /entities=(?!1,)/.test(line));
+            const singletons = components.filter(line => /entities=1,/.test(line));
+            return buildTabsHtml('community-clustering-tabs', [
+                { title: `Multi-Entity (${multi.length})`, content: multi.join('\n') || '(none)', pre: true },
+                { title: `Singleton (${singletons.length})`, content: singletons.join('\n') || '(none)', pre: true },
+                { title: `All (${components.length})`, content: components.join('\n') || '(none)', pre: true }
+            ], overview);
+        }
+
+        function buildCommunitySummaryTabs(detail) {
+            const firstCommunity = detail.indexOf('Community id:');
+            const intro = firstCommunity >= 0 ? detail.slice(0, firstCommunity).trim() : detail;
+            const communitiesText = firstCommunity >= 0 ? detail.slice(firstCommunity).trim() : '';
+            const sqlStart = intro.indexOf('Write SQL templates:');
+            const bullets = sqlStart >= 0 ? intro.slice(0, sqlStart).trim() : intro;
+            const sqlTemplates = sqlStart >= 0 ? intro.slice(sqlStart + 'Write SQL templates:'.length).trim() : '';
+            const communityBlocks = communitiesText ? communitiesText.split(/\n\s*---\s*\n/).filter(Boolean) : [];
+            const tabs = communityBlocks.map((block, index) => ({ title: `Community ${index + 1}`, contentHtml: buildCommunityDetailTabs(block, sqlTemplates) }));
+            return buildTabsHtml('community-summary-tabs', tabs, bullets);
+        }
+
+        function buildCommunityDetailTabs(block, sqlTemplates) {
+            const variables = sectionBefore(block, 'LLM question:');
+            const prompt = betweenSections(block, 'LLM question:', 'LLM context:');
+            const context = betweenSections(block, 'LLM context:', 'Generated summary:');
+            const completion = sectionAfter(block, 'Generated summary:');
+            const sqlTemplateTabs = buildCommunitySqlTemplateTabs(sqlTemplates, block);
+            return buildTabsHtml('community-detail-tabs', [
+                { title: 'Variables', content: variables || '(none)', pre: true },
+                { title: 'Prompt', content: buildCommunityPromptText(prompt, context), pre: true },
+                { title: 'Completion', content: completion || '(none)', pre: true },
+                { title: 'SQL', contentHtml: sqlTemplateTabs }
+            ]);
+        }
+
+        function buildCommunityPromptText(question, context) {
+            return `LLM question:\n${(question || '(none)').trim()}\n\nLLM context:\n${(context || '(none)').trim()}`;
+        }
+
+        function buildCommunitySqlTemplateTabs(sqlTemplates, sampleCommunityBlock) {
+            const statements = splitCommunitySqlTemplates(sqlTemplates);
+            const sample = parseCommunitySample(sampleCommunityBlock);
+            return `<div class="fw-semibold mb-1">Tables:</div>${buildTabsHtml('community-write-template-tabs', [
+                {
+                    title: 'communities',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.communities,
+                        buildCommunityVariables(sample),
+                        sample.communitiesOutput || (sample.id ? `RETURNING id: ${sample.id}` : 'RETURNING id: (generated community id)'))
+                },
+                {
+                    title: 'community_members',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.members,
+                        `@@community_id = ${sample.id || '(generated community id)'}\n@@entity_id = one entity id from the selected component\nRows attempted = ${sample.entities || '(entity count)'}`,
+                        sample.membersOutput || (sample.entities ? `Inserted or kept ${sample.entities} community/entity membership rows.` : 'One row per entity in the community.'))
+                },
+                {
+                    title: 'community_sources',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.sources,
+                        `@@community_id = ${sample.id || '(generated community id)'}\n@@document_id = one source document id from community relationship evidence`,
+                        sample.sourcesOutput || 'One row per distinct source document that contributed evidence to the community.')
+                }
+            ])}`;
+        }
+
+        function buildSqlVariablesOutputTabs(sql, variables, output) {
+            return buildTabsHtml('community-write-template-detail-tabs', [
+                { title: 'SQL', content: `Variables:\n${variables || '(none)'}\n\nSQL:\n${sql || '(none)'}`, pre: true },
+                { title: 'Real output', content: output || '(none)', pre: true }
+            ]);
+        }
+
+        function splitCommunitySqlTemplates(sqlTemplates) {
+            return {
+                communities: extractSqlStatement(sqlTemplates, 'INSERT INTO communities'),
+                members: extractSqlStatement(sqlTemplates, 'INSERT INTO community_members'),
+                sources: extractSqlStatement(sqlTemplates, 'INSERT INTO community_sources')
+            };
+        }
+
+        function parseCommunitySample(block) {
+            const read = (regex) => {
+                const match = block.match(regex);
+                return match ? match[1].trim() : '';
+            };
+            return {
+                id: read(/Community id:\s*(.+)/),
+                key: read(/Community key:\s*(.+)/),
+                title: read(/Title:\s*(.+)/),
+                entities: read(/Entities:\s*(\d+)/),
+                relationships: read(/Relationships:\s*(\d+)/),
+                communitiesOutput: readBlock(block, 'Persisted communities row:', 'Persisted community_members rows (top 50):'),
+                membersOutput: readBlock(block, 'Persisted community_members rows (top 50):', 'Persisted community_sources rows (top 50):'),
+                sourcesOutput: readBlock(block, 'Persisted community_sources rows (top 50):', 'LLM question:'),
+                summary: read(/Generated summary:\s*([\s\S]+)/)
+            };
+        }
+
+        function readBlock(value, startMarker, endMarker) {
+            const start = value.indexOf(startMarker);
+            if (start < 0) return '';
+            const contentStart = start + startMarker.length;
+            const end = value.indexOf(endMarker, contentStart);
+            return (end >= 0 ? value.slice(contentStart, end) : value.slice(contentStart)).trim();
+        }
+
+        function buildCommunityVariables(sample) {
+            const summaryPreview = sample.summary ? truncateText(sample.summary.replace(/\s+/g, ' '), 240) : '(generated summary text)';
+            return [
+                `@@key = ${sample.key || '(computed from sorted entity ids)'}`,
+                `@@title = ${sample.title || '(top community entity names)'}`,
+                `@@summary = ${summaryPreview}`,
+                '@@embedding = vector embedding of @@summary (1536 dimensions)',
+                `@@entity_count = ${sample.entities || '(entity count)'}`,
+                `@@relationship_count = ${sample.relationships || '(relationship count)'}`,
+                '@@start_date = earliest document_date in community evidence, if present',
+                '@@end_date = latest document_date in community evidence, if present'
+            ].join('\n');
+        }
+
+        function buildTabsHtml(idPrefix, tabs, overview = '') {
+            const id = `${idPrefix}-${Math.random().toString(36).slice(2)}`;
+            const safeTabs = tabs.filter(tab => tab && (tab.contentHtml || tab.content || tab.content === ''));
+            const normalizedOverview = normalizeDisplayText(overview);
+            const overviewHtml = normalizedOverview ? `<div class="community-tab-overview mb-2">${escapeHtml(normalizedOverview).replace(/\n/g, '<br />')}</div>` : '';
+            if (safeTabs.length === 0) {
+                return `<div class="community-tabs">${overviewHtml}</div>`;
+            }
+
+            const buttons = safeTabs.map((tab, index) => `<button type="button" class="btn btn-sm btn-outline-secondary community-tab-btn ${index === 0 ? 'active' : ''}" data-tab-target="${id}-${index}" aria-selected="${index === 0 ? 'true' : 'false'}">${escapeHtml(tab.title)}</button>`).join('');
+            const panels = safeTabs.map((tab, index) => {
+                const content = escapeHtml((tab.content || '').trim() || '(none)');
+                const body = tab.contentHtml || (tab.pre ? `<pre class="sql-toggle-view mb-0">${content}</pre>` : `<div>${content.replace(/\n/g, '<br />')}</div>`);
+                return `<div class="community-tab-panel ${index === 0 ? '' : 'd-none'}" id="${id}-${index}" data-tab-index="${index}">${body}</div>`;
+            }).join('');
+            return `<div class="community-tabs">${overviewHtml}<div class="btn-group btn-group-sm flex-wrap mb-2" role="group">${buttons}</div>${panels}</div>`;
+        }
+
+        function buildSqlAndResultsetHtml(label, sql, resultset) {
+            const nestedTabs = buildTabsHtml('community-nested-sql-tabs', [
+                { title: 'SQL', content: sql || '(none)', pre: true },
+                { title: 'SQL resultset', content: resultset || '(none)', pre: true }
+            ]);
+            return `<div class="border rounded px-2 py-1 mt-2 bg-white"><div class="text-muted small fw-semibold mb-1">${escapeHtml(label)}</div>${nestedTabs}</div>`;
+        }
+
+            function normalizeDisplayText(value) {
+                return String(value || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            }
+
+        function sectionBefore(value, marker) {
+            const index = value.indexOf(marker);
+            return index >= 0 ? value.slice(0, index).trim() : value.trim();
+        }
+
+        function sectionAfter(value, marker) {
+            const index = value.indexOf(marker);
+            return index >= 0 ? value.slice(index + marker.length).trim() : '';
+        }
+
+        function betweenSections(value, startMarker, endMarker) {
+            const start = value.indexOf(startMarker);
+            if (start < 0) return '';
+            const end = value.indexOf(endMarker, start + startMarker.length);
+            return (end >= 0 ? value.slice(start + startMarker.length, end) : value.slice(start + startMarker.length)).trim();
+        }
+
+        function extractSqlStatement(sql, prefix) {
+            const start = sql.indexOf(prefix);
+            if (start < 0) return '';
+            const end = sql.indexOf(';', start);
+            return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
+        }
+
+        async function runGlobalGraphRag(question) {
+            const hybridStatus = document.getElementById('hybridStatus');
+            const includeTrace = document.getElementById('hybridTraceToggle').checked;
+            const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
+            document.getElementById('hybridError').innerText = '';
+            renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            setButtonLoading(runHybridBtn, true, 'Running...');
+            setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/retrieval/global`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: question, limit: 6, includeTrace, includeAnswer })
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    throw new Error(payload.error || 'Global GraphRAG failed.');
+                }
+
+                const items = [];
+                if (payload.trace?.steps) {
+                    payload.trace.steps.forEach(step => items.push({
+                        title: step.summary || step.name,
+                        scroll: true,
+                        body: step.detail || ''
+                    }));
+                }
+                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
+                items.push({ title: 'Community summary output', indent: true, scroll: true, body: communityLines.length ? communityLines.join('\n\n') : '(none - build communities first)' });
+                const timelineLines = (payload.timeline || []).map(d => `${d.documentDate || 'undated'}: ${d.title}`);
+                items.push({ title: 'Temporal timeline output', indent: true, scroll: true, body: timelineLines.length ? timelineLines.join('\n') : '(none)' });
+                if (includeAnswer) {
+                    items.push({ title: 'Global GraphRAG answer', indent: true, scroll: true, body: payload.answer || '(no answer returned)' });
+                }
+                appendProcessMap(items);
+                setInlineStatus(hybridStatus, 'Global GraphRAG complete.', 'text-success');
+            } catch (err) {
+                document.getElementById('hybridError').innerText = err.message;
+                appendProcessMap([{ title: 'Global GraphRAG failed', body: err.message }]);
+                setInlineStatus(hybridStatus, 'Global GraphRAG failed.', 'text-danger');
+            } finally {
+                setButtonLoading(runHybridBtn, false);
+            }
         }
 
         function renderDecomposition(payload) {
+            const systemPrompt = payload.decompositionSystemPrompt || '(no system prompt returned)';
             document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
+            document.getElementById('graphMakerAgentPrompt').textContent = systemPrompt;
+            document.getElementById('decompositionSystemPrompt').textContent = systemPrompt;
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
+            renderList('relationshipsOutput', (payload.relationships || []).map(r => {
+                const chunk = r.chunkId ? ` | chunk ${r.chunkId}` : '';
+                const confidence = r.confidence !== null && r.confidence !== undefined ? ` | confidence ${r.confidence}` : '';
+                return `${r.sourceName} -[${r.relationship}]-> ${r.targetName}${chunk}${confidence}`;
+            }));
         }
 
         function renderStatus(status) {
@@ -840,8 +2160,8 @@
             }
         }
 
-        function renderProcessMap(items, append = false) {
-            const container = document.getElementById('hybridProcessMap');
+        function renderProcessMap(items, append = false, containerId = 'hybridProcessMap') {
+            const container = document.getElementById(containerId);
             if (!append) {
                 container.innerHTML = '';
             }
@@ -881,6 +2201,14 @@
             renderProcessMap(items, true);
         }
 
+        function renderCommunityProcessMap(items, append = false) {
+            renderProcessMap(items, append, 'communityProcessMap');
+        }
+
+        function appendCommunityProcessMap(items) {
+            renderCommunityProcessMap(items, true);
+        }
+
         function createProcessBubble(item) {
             const bubble = document.createElement('div');
             bubble.className = 'process-bubble';
@@ -890,17 +2218,70 @@
             if (item.scroll) {
                 bubble.classList.add('process-bubble-scroll');
             }
+            if (item.variant === 'agent') {
+                bubble.classList.add('process-bubble-agent');
+            } else if (item.variant === 'purpose') {
+                bubble.classList.add('process-bubble-purpose');
+            }
 
             const title = document.createElement('div');
             title.className = 'process-bubble-title';
             title.innerText = item.title || 'Step';
             bubble.appendChild(title);
 
-            if (item.body) {
+            if (item.role) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Role:</span> ${escapeHtml(item.role)}`;
+                bubble.appendChild(section);
+            }
+
+            if (item.purpose) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Purpose:</span> ${escapeHtml(item.purpose)}`;
+                bubble.appendChild(section);
+            }
+
+            if (item.inputText) {
+                const section = document.createElement('div');
+                section.className = 'process-bubble-section';
+                section.innerHTML = `<span class="label">Input:</span> ${escapeHtml(item.inputText)}`;
+                bubble.appendChild(section);
+            }
+
+            if (item.body || item.bodyHtml) {
                 const body = document.createElement('div');
                 body.className = 'process-bubble-body';
-                body.innerText = item.body;
+                if (item.bodyHtml) {
+                    body.innerHTML = item.bodyHtml;
+                } else {
+                    body.innerText = item.body;
+                }
                 bubble.appendChild(body);
+            }
+
+            if (item.systemPrompt) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.systemPromptTitle || 'Agent System Prompt';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.systemPrompt;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.tokenUsage) {
+                const tokens = document.createElement('div');
+                tokens.className = 'process-bubble-tokens';
+                const p = item.tokenUsage.promptTokens;
+                const c = item.tokenUsage.completionTokens;
+                const promptText = (p === null || p === undefined) ? 'n/a' : p;
+                const completionText = (c === null || c === undefined) ? 'n/a' : c;
+                tokens.innerText = `Token usage: prompt: ${promptText} | completion: ${completionText}`;
+                bubble.appendChild(tokens);
             }
 
             if (item.clarification) {
@@ -957,6 +2338,127 @@
             return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
         }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function parseSqlSections(value) {
+            if (!value) {
+                return null;
+            }
+
+            const parameterizedHeader = 'Parameterized SQL:';
+            const executableHeader = 'Executable SQL:';
+            const parameterizedIndex = value.indexOf(parameterizedHeader);
+            const executableIndex = value.indexOf(executableHeader);
+            if (parameterizedIndex === -1 || executableIndex === -1) {
+                return null;
+            }
+
+            const parameterized = value
+                .slice(parameterizedIndex + parameterizedHeader.length, executableIndex)
+                .trim();
+            const executable = value
+                .slice(executableIndex + executableHeader.length)
+                .trim();
+            return { parameterized, executable };
+        }
+
+        function buildSqlToggleHtml(parameterizedSql, executableSql) {
+            const parameterized = escapeHtml(parameterizedSql);
+            const executable = escapeHtml(executableSql);
+            return `
+                <div class="sql-toggle" data-view="parameterized">
+                    <div class="btn-group btn-group-sm sql-toggle-buttons" role="group">
+                        <button type="button" class="btn btn-outline-secondary sql-toggle-btn active" data-view="parameterized">Parameterized</button>
+                        <button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="executable">Executable</button>
+                    </div>
+                    <pre class="sql-toggle-view sql-toggle-view-parameterized">${parameterized}</pre>
+                    <pre class="sql-toggle-view sql-toggle-view-executable d-none">${executable}</pre>
+                </div>`;
+        }
+
+        document.addEventListener('click', (event) => {
+            const communityTabButton = event.target.closest('.community-tab-btn');
+            if (communityTabButton) {
+                const wrapper = communityTabButton.closest('.community-tabs');
+                if (!wrapper) {
+                    return;
+                }
+
+                const buttons = getOwnCommunityTabButtons(wrapper);
+                const panels = getOwnCommunityTabPanels(wrapper);
+                buttons.forEach(btn => btn.classList.remove('active'));
+                buttons.forEach(btn => btn.setAttribute('aria-selected', 'false'));
+                panels.forEach(panel => panel.classList.add('d-none'));
+                communityTabButton.classList.add('active');
+                communityTabButton.setAttribute('aria-selected', 'true');
+                const target = panels.find(panel => panel.id === communityTabButton.dataset.tabTarget);
+                if (target) {
+                    target.classList.remove('d-none');
+                    resetNestedCommunityTabs(target);
+                } else {
+                    showFirstCommunityTab(wrapper);
+                }
+                return;
+            }
+
+            const button = event.target.closest('.sql-toggle-btn');
+            if (!button) {
+                return;
+            }
+
+            const container = button.closest('.sql-toggle');
+            if (!container) {
+                return;
+            }
+
+            const view = button.dataset.view;
+            container.querySelectorAll('.sql-toggle-view').forEach((element) => {
+                element.classList.toggle('d-none', !element.classList.contains(`sql-toggle-view-${view}`));
+            });
+            container.querySelectorAll('.sql-toggle-btn').forEach((btn) => {
+                btn.classList.toggle('active', btn === button);
+            });
+        });
+
+        function showFirstCommunityTab(wrapper) {
+            const buttons = getOwnCommunityTabButtons(wrapper);
+            const panels = getOwnCommunityTabPanels(wrapper);
+            const firstButton = buttons[0];
+            const firstPanel = panels[0];
+            if (!firstButton || !firstPanel) {
+                return;
+            }
+
+            buttons.forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-selected', 'false');
+            });
+            panels.forEach(panel => panel.classList.add('d-none'));
+            firstButton.classList.add('active');
+            firstButton.setAttribute('aria-selected', 'true');
+            firstPanel.classList.remove('d-none');
+            resetNestedCommunityTabs(firstPanel);
+        }
+
+        function getOwnCommunityTabButtons(wrapper) {
+            return Array.from(wrapper.querySelectorAll(':scope > .btn-group > .community-tab-btn'));
+        }
+
+        function getOwnCommunityTabPanels(wrapper) {
+            return Array.from(wrapper.querySelectorAll(':scope > .community-tab-panel'));
+        }
+
+        function resetNestedCommunityTabs(container) {
+            container.querySelectorAll('.community-tabs').forEach(showFirstCommunityTab);
+        }
+
         function renderResults(rows) {
             const table = document.getElementById('resultsTable');
             table.innerHTML = '';
@@ -991,30 +2493,1313 @@
         function renderGraph(nodes, edges) {
             const container = document.getElementById('graphView');
             container.innerHTML = '';
+            resetGraphSelectionDetails();
+            destroyGraphInstance();
+            currentGraphNodes = nodes || [];
+            currentGraphEdges = edges || [];
+            currentGraphNodeMap = new Map(currentGraphNodes.map(node => [String(node.id), node]));
+            currentGraphEdgeMap = new Map();
+            currentGraphLabelColorMap = buildLegacyVisColorMap(currentGraphNodes);
+            setGraphStats(currentGraphNodes.length, currentGraphEdges.length);
 
-            if (!nodes.length) {
+            if (!currentGraphNodes.length) {
                 container.innerText = 'No graph primitives returned. Use a query that returns vertices/edges.';
                 return;
             }
 
-            if (!window.vis || !window.vis.Network) {
+            const degreeById = calculateDegrees(currentGraphNodes, currentGraphEdges);
+            if (graphSettings.engine === 'vis') {
+                renderVisNetworkGraph(container, degreeById);
+                return;
+            }
+
+            renderCytoscapeGraph(container, degreeById);
+        }
+
+        function renderCytoscapeGraph(container, degreeById) {
+            if (!window.cytoscape) {
+                container.innerText = 'Cytoscape.js failed to load. Check internet access or bundle the library locally.';
+                return;
+            }
+
+            graphCy = cytoscape({
+                container,
+                elements: buildCytoscapeElements(currentGraphNodes, currentGraphEdges, degreeById),
+                style: buildCytoscapeStyle(),
+                layout: buildCytoscapeLayout(false),
+                minZoom: 0.08,
+                maxZoom: 3,
+                wheelSensitivity: 0.18
+            });
+
+            graphCy.nodes().grabify();
+
+            graphCy.on('tap', 'node', (event) => {
+                const node = event.target.data('original');
+                if (node) {
+                    showGraphNodeDetails(node);
+                    updateGraphHighlight(event.target);
+                }
+            });
+
+            graphCy.on('tap', 'edge', (event) => {
+                const edge = event.target.data('original');
+                if (edge) {
+                    showGraphEdgeDetails(edge, currentGraphNodeMap);
+                    updateGraphHighlight(event.target);
+                }
+            });
+
+            graphCy.on('tap', (event) => {
+                if (event.target === graphCy) {
+                    clearGraphHighlight();
+                    resetGraphSelectionDetails();
+                }
+            });
+
+            updateBackgroundForceButton();
+        }
+
+        function renderVisNetworkGraph(container, degreeById) {
+            if (!window.vis?.Network || !window.vis?.DataSet) {
                 container.innerText = 'vis-network failed to load. Check internet access or bundle the library locally.';
                 return;
             }
 
-            const visNodes = new vis.DataSet(nodes.map(node => ({ id: node.id, label: node.title, group: node.label })));
-            const visEdges = new vis.DataSet(edges.map(edge => ({ from: edge.source, to: edge.target, label: edge.label, arrows: 'to' })));
+            currentVisNodeItems = buildVisNetworkNodes(currentGraphNodes, degreeById);
+            currentVisEdgeItems = buildVisNetworkEdges(currentGraphEdges);
+            currentVisNodeDataSet = new vis.DataSet(currentVisNodeItems);
+            currentVisEdgeDataSet = new vis.DataSet(currentVisEdgeItems);
+            const visData = {
+                nodes: currentVisNodeDataSet,
+                edges: currentVisEdgeDataSet
+            };
+            graphNetwork = new vis.Network(container, visData, buildVisNetworkOptions());
 
-            new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
-                interaction: { hover: true, navigationButtons: true },
-                physics: { stabilization: false }
+            graphNetwork.on('click', (params) => {
+                if (params.nodes.length) {
+                    const node = currentGraphNodeMap.get(String(params.nodes[0]));
+                    if (node) {
+                        showGraphNodeDetails(node);
+                    }
+                    return;
+                }
+
+                if (params.edges.length) {
+                    const edge = currentGraphEdgeMap.get(String(params.edges[0]));
+                    if (edge) {
+                        showGraphEdgeDetails(edge, currentGraphNodeMap);
+                    }
+                    return;
+                }
+
+                graphNetwork.unselectAll();
+                resetGraphSelectionDetails();
             });
+
+            updateBackgroundForceButton();
+        }
+
+        function destroyGraphInstance() {
+            stopBackgroundForceLayout();
+
+            if (graphCy) {
+                graphCy.destroy();
+                graphCy = null;
+            }
+
+            if (graphNetwork) {
+                graphNetwork.destroy();
+                graphNetwork = null;
+            }
+            currentVisNodeDataSet = null;
+            currentVisEdgeDataSet = null;
+            currentVisNodeItems = [];
+            currentVisEdgeItems = [];
+            updateBackgroundForceButton();
+        }
+
+        function buildCytoscapeElements(nodes, edges, degreeById) {
+            const cyNodes = nodes.map(node => {
+                const id = String(node.id);
+                return {
+                    group: 'nodes',
+                    data: buildGraphNodeVisualData(node, degreeById)
+                };
+            });
+
+            const cyEdges = edges
+                .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                .map((edge, index) => {
+                    const id = `edge-${index}`;
+                    currentGraphEdgeMap.set(id, edge);
+                    return {
+                        group: 'edges',
+                        data: {
+                            id,
+                            source: String(edge.source),
+                            target: String(edge.target),
+                            label: edge.label || '',
+                            original: edge
+                        }
+                    };
+                });
+
+            return [...cyNodes, ...cyEdges];
+        }
+
+        function buildGraphNodeVisualData(node, degreeById) {
+            const id = String(node.id);
+            return {
+                id,
+                title: node.title || id,
+                kgLabel: node.label || 'Node',
+                nodeKind: getGraphNodeKind(node),
+                legacyVisColor: currentGraphLabelColorMap.get(node.label || 'Node')?.background || legacyVisNetworkPalette[0].background,
+                legacyVisBorderColor: currentGraphLabelColorMap.get(node.label || 'Node')?.border || legacyVisNetworkPalette[0].border,
+                degree: degreeById.get(id) || 0,
+                original: node
+            };
+        }
+
+        function buildVisNetworkNodes(nodes, degreeById) {
+            if (graphSettings.layout === 'visDefault') {
+                const nodeScale = Number(graphSettings.nodeScale) || 1;
+                return nodes.map((node) => ({
+                    id: String(node.id),
+                    label: graphSettings.showNodeLabels ? node.title || String(node.id) : '',
+                    title: JSON.stringify(node.properties || {}, null, 2),
+                    group: node.label || 'Node',
+                    shape: graphSettings.nodeTextInside ? 'ellipse' : 'dot',
+                    size: Math.round(16 * nodeScale),
+                    font: {
+                        color: graphSettings.nodeTextInside ? '#ffffff' : '#212529',
+                        face: 'system-ui, -apple-system, Segoe UI, sans-serif',
+                        size: 12,
+                        bold: graphSettings.nodeTextInside,
+                        strokeWidth: graphSettings.nodeTextInside ? 3 : 0,
+                        strokeColor: 'rgba(0, 0, 0, 0.36)'
+                    },
+                    margin: graphSettings.nodeTextInside ? 8 : undefined,
+                    widthConstraint: graphSettings.nodeTextInside ? { maximum: 120 } : undefined
+                }));
+            }
+
+            const nodeScale = Number(graphSettings.nodeScale) || 1;
+            const positions = buildVisNetworkPositions(nodes, degreeById);
+            return nodes.map((node) => {
+                const data = buildGraphNodeVisualData(node, degreeById);
+                const nodeSize = Math.round((18 + Math.min(data.degree, 8) * 2) * nodeScale);
+                const color = getCytoscapeNodeColor(data);
+                const borderColor = getCytoscapeNodeBorderColor(data);
+                const position = positions.get(data.id) || {};
+                return {
+                    id: data.id,
+                    label: graphSettings.showNodeLabels ? data.title : '',
+                    title: `${data.kgLabel}: ${data.title}`,
+                    group: data.kgLabel,
+                    shape: graphSettings.nodeTextInside ? 'ellipse' : 'dot',
+                    size: nodeSize,
+                    borderWidth: 2,
+                    color: {
+                        background: color,
+                        border: borderColor,
+                        highlight: { background: color, border: '#111827' },
+                        hover: { background: color, border: '#111827' }
+                    },
+                    font: {
+                        color: graphSettings.nodeTextInside ? '#ffffff' : '#212529',
+                        face: 'system-ui, -apple-system, Segoe UI, sans-serif',
+                        size: 12,
+                        bold: graphSettings.nodeTextInside,
+                        strokeWidth: graphSettings.nodeTextInside ? 3 : 0,
+                        strokeColor: 'rgba(0, 0, 0, 0.36)'
+                    },
+                    margin: graphSettings.nodeTextInside ? 8 : undefined,
+                    widthConstraint: graphSettings.nodeTextInside ? { maximum: Math.max(70, nodeSize * 4) } : undefined,
+                    ...position
+                };
+            });
+        }
+
+        function buildVisNetworkEdges(edges) {
+            if (graphSettings.layout === 'visDefault') {
+                return edges
+                    .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                    .map((edge, index) => {
+                        const id = edge.id ? String(edge.id) : `edge-${index}`;
+                        currentGraphEdgeMap.set(id, edge);
+                        return {
+                            id,
+                            from: String(edge.source),
+                            to: String(edge.target),
+                            label: graphSettings.showEdgeLabels ? edge.label || '' : ''
+                        };
+                    });
+            }
+
+            const edgeWidth = Number(graphSettings.edgeWidth) || 2;
+            return edges
+                .filter(edge => currentGraphNodeMap.has(String(edge.source)) && currentGraphNodeMap.has(String(edge.target)))
+                .map((edge, index) => {
+                    const id = `edge-${index}`;
+                    currentGraphEdgeMap.set(id, edge);
+                    return {
+                        id,
+                        from: String(edge.source),
+                        to: String(edge.target),
+                        label: graphSettings.showEdgeLabels ? edge.label || '' : '',
+                        arrows: graphSettings.showArrows ? 'to' : '',
+                        width: edgeWidth,
+                        color: { color: '#8c9aa8', highlight: '#111827', hover: '#111827' },
+                        font: { color: '#495057', size: 10, align: 'middle', strokeWidth: 3, strokeColor: '#ffffff' },
+                        smooth: { type: 'dynamic' }
+                    };
+                });
+        }
+
+        function buildVisNetworkOptions() {
+            if (graphSettings.layout === 'visDefault') {
+                return {};
+            }
+
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const physicsGravity = Number(graphSettings.physicsGravity) || 0.7;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const forceLayouts = ['physics', 'fcose', 'cose', 'cose-bilkent', 'cola', 'cise', 'random'];
+            const hierarchicalLayouts = ['breadthfirst', 'dagre', 'elk'];
+            const physicsEnabled = forceLayouts.includes(graphSettings.layout);
+            const hierarchicalEnabled = hierarchicalLayouts.includes(graphSettings.layout);
+            return {
+                autoResize: true,
+                layout: {
+                    improvedLayout: !hierarchicalEnabled,
+                    hierarchical: hierarchicalEnabled
+                        ? { enabled: true, direction: mapLayoutDirectionForVis(graphSettings.layoutDirection), sortMethod: 'directed', nodeSpacing: Math.round(110 * layoutSpacing), levelSeparation: physicsSpringLength }
+                        : false
+                },
+                interaction: { hover: true, multiselect: false, navigationButtons: false, keyboard: false },
+                nodes: { shadow: false },
+                edges: { shadow: false, selectionWidth: 2 },
+                physics: {
+                    enabled: physicsEnabled,
+                    solver: 'forceAtlas2Based',
+                    stabilization: { enabled: true, iterations: Math.round(550 * physicsStrength), fit: Boolean(graphSettings.autoFitLayout) },
+                    forceAtlas2Based: {
+                        gravitationalConstant: -55 * physicsStrength,
+                        centralGravity: Math.max(0.005, physicsGravity / 10),
+                        springLength: physicsSpringLength,
+                        springConstant: 0.08 * physicsStrength,
+                        damping: 0.42,
+                        avoidOverlap: 0.55
+                    }
+                }
+            };
+        }
+
+        function mapLayoutDirectionForVis(direction) {
+            switch (direction) {
+                case 'LR':
+                    return 'LR';
+                case 'BT':
+                    return 'DU';
+                case 'RL':
+                    return 'RL';
+                case 'TB':
+                default:
+                    return 'UD';
+            }
+        }
+
+        function buildVisNetworkPositions(nodes, degreeById) {
+            const positions = new Map();
+            if (['physics', 'fcose', 'cose', 'cose-bilkent', 'cola', 'cise', 'breadthfirst', 'dagre', 'elk', 'random'].includes(graphSettings.layout)) {
+                return positions;
+            }
+
+            const nodeCount = Math.max(nodes.length, 1);
+            const spacing = 85 * (Number(graphSettings.layoutSpacing) || 1.35);
+            if (graphSettings.layout === 'grid') {
+                const columns = Math.ceil(Math.sqrt(nodeCount));
+                nodes.forEach((node, index) => {
+                    const row = Math.floor(index / columns);
+                    const column = index % columns;
+                    positions.set(String(node.id), { x: (column - columns / 2) * spacing, y: row * spacing, fixed: { x: true, y: true } });
+                });
+                return positions;
+            }
+
+            const orderedNodes = graphSettings.layout === 'concentric'
+                ? [...nodes].sort((left, right) => (degreeById.get(String(right.id)) || 0) - (degreeById.get(String(left.id)) || 0))
+                : nodes;
+            orderedNodes.forEach((node, index) => {
+                const radius = graphSettings.layout === 'concentric' ? 95 + Math.floor(index / 8) * 90 : Math.max(130, nodeCount * 14);
+                const angle = (index / nodeCount) * Math.PI * 2;
+                positions.set(String(node.id), { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, fixed: { x: true, y: true } });
+            });
+            return positions;
+        }
+
+        function calculateDegrees(nodes, edges) {
+            const degreeById = new Map(nodes.map(node => [String(node.id), 0]));
+            edges.forEach(edge => {
+                const source = String(edge.source);
+                const target = String(edge.target);
+                degreeById.set(source, (degreeById.get(source) || 0) + 1);
+                degreeById.set(target, (degreeById.get(target) || 0) + 1);
+            });
+            return degreeById;
+        }
+
+        function buildCytoscapeStyle() {
+            const nodeScale = Number(graphSettings.nodeScale) || 1;
+            const edgeWidth = Number(graphSettings.edgeWidth) || 2;
+            const nodeSize = 34 * nodeScale;
+            const labelInside = graphSettings.nodeTextInside;
+            return [
+                {
+                    selector: 'node',
+                    style: {
+                        'width': nodeSize,
+                        'height': nodeSize,
+                        'background-color': (element) => getCytoscapeNodeColor(element.data()),
+                        'border-width': 2,
+                        'border-color': (element) => getCytoscapeNodeBorderColor(element.data()),
+                        'label': graphSettings.showNodeLabels ? 'data(title)' : '',
+                        'font-size': 11,
+                        'font-family': 'system-ui, -apple-system, Segoe UI, sans-serif',
+                        'font-weight': labelInside ? 700 : 500,
+                        'color': labelInside ? '#ffffff' : '#212529',
+                        'text-wrap': 'wrap',
+                        'text-max-width': labelInside ? Math.max(28, nodeSize * 1.15) : 120,
+                        'text-valign': labelInside ? 'center' : 'bottom',
+                        'text-halign': 'center',
+                        'text-margin-y': labelInside ? 0 : 6,
+                        'text-background-color': '#ffffff',
+                        'text-background-opacity': graphSettings.showNodeLabels && !labelInside ? 0.78 : 0,
+                        'text-background-padding': 2,
+                        'text-outline-color': labelInside ? 'rgba(0, 0, 0, 0.36)' : 'transparent',
+                        'text-outline-width': labelInside ? 2 : 0,
+                        'overlay-opacity': 0,
+                        'transition-property': 'background-color, border-color, opacity, width, height, line-color, target-arrow-color',
+                        'transition-duration': '120ms'
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': edgeWidth,
+                        'line-color': '#8c9aa8',
+                        'target-arrow-color': '#8c9aa8',
+                        'target-arrow-shape': graphSettings.showArrows ? 'triangle' : 'none',
+                        'curve-style': 'bezier',
+                        'label': graphSettings.showEdgeLabels ? 'data(label)' : '',
+                        'font-size': 9,
+                        'color': '#495057',
+                        'text-background-color': '#ffffff',
+                        'text-background-opacity': graphSettings.showEdgeLabels ? 0.75 : 0,
+                        'text-background-padding': 2,
+                        'text-rotation': 'autorotate',
+                        'transition-property': 'line-color, target-arrow-color, opacity, width',
+                        'transition-duration': '120ms'
+                    }
+                },
+                {
+                    selector: '.faded',
+                    style: {
+                        'opacity': 0.16,
+                        'text-opacity': 0.08
+                    }
+                },
+                {
+                    selector: '.highlighted',
+                    style: {
+                        'opacity': 1,
+                        'border-color': '#111827',
+                        'line-color': '#111827',
+                        'target-arrow-color': '#111827',
+                        'width': (element) => element.isEdge() ? Math.max(edgeWidth + 1, 3) : nodeSize
+                    }
+                }
+            ];
+        }
+
+        function getCytoscapeNodeColor(data) {
+            if (graphSettings.colorMode === 'legacyVis') {
+                return data.legacyVisColor || legacyVisNetworkPalette[0].background;
+            }
+
+            if (graphSettings.colorMode === 'neutral') {
+                return '#5f6c7b';
+            }
+
+            if (graphSettings.colorMode === 'degree') {
+                const degree = Number(data.degree) || 0;
+                if (degree >= 6) return '#c2410c';
+                if (degree >= 3) return '#0f766e';
+                return '#4f46e5';
+            }
+
+            if (graphSettings.colorMode === 'kind') {
+                switch (data.nodeKind) {
+                    case 'document':
+                        return '#2563eb';
+                    case 'chunk':
+                        return '#059669';
+                    case 'entity':
+                        return '#7c3aed';
+                    default:
+                        return '#6b7280';
+                }
+            }
+
+            const palette = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#be123c', '#0891b2', '#65a30d'];
+            const label = String(data.kgLabel || 'Node');
+            let hash = 0;
+            for (let index = 0; index < label.length; index += 1) {
+                hash = ((hash << 5) - hash) + label.charCodeAt(index);
+                hash |= 0;
+            }
+            return palette[Math.abs(hash) % palette.length];
+        }
+
+        function getCytoscapeNodeBorderColor(data) {
+            if (graphSettings.colorMode === 'legacyVis') {
+                return data.legacyVisBorderColor || legacyVisNetworkPalette[0].border;
+            }
+
+            return '#ffffff';
+        }
+
+        function buildLegacyVisColorMap(nodes) {
+            const colorMap = new Map();
+            nodes.forEach((node) => {
+                const label = node.label || 'Node';
+                if (!colorMap.has(label)) {
+                    colorMap.set(label, legacyVisNetworkPalette[colorMap.size % legacyVisNetworkPalette.length]);
+                }
+            });
+            return colorMap;
+        }
+
+        function getGraphNodeKind(node) {
+            const label = String(node.label || '').toLowerCase();
+            const properties = node.properties || {};
+            const title = String(node.title || properties.title || properties.name || '').toLowerCase();
+            const candidates = [label, title, String(properties.type || '').toLowerCase(), String(properties.kind || '').toLowerCase()];
+
+            if (candidates.some(value => value.includes('document'))) {
+                return 'document';
+            }
+
+            if (candidates.some(value => value.includes('chunk'))) {
+                return 'chunk';
+            }
+
+            if (candidates.some(value => value.includes('entity'))) {
+                return 'entity';
+            }
+
+            return 'other';
+        }
+
+        function buildCytoscapeLayout(animated) {
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const physicsGravity = Number(graphSettings.physicsGravity) || 0.7;
+            const layoutPadding = Number(graphSettings.layoutPadding) || 35;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const animateLayout = Boolean(graphSettings.animateLayout) && animated;
+            const layoutDirection = graphSettings.layoutDirection || 'TB';
+            const common = {
+                fit: Boolean(graphSettings.autoFitLayout),
+                padding: layoutPadding,
+                animate: animateLayout,
+                animationDuration: animateLayout ? 500 : 0
+            };
+
+            switch (graphSettings.layout) {
+                case 'physics':
+                case 'fcose':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('fcose') ? 'fcose' : 'cose',
+                        quality: graphSettings.layoutQuality || 'proof',
+                        randomize: true,
+                        nodeSeparation: Math.round(75 * layoutSpacing),
+                        nodeRepulsion: () => Math.round(6500 * physicsStrength),
+                        idealEdgeLength: () => physicsSpringLength,
+                        edgeElasticity: () => Math.round(90 * physicsStrength),
+                        gravity: physicsGravity,
+                        gravityRangeCompound: 1.5,
+                        gravityCompound: 1.0,
+                        numIter: Math.round(1600 * physicsStrength),
+                        tile: true
+                    };
+                case 'cola':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('cola') ? 'cola' : 'cose',
+                        maxSimulationTime: Math.round(3000 * physicsStrength),
+                        nodeSpacing: Math.round(30 * layoutSpacing),
+                        edgeLength: physicsSpringLength,
+                        flow: layoutDirection === 'LR' ? { axis: 'x', minSeparation: physicsSpringLength } : undefined,
+                        alignment: undefined,
+                        groupCompaction: 0.8,
+                        infinite: false
+                    };
+                case 'cose-bilkent':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('coseBilkent') ? 'cose-bilkent' : 'cose',
+                        nodeDimensionsIncludeLabels: true,
+                        idealEdgeLength: physicsSpringLength,
+                        nodeRepulsion: Math.round(4500 * physicsStrength),
+                        gravity: Math.max(0.05, physicsGravity / 3),
+                        gravityRange: 3.8,
+                        numIter: Math.round(1800 * physicsStrength)
+                    };
+                case 'dagre':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('dagre') ? 'dagre' : 'breadthfirst',
+                        rankDir: layoutDirection,
+                        align: layoutDirection === 'LR' || layoutDirection === 'RL' ? 'UL' : undefined,
+                        nodeSep: Math.round(50 * layoutSpacing),
+                        rankSep: physicsSpringLength,
+                        edgeSep: 10,
+                        ranker: 'network-simplex'
+                    };
+                case 'elk':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('elk') ? 'elk' : 'breadthfirst',
+                        algorithm: graphSettings.layoutQuality === 'draft' ? 'mrtree' : graphSettings.layoutQuality === 'default' ? 'layered' : 'stress',
+                        nodeDimensionsIncludeLabels: true,
+                        randomize: true,
+                        elk: {
+                            'elk.direction': mapLayoutDirectionForElk(layoutDirection),
+                            'elk.spacing.nodeNode': Math.round(60 * layoutSpacing),
+                            'elk.layered.spacing.baseValue': physicsSpringLength,
+                            'elk.layered.spacing.nodeNodeBetweenLayers': physicsSpringLength
+                        }
+                    };
+                case 'cise':
+                    return {
+                        ...common,
+                        name: isCytoscapeLayoutAvailable('cise') ? 'cise' : 'circle',
+                        clusters: buildCiseClusters(),
+                        allowNodesInsideCircle: true,
+                        maxRatioOfNodesInsideCircle: 0.1,
+                        springCoeff: 0.45,
+                        nodeRepulsion: Math.round(4500 * physicsStrength),
+                        gravity: Math.max(0.05, physicsGravity / 3),
+                        gravityRange: 3.8
+                    };
+                case 'breadthfirst':
+                    return { ...common, name: 'breadthfirst', directed: true, spacingFactor: layoutSpacing, maximal: false };
+                case 'concentric':
+                    return { ...common, name: 'concentric', minNodeSpacing: Math.round(45 * layoutSpacing), concentric: node => node.degree(), levelWidth: nodes => Math.max(1, nodes.maxDegree() / 3), equidistant: graphSettings.layoutQuality === 'proof' };
+                case 'circle':
+                    return { ...common, name: 'circle', avoidOverlap: true, spacingFactor: layoutSpacing, startAngle: (3 / 2) * Math.PI, clockwise: true };
+                case 'grid':
+                    return { ...common, name: 'grid', avoidOverlap: true, avoidOverlapPadding: Math.round(20 * layoutSpacing), spacingFactor: layoutSpacing };
+                case 'random':
+                    return { ...common, name: 'random' };
+                case 'cose':
+                default:
+                    return { ...common, name: 'cose', randomize: true, nodeOverlap: 20, componentSpacing: Math.round(40 * layoutSpacing), nodeRepulsion: Math.round(400000 * physicsStrength), idealEdgeLength: physicsSpringLength, edgeElasticity: Math.round(100 * physicsStrength), nestingFactor: 5, gravity: Math.round(80 * physicsGravity), numIter: Math.round(1000 * physicsStrength), initialTemp: 200, coolingFactor: 0.95, minTemp: 1.0 };
+            }
+        }
+
+        function isCytoscapeLayoutAvailable(layoutName) {
+            return Boolean(cytoscapeExtensions[layoutName]);
+        }
+
+        function mapLayoutDirectionForElk(direction) {
+            switch (direction) {
+                case 'LR':
+                    return 'RIGHT';
+                case 'BT':
+                    return 'UP';
+                case 'RL':
+                    return 'LEFT';
+                case 'TB':
+                default:
+                    return 'DOWN';
+            }
+        }
+
+        function buildCiseClusters() {
+            const clustersByLabel = new Map();
+            currentGraphNodes.forEach((node) => {
+                const label = node.label || 'Node';
+                const cluster = clustersByLabel.get(label) || [];
+                cluster.push(String(node.id));
+                clustersByLabel.set(label, cluster);
+            });
+            return [...clustersByLabel.values()].filter(cluster => cluster.length > 1);
+        }
+
+        function updateGraphSettingFromControl(event) {
+            const control = event.currentTarget;
+            const setting = control.dataset.graphSetting;
+            if (!setting) {
+                return;
+            }
+
+            graphSettings[setting] = control.type === 'checkbox' ? control.checked : control.value;
+            if (setting === 'engine') {
+                applyGraphEngineDefaults(graphSettings.engine);
+            }
+
+            if (!currentGraphNodes.length) {
+                return;
+            }
+
+            if (setting === 'engine') {
+                renderGraph(currentGraphNodes, currentGraphEdges);
+                return;
+            }
+
+            if (graphSettings.engine === 'vis') {
+                if (setting === 'highlightNeighborhood') {
+                    clearGraphHighlight();
+                    return;
+                }
+
+                renderGraph(currentGraphNodes, currentGraphEdges);
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            const layoutSettings = new Set(['layout', 'physicsStrength', 'physicsSpringLength', 'physicsGravity', 'layoutQuality', 'layoutDirection', 'layoutPadding', 'layoutSpacing', 'animateLayout', 'autoFitLayout']);
+            if (layoutSettings.has(setting)) {
+                runGraphLayout(true);
+                return;
+            }
+
+            graphCy.style(buildCytoscapeStyle()).update();
+            clearGraphHighlight();
+        }
+
+        function applyGraphEngineDefaults(engine) {
+            Object.assign(graphSettings, engine === 'vis' ? visDefaultGraphSettings : defaultGraphSettings, { engine });
+            syncGraphSettingsControls();
+        }
+
+        function syncGraphSettingsControls() {
+            document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+                const setting = control.dataset.graphSetting;
+                if (control.type === 'checkbox') {
+                    control.checked = Boolean(graphSettings[setting]);
+                } else {
+                    control.value = graphSettings[setting];
+                }
+            });
+        }
+
+        function applyGraphSettingTooltips() {
+            document.querySelectorAll('[data-graph-setting]').forEach((control) => {
+                const description = graphSettingDescriptions[control.dataset.graphSetting];
+                if (!description) {
+                    return;
+                }
+
+                control.title = description;
+                control.setAttribute('aria-label', description);
+                const label = control.id ? document.querySelector(`label[for="${control.id}"]`) : null;
+                if (label) {
+                    label.title = description;
+                }
+            });
+
+            Object.entries(graphActionDescriptions).forEach(([id, description]) => {
+                const button = document.getElementById(id);
+                if (!button) {
+                    return;
+                }
+
+                button.title = description;
+                button.setAttribute('aria-label', description);
+            });
+        }
+
+        function runGraphLayout(animated) {
+            if (graphSettings.engine === 'vis') {
+                if (currentGraphNodes.length) {
+                    renderGraph(currentGraphNodes, currentGraphEdges);
+                }
+                return;
+            }
+
+            if (!graphCy || graphCy.nodes().empty()) {
+                return;
+            }
+
+            stopBackgroundForceLayout();
+            graphCy.layout(buildCytoscapeLayout(animated)).run();
+        }
+
+        function toggleBackgroundForceLayout() {
+            if (backgroundCytoscapeLayout) {
+                stopBackgroundForceLayout();
+                return;
+            }
+
+            startBackgroundForceLayout();
+        }
+
+        function startBackgroundForceLayout() {
+            if (graphSettings.engine !== 'cytoscape' || !graphCy || graphCy.nodes().empty()) {
+                return;
+            }
+
+            stopBackgroundForceLayout();
+            graphCy.nodes().unlock().grabify();
+            const layout = graphCy.layout(buildCytoscapeBackgroundForceLayout());
+            backgroundCytoscapeLayout = layout;
+            updateBackgroundForceButton();
+            layout.on('layoutstop', () => {
+                if (backgroundCytoscapeLayout === layout) {
+                    backgroundCytoscapeLayout = null;
+                    graphCy?.nodes().unlock().grabify();
+                    updateBackgroundForceButton();
+                }
+            });
+            layout.run();
+        }
+
+        function stopBackgroundForceLayout() {
+            if (!backgroundCytoscapeLayout) {
+                updateBackgroundForceButton();
+                return;
+            }
+
+            const layout = backgroundCytoscapeLayout;
+            backgroundCytoscapeLayout = null;
+            layout.stop?.();
+            graphCy?.nodes().unlock().grabify();
+            updateBackgroundForceButton();
+        }
+
+        function buildCytoscapeBackgroundForceLayout() {
+            const physicsStrength = Number(graphSettings.physicsStrength) || 1;
+            const physicsSpringLength = Number(graphSettings.physicsSpringLength) || 110;
+            const layoutSpacing = Number(graphSettings.layoutSpacing) || 1.35;
+            const layoutDirection = graphSettings.layoutDirection || 'TB';
+
+            if (isCytoscapeLayoutAvailable('cola')) {
+                return {
+                    name: 'cola',
+                    fit: false,
+                    animate: true,
+                    refresh: 1,
+                    maxSimulationTime: 0,
+                    ungrabifyWhileSimulating: false,
+                    randomize: false,
+                    centerGraph: false,
+                    avoidOverlap: true,
+                    handleDisconnected: true,
+                    nodeSpacing: Math.round(35 * layoutSpacing),
+                    edgeLength: physicsSpringLength,
+                    flow: layoutDirection === 'LR' ? { axis: 'x', minSeparation: physicsSpringLength } : undefined,
+                    convergenceThreshold: 0.00001,
+                    infinite: true
+                };
+            }
+
+            return {
+                name: 'cose',
+                fit: false,
+                animate: true,
+                randomize: false,
+                nodeOverlap: 20,
+                componentSpacing: Math.round(40 * layoutSpacing),
+                nodeRepulsion: Math.round(420000 * physicsStrength),
+                idealEdgeLength: physicsSpringLength,
+                edgeElasticity: Math.round(100 * physicsStrength),
+                gravity: Math.round(80 * (Number(graphSettings.physicsGravity) || 0.7)),
+                numIter: Math.round(2500 * physicsStrength),
+                initialTemp: 160,
+                coolingFactor: 0.98,
+                minTemp: 0.25
+            };
+        }
+
+        function updateBackgroundForceButton() {
+            if (!graphBackgroundForceBtn) {
+                return;
+            }
+
+            const canRun = graphSettings.engine === 'cytoscape' && Boolean(graphCy) && !graphCy.nodes().empty();
+            graphBackgroundForceBtn.disabled = !canRun;
+            graphBackgroundForceBtn.classList.toggle('btn-success', Boolean(backgroundCytoscapeLayout));
+            graphBackgroundForceBtn.classList.toggle('btn-outline-secondary', !backgroundCytoscapeLayout);
+            graphBackgroundForceBtn.innerText = backgroundCytoscapeLayout ? 'Stop force' : 'Start force';
+        }
+
+        function fitGraphView() {
+            if (graphSettings.engine === 'vis') {
+                graphNetwork?.fit({ animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            graphCy?.animate({ fit: { eles: graphCy.elements(), padding: 50 }, duration: 500, easing: 'ease-out-cubic' });
+        }
+
+        function toggleGraphSettingsPane() {
+            graphSettingsCollapsed = !graphSettingsCollapsed;
+            const workbench = document.querySelector('.graph-workbench');
+            workbench?.classList.toggle('graph-settings-collapsed', graphSettingsCollapsed);
+            graphSettingsToggleBtn.innerText = graphSettingsCollapsed ? 'Settings' : 'Minimize';
+            graphSettingsToggleBtn.setAttribute('aria-expanded', String(!graphSettingsCollapsed));
+
+            window.requestAnimationFrame(() => {
+                graphCy?.resize();
+                graphNetwork?.redraw();
+                fitGraphView();
+            });
+        }
+
+        function toggleQuerySidebarPane() {
+            querySidebarCollapsed = !querySidebarCollapsed;
+            const workbench = document.querySelector('.query-workbench-layout');
+            workbench?.classList.toggle('query-sidebar-collapsed', querySidebarCollapsed);
+            querySidebarToggleBtn.innerText = querySidebarCollapsed ? 'Query' : 'Minimize';
+            querySidebarToggleBtn.setAttribute('aria-expanded', String(!querySidebarCollapsed));
+
+            window.requestAnimationFrame(() => {
+                graphCy?.resize();
+                graphNetwork?.redraw();
+                fitGraphView();
+            });
+        }
+
+        function centerGraphView() {
+            if (graphSettings.engine === 'vis') {
+                graphNetwork?.moveTo({ position: { x: 0, y: 0 }, animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            graphCy?.animate({ center: { eles: graphCy.elements() }, duration: 500 });
+        }
+
+        function zoomGraphView(scale) {
+            if (graphSettings.engine === 'vis') {
+                const zoom = graphNetwork?.getScale?.() || 1;
+                graphNetwork?.moveTo({ scale: zoom * scale, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            graphCy.animate({ zoom: graphCy.zoom() * scale, duration: 350, easing: 'ease-in-out-cubic' });
+        }
+
+        function applyLayoutToSelectedNeighborhood() {
+            if (graphSettings.engine === 'vis') {
+                runGraphLayout(true);
+                return;
+            }
+
+            if (!graphCy) {
+                return;
+            }
+
+            const selectedNodes = graphCy.nodes(':selected');
+            if (!selectedNodes.length) {
+                return;
+            }
+
+            const boundingBox = selectedNodes.boundingBox();
+            const center = {
+                x: (boundingBox.x1 + boundingBox.x2) / 2,
+                y: (boundingBox.y1 + boundingBox.y2) / 2
+            };
+            const neighborhood = selectedNodes.neighborhood().add(selectedNodes);
+            const otherNodes = graphCy.nodes().not(neighborhood);
+            const positions = {};
+            otherNodes.forEach((node) => {
+                positions[node.id()] = { ...node.position() };
+            });
+
+            const layout = neighborhood.layout({
+                ...buildCytoscapeLayout(true),
+                fit: false,
+                boundingBox: {
+                    x1: center.x - 140,
+                    y1: center.y - 140,
+                    x2: center.x + 140,
+                    y2: center.y + 140
+                }
+            });
+            layout.on('layoutstop', () => {
+                otherNodes.forEach((node) => {
+                    node.animate({ position: positions[node.id()], duration: 500 });
+                });
+            });
+            layout.run();
+        }
+
+        function updateGraphHighlight(target) {
+            if (!graphCy || !graphSettings.highlightNeighborhood) {
+                return;
+            }
+
+            graphCy.elements().removeClass('highlighted faded');
+            const focus = target.closedNeighborhood ? target.closedNeighborhood() : target.connectedNodes().union(target);
+            graphCy.elements().difference(focus).addClass('faded');
+            focus.addClass('highlighted');
+        }
+
+        function clearGraphHighlight() {
+            graphCy?.elements().removeClass('highlighted faded');
+            graphNetwork?.unselectAll();
+        }
+
+        function resetGraphSettings() {
+            Object.assign(graphSettings, graphSettings.engine === 'vis' ? visDefaultGraphSettings : defaultGraphSettings);
+            syncGraphSettingsControls();
+
+            if (graphCy) {
+                graphCy.style(buildCytoscapeStyle()).update();
+                runGraphLayout(true);
+                clearGraphHighlight();
+            } else if (graphNetwork && currentGraphNodes.length) {
+                renderGraph(currentGraphNodes, currentGraphEdges);
+            }
+        }
+
+        function setGraphStats(nodeCount, edgeCount) {
+            const stats = document.getElementById('graphRenderStats');
+            if (stats) {
+                const engineName = graphSettings.engine === 'vis' ? 'vis-network' : 'Cytoscape.js';
+                stats.innerText = `${nodeCount} nodes, ${edgeCount} edges rendered with ${engineName}.`;
+            }
+        }
+
+        function resetGraphSelectionDetails() {
+            const details = document.getElementById('graphSelectionDetails');
+            const summary = document.getElementById('graphSelectionSummary');
+            const content = document.getElementById('graphSelectionContent');
+            details.open = false;
+            summary.innerText = 'Selected graph item details';
+            content.className = 'graph-selection-content text-muted small';
+            content.innerText = 'Click a node or edge in the graph to inspect it.';
+        }
+
+        async function showGraphNodeDetails(node) {
+            showGraphSelectionDetails(`Node: ${node.title || node.id}`, [
+                ['Type', 'Node', 'Cytoscape.js selection'],
+                ['AGE ID', node.id, 'AGE vertex.id'],
+                ['Label', node.label, 'AGE vertex.label'],
+                ['Title', node.title, 'display value'],
+                ...objectEntriesToRows(node.properties || {}, (key) => `AGE vertex.properties.${key}`)
+            ], true);
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/graph/node/details`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: String(node.id),
+                        label: node.label || '',
+                        title: node.title || '',
+                        properties: node.properties || {}
+                    })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    setGraphRelationalDetails(payload?.error || `Could not load kg_data details (status ${response.status}).`, true);
+                    return;
+                }
+
+                setGraphRelationalDetails(payload?.attributes || {}, payload?.attributeSources || {}, false, node, payload?.attributeSourceSqls || {});
+            } catch (err) {
+                setGraphRelationalDetails(`Could not load kg_data details: ${err.message}`, true);
+            }
+        }
+
+        function showGraphEdgeDetails(edge, nodesById) {
+            const source = nodesById.get(String(edge.source));
+            const target = nodesById.get(String(edge.target));
+            showGraphSelectionDetails(`Edge: ${edge.label || 'relationship'}`, [
+                ['Type', 'Edge', 'Cytoscape.js selection'],
+                ['Label', edge.label, 'AGE edge.label'],
+                ['Source ID', edge.source, 'AGE edge.start_id'],
+                ['Source title', source?.title || '', 'display value'],
+                ['Target ID', edge.target, 'AGE edge.end_id'],
+                ['Target title', target?.title || '', 'display value']
+            ]);
+        }
+
+        function showGraphSelectionDetails(summaryText, rows, includeRelationalDetails = false) {
+            const details = document.getElementById('graphSelectionDetails');
+            const summary = document.getElementById('graphSelectionSummary');
+            const content = document.getElementById('graphSelectionContent');
+
+            summary.innerText = summaryText;
+            content.className = 'graph-selection-content';
+            content.innerHTML = '';
+
+            const grid = document.createElement('div');
+            grid.className = includeRelationalDetails ? 'graph-selection-grid' : '';
+
+            const graphPanel = document.createElement('div');
+            const graphTitle = document.createElement('div');
+            graphTitle.className = 'graph-selection-panel-title';
+            graphTitle.innerText = 'Graph item';
+            graphPanel.appendChild(graphTitle);
+            graphPanel.appendChild(createGraphAttributeTable(rows));
+            grid.appendChild(graphPanel);
+
+            if (includeRelationalDetails) {
+                const relationalPanel = document.createElement('div');
+                const relationalTitle = document.createElement('div');
+                relationalTitle.className = 'graph-selection-panel-title';
+                relationalTitle.innerText = 'kg_data attributes';
+                relationalPanel.appendChild(relationalTitle);
+
+                const relationalContent = document.createElement('div');
+                relationalContent.id = 'graphRelationalDetails';
+                relationalContent.className = 'text-muted small';
+                relationalContent.innerText = 'Loading relational details...';
+                relationalPanel.appendChild(relationalContent);
+                grid.appendChild(relationalPanel);
+            }
+
+            content.appendChild(grid);
+            details.open = true;
+        }
+
+        function createGraphAttributeTable(rows) {
+            const table = document.createElement('table');
+            table.className = 'table table-sm table-bordered mb-0 graph-selection-table';
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            const columnDescriptions = {
+                Attribute: 'The displayed field name for the selected graph item or relational row.',
+                Value: 'The value returned for that field. Long values are shortened until expanded.',
+                Source: 'Where the value came from. For derived values, this can be executable SQL.'
+            };
+            ['Attribute', 'Value', 'Source'].forEach((label) => {
+                const th = document.createElement('th');
+                th.scope = 'col';
+                th.innerText = label;
+                th.title = columnDescriptions[label];
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            rows.forEach(([label, value, source, sourceSql]) => {
+                const tr = document.createElement('tr');
+                const th = document.createElement('th');
+                th.scope = 'row';
+                th.innerText = label;
+                const td = document.createElement('td');
+                appendExpandableCellContent(td, value ?? '');
+                const sourceTd = document.createElement('td');
+                sourceTd.className = 'graph-selection-source';
+                appendSourceCellContent(sourceTd, source || '', sourceSql || '');
+                tr.appendChild(th);
+                tr.appendChild(td);
+                tr.appendChild(sourceTd);
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            return table;
+        }
+
+        function appendExpandableCellContent(cell, value) {
+            const text = String(value ?? '');
+            const maxLength = 140;
+            if (text.length <= maxLength) {
+                cell.innerText = text;
+                return;
+            }
+
+            const textSpan = document.createElement('span');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-sm btn-outline-secondary graph-cell-toggle';
+            button.title = 'Expand or collapse full cell text';
+
+            let expanded = false;
+            const render = () => {
+                textSpan.innerText = expanded ? text : `${text.slice(0, maxLength)}...`;
+                button.innerText = expanded ? 'Collapse' : 'Expand';
+            };
+            button.addEventListener('click', () => {
+                expanded = !expanded;
+                render();
+            });
+
+            render();
+            cell.appendChild(textSpan);
+            cell.appendChild(document.createTextNode(' '));
+            cell.appendChild(button);
+        }
+
+        function appendSourceCellContent(cell, source, sourceSql) {
+            if (!sourceSql) {
+                appendExpandableCellContent(cell, source);
+                return;
+            }
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-link graph-source-link';
+            button.title = 'Show executable SQL for this source';
+            button.innerText = source;
+            button.addEventListener('click', () => showSourceSqlDialog(source, sourceSql));
+            cell.appendChild(button);
+        }
+
+        function setGraphRelationalDetails(value, sourcesOrIsError = {}, isError = false, selectedNode = null, sourceSqls = {}) {
+            if (typeof sourcesOrIsError === 'boolean') {
+                isError = sourcesOrIsError;
+                sourcesOrIsError = {};
+            }
+
+            const container = document.getElementById('graphRelationalDetails');
+            if (!container) {
+                return;
+            }
+
+            container.className = isError ? 'text-danger small' : '';
+            container.innerHTML = '';
+            if (typeof value === 'string') {
+                container.innerText = value;
+                return;
+            }
+
+            const rows = objectEntriesToRows(
+                value,
+                (key) => sourcesOrIsError[key] || 'kg_data',
+                (key) => sourceSqls[key] || '');
+            if (rows.length === 0) {
+                container.className = 'text-muted small';
+                container.innerText = 'No relational details found.';
+                return;
+            }
+
+            appendEntityFocusAction(container, selectedNode);
+            container.appendChild(createGraphAttributeTable(rows));
+        }
+
+        function appendEntityFocusAction(container, selectedNode) {
+            const entityName = selectedNode?.properties?.name;
+            if (!entityName || selectedNode.label === 'Document' || selectedNode.label === 'Chunk') {
+                return;
+            }
+
+            const note = document.createElement('div');
+            note.className = 'graph-selection-hint mb-2';
+            note.innerText = 'The canvas only shows relationships returned by the active Cypher query. Focus this entity to show all MENTIONS edges returned for it.';
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-sm btn-outline-primary mb-2';
+            button.innerText = 'Show linked chunks in graph';
+            button.addEventListener('click', async () => {
+                document.getElementById('queryInput').value = `MATCH (c:Chunk)-[r:MENTIONS]->(e)\nWHERE e.name = "${escapeCypherString(entityName)}"\nRETURN c, r, e\nLIMIT 200`;
+                await runQuery();
+            });
+
+            container.appendChild(note);
+            container.appendChild(button);
+        }
+
+        function escapeCypherString(value) {
+            return String(value)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"');
+        }
+
+        function objectEntriesToRows(value, sourceFactory = () => '', sourceSqlFactory = () => '') {
+            return Object.entries(value || {}).map(([key, val]) => [formatAttributeLabel(key), val, sourceFactory(key), sourceSqlFactory(key)]);
+        }
+
+        function showSourceSqlDialog(source, sql) {
+            const existing = document.getElementById('sourceSqlDialog');
+            if (existing) {
+                existing.remove();
+            }
+
+            const overlay = document.createElement('div');
+            overlay.id = 'sourceSqlDialog';
+            overlay.className = 'source-sql-overlay';
+
+            const dialog = document.createElement('div');
+            dialog.className = 'source-sql-dialog';
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-label', 'Executable source SQL');
+
+            const header = document.createElement('div');
+            header.className = 'source-sql-header';
+            const title = document.createElement('div');
+            title.className = 'source-sql-title';
+            title.innerText = source;
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'btn btn-sm btn-outline-secondary';
+            closeButton.innerText = 'Close';
+            closeButton.addEventListener('click', () => overlay.remove());
+            header.appendChild(title);
+            header.appendChild(closeButton);
+
+            const pre = document.createElement('pre');
+            pre.className = 'source-sql-code';
+            pre.innerText = sql;
+
+            dialog.appendChild(header);
+            dialog.appendChild(pre);
+            overlay.appendChild(dialog);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) {
+                    overlay.remove();
+                }
+            });
+            document.body.appendChild(overlay);
+            closeButton.focus();
+        }
+
+        function formatAttributeLabel(value) {
+            return String(value)
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, (match) => match.toUpperCase());
         }
 
         function setMessage(id, text, cssClass) {
             const el = document.getElementById(id);
             el.className = cssClass;
             el.innerText = text;
+        }
+
+        function setInlineStatus(element, text, cssClass) {
+            element.className = cssClass;
+            element.innerText = text;
+        }
+
+        function setButtonLoading(button, isLoading, loadingText) {
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+
+            button.disabled = isLoading;
+            button.innerHTML = isLoading
+                ? `<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>${escapeHtml(loadingText || 'Processing...')}`
+                : button.dataset.originalHtml;
         }
     </script>
 }

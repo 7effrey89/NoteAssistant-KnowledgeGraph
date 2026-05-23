@@ -1,17 +1,53 @@
 namespace NoteAssistant.KnowledgeGraph.Backend.Models;
 
-public sealed record ChunkDto(int Id, int ChunkIndex, string Text, float[]? Embedding = null);
+public sealed record ChunkDto(long Id, int ChunkIndex, string Text, float[]? Embedding = null);
 
-public sealed record EntityDto(string Label, string Name);
+public sealed record EntityDto(string Label, string Name, string? EmbeddingText = null, float[]? Embedding = null);
 
-public sealed record ChunkEntityLinkDto(int ChunkId, string EntityLabel, string EntityName);
+public sealed record RelationshipDto(string SourceName, string Relationship, string TargetName, double? Confidence = null);
 
-public sealed record IngestionStatusDto(int DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
+public sealed record ChunkEntityLinkDto(long ChunkId, string EntityLabel, string EntityName);
+
+public sealed record ChunkRelationshipDto(
+    long? ChunkId,
+    string SourceName,
+    string Relationship,
+    string TargetName,
+    double? Confidence = null,
+    string? Evidence = null);
+
+public sealed record GraphExtractionDto(
+    IReadOnlyList<EntityDto> Entities,
+    IReadOnlyList<RelationshipDto> Relationships);
+
+public sealed record IngestionStatusDto(long DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
+
+public sealed record DocumentMetadata(
+    string? DocumentType,
+    DateOnly? DocumentDate,
+    IReadOnlyList<string>? Tags);
+
+public sealed record BulkMetadataUpdateRequest(
+    IReadOnlyList<long> DocumentIds,
+    string? DocumentType,
+    string? DocumentDate,
+    string? Tags);
+
+public sealed record NoteAssistantMetadataFileDto(
+    string FileName,
+    string? NoteSession,
+    string? FolderCreationDate,
+    IReadOnlyList<string>? Customers,
+    IReadOnlyList<string>? Services);
+
+public sealed record NoteAssistantMetadataImportRequest(
+    IReadOnlyList<NoteAssistantMetadataFileDto> Files);
 
 public sealed record GraphIngestionPlan(
-    int DocumentId,
+    long DocumentId,
     string GraphName,
     string Title,
+    DocumentMetadata? Metadata,
     IReadOnlyList<ChunkDto> Chunks,
     IReadOnlyList<EntityDto> Entities,
     IReadOnlyList<ChunkEntityLinkDto> Mentions,
@@ -19,7 +55,9 @@ public sealed record GraphIngestionPlan(
     IngestionStatusDto Status,
     string OriginalContent = "",
     string ContentHash = "",
-    bool Cached = false);
+    bool Cached = false,
+    string DecompositionSystemPrompt = "",
+    IReadOnlyList<ChunkRelationshipDto>? Relationships = null);
 
 public sealed record GraphQueryRequest(string Cypher, string GraphName = "knowledge_graph");
 
@@ -30,9 +68,36 @@ public sealed record GraphQueryResponse(
     IReadOnlyList<GraphNodeDto> Nodes,
     IReadOnlyList<GraphEdgeDto> Edges);
 
-public sealed record GraphNodeDto(string Id, string Label, string Title);
+public sealed record GraphNodeDto(string Id, string Label, string Title, IReadOnlyDictionary<string, string?>? Properties = null);
 
 public sealed record GraphEdgeDto(string Source, string Target, string Label);
+
+public sealed record GraphNodeDetailsRequest(
+    string Id,
+    string Label,
+    string Title,
+    IReadOnlyDictionary<string, string?>? Properties = null);
+
+public sealed record GraphNodeDetailsResponse(
+    bool Success,
+    string? Error,
+    string NodeType,
+    IReadOnlyDictionary<string, string?> Attributes,
+    IReadOnlyDictionary<string, string>? AttributeSources = null,
+    IReadOnlyDictionary<string, string>? AttributeSourceSqls = null,
+    IReadOnlyList<GraphNodeChunkDto>? Chunks = null);
+
+public sealed record GraphNodeChunkDto(
+    long Id,
+    long DocumentId,
+    int ChunkIndex,
+    string Content,
+    string? DocumentTitle,
+    string? DocumentFileName,
+    string? DocumentDate,
+    string LinkReason,
+    double? Score = null,
+    double? Distance = null);
 
 public sealed record StatementExecutionDto(int Index, string StatementType, bool Success, int DurationMs, string? Error, string Statement);
 
@@ -53,9 +118,74 @@ public sealed record HybridRetrievalRequest(
     int ClarificationAttempts = 0,
     string? ClarificationResponse = null);
 
-public sealed record HybridChunkResultDto(long Id, int DocumentId, int ChunkIndex, string Content, double? Distance);
+public sealed record CommunityBuildResponse(
+    bool Success,
+    string? Error,
+    int CommunitiesBuilt,
+    int EntitiesAssigned,
+    int RelationshipsUsed,
+    HybridRetrievalTraceDto? Trace = null);
 
-public sealed record HybridRetrievalTraceStepDto(string Name, string Summary, string Detail, int? DurationMs = null);
+public sealed record GlobalGraphRagRequest(
+    string Query,
+    int Limit = 6,
+    bool IncludeTrace = false,
+    bool IncludeAnswer = true,
+    float[]? QueryEmbedding = null);
+
+public sealed record GlobalCommunityResultDto(
+    long Id,
+    string Title,
+    string Summary,
+    double? Distance,
+    int EntityCount,
+    int RelationshipCount,
+    DateOnly? StartDate = null,
+    DateOnly? EndDate = null);
+
+public sealed record TemporalDocumentDto(
+    long Id,
+    string Title,
+    DateOnly? DocumentDate,
+    string? DocumentType,
+    string? Tags);
+
+public sealed record GlobalGraphRagResponse(
+    bool Success,
+    string? Error,
+    IReadOnlyList<GlobalCommunityResultDto> Communities,
+    IReadOnlyList<TemporalDocumentDto> Timeline,
+    string PromptContext,
+    string RetrievalOrder,
+    string? Answer = null,
+    HybridRetrievalTraceDto? Trace = null);
+
+public sealed record HybridChunkResultDto(
+    long Id,
+    long DocumentId,
+    int ChunkIndex,
+    string Content,
+    double? Distance,
+    int? VectorRank = null,
+    int? KeywordRank = null,
+    double? Score = null);
+
+public sealed record HybridGraphRelationshipDto(
+    string Source,
+    string Relationship,
+    string Target,
+    long? DocumentId = null,
+    int? ChunkIndex = null,
+    string? SourceText = null);
+
+public sealed record HybridTokenUsageDto(int? PromptTokens, int? CompletionTokens);
+
+public sealed record HybridRetrievalTraceStepDto(
+    string Name,
+    string Summary,
+    string Detail,
+    int? DurationMs = null,
+    HybridTokenUsageDto? TokenUsage = null);
 
 public sealed record HybridRetrievalTraceDto(string Question, IReadOnlyList<HybridRetrievalTraceStepDto> Steps);
 
@@ -72,4 +202,6 @@ public sealed record HybridRetrievalResponse(
     HybridRetrievalTraceDto? Trace = null,
     string? ClarificationQuestion = null,
     string? RewrittenQuestion = null,
-    string? SystemPrompt = null);
+    string? SystemPrompt = null,
+    string? AnalysisSystemPrompt = null,
+    IReadOnlyList<HybridGraphRelationshipDto>? GraphRelationships = null);

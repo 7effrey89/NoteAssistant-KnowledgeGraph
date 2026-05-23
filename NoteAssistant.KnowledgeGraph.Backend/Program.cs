@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text.Json;
+using Npgsql;
+using NpgsqlTypes;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
 using NoteAssistant.KnowledgeGraph.Backend.Services;
@@ -40,9 +43,18 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("Frontend");
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapGet("/api/graph-maker-agent", (IFoundryInferenceClient foundry) => Results.Ok(new
+{
+    name = "Graph Maker Agent",
+    systemPrompt = foundry.EntityExtractionSystemPrompt
+}));
 
 static string NormalizeSchemaName(string? value)
 {
@@ -62,6 +74,155 @@ static string NormalizeSchemaName(string? value)
 
     return trimmed;
 }
+
+static string? NormalizeOptional(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    var trimmed = value.Trim();
+    return trimmed.Length == 0 ? null : trimmed;
+}
+
+static DateOnly? ParseDateOnly(string? value)
+    => DateOnly.TryParse(value, out var date) ? date : null;
+
+static IReadOnlyList<string> ParseTags(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return Array.Empty<string>();
+    }
+
+    return value
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(tag => tag.Trim())
+        .Where(tag => !string.IsNullOrWhiteSpace(tag))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
+static DocumentMetadata ParseMetadata(IFormCollection form)
+{
+    var documentType = NormalizeOptional(form["documentType"].ToString());
+    var documentDate = ParseDateOnly(form["documentDate"].ToString());
+    var tags = ParseTags(form["tags"].ToString());
+
+    return new DocumentMetadata(documentType, documentDate, tags);
+}
+
+static DocumentMetadata ParseBulkMetadata(BulkMetadataUpdateRequest request)
+{
+    var documentType = NormalizeOptional(request.DocumentType);
+    var documentDate = ParseDateOnly(request.DocumentDate);
+    var tags = ParseTags(request.Tags);
+
+    return new DocumentMetadata(documentType, documentDate, tags);
+}
+
+static bool HasMetadataValues(DocumentMetadata metadata)
+    => !string.IsNullOrWhiteSpace(metadata.DocumentType)
+       || metadata.DocumentDate.HasValue
+       || metadata.Tags is { Count: > 0 };
+
+// Used for NoteSession values — no extension stripping, just trim the raw value.
+static string NormalizeNoteAssistantSessionKey(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    return value.Trim();
+}
+
+// Used for file name fallback — strips the .json extension and the _metadata suffix.
+static string NormalizeNoteAssistantFileNameKey(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    // Take just the file name part (handles relative paths like "folder/name.json")
+    var fileName = Path.GetFileName(value.Trim());
+    var withoutExtension = Path.GetFileNameWithoutExtension(fileName);
+    if (withoutExtension.EndsWith("_metadata", StringComparison.OrdinalIgnoreCase))
+    {
+        withoutExtension = withoutExtension[..^"_metadata".Length];
+    }
+
+    return withoutExtension.Trim();
+}
+
+static JsonElement BuildNoteAssistantTags(NoteAssistantMetadataFileDto file)
+{
+    var payload = new
+    {
+        Customers = file.Customers?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>(),
+        Services = file.Services?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>()
+    };
+
+    return JsonSerializer.SerializeToElement(payload);
+}
+
+static bool HasNoteAssistantTags(JsonElement tags)
+{
+    if (tags.ValueKind != JsonValueKind.Object)
+    {
+        return false;
+    }
+
+    foreach (var property in tags.EnumerateObject())
+    {
+        if (property.Value.ValueKind == JsonValueKind.Array && property.Value.GetArrayLength() > 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static DateOnly? ParseNoteAssistantFolderDate(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    return DateTimeOffset.TryParse(value, out var parsed)
+        ? DateOnly.FromDateTime(parsed.Date)
+        : null;
+}
+
+static string ResolveContentHash(GraphIngestionPlan plan, IAnalysisCache cache)
+{
+    if (!string.IsNullOrWhiteSpace(plan.OriginalContent))
+    {
+        return cache.ComputeHash(plan.OriginalContent);
+    }
+
+    return !string.IsNullOrWhiteSpace(plan.ContentHash)
+        ? plan.ContentHash.Trim().ToLowerInvariant()
+        : cache.ComputeHash(string.Join("\n\n", plan.Chunks.Select(chunk => chunk.Text)));
+}
+
+var cacheJsonOptions = new JsonSerializerOptions
+{
+    PropertyNameCaseInsensitive = true,
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+};
 
 app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
 {
@@ -89,13 +250,15 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
         markdown = await reader.ReadToEndAsync(cancellationToken);
     }
 
+    var metadata = ParseMetadata(form);
     var contentHash = cache.ComputeHash(markdown);
     var cached = await cache.TryGetAsync(contentHash, cancellationToken);
     GraphIngestionPlan plan;
     if (cached is not null)
     {
         var title = Path.GetFileNameWithoutExtension(file.FileName);
-        var refreshed = ingestionService.RefreshSql(cached);
+        var identified = ingestionService.ApplyDocumentIdentity(cached, contentHash);
+        var refreshed = ingestionService.RefreshSql(identified with { Metadata = metadata });
         plan = refreshed with
         {
             Cached = true,
@@ -105,7 +268,7 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
                 FileName = file.FileName,
                 State = "Cached",
                 UpdatedAt = DateTimeOffset.UtcNow,
-                Message = "Loaded from local analysis cache (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
+                Message = "Loaded from local cache for document-to-entity breakdown (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
             }
         };
         store.Upsert(plan.Status);
@@ -113,13 +276,13 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
         return Results.Ok(plan);
     }
 
-    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, cancellationToken);
+    plan = await ingestionService.CreateGraphPlanAsync(file.FileName, markdown, metadata, contentHash, cancellationToken);
     var analyzed = plan.Status with
     {
         State = "Analyzed",
         Message = "Decomposition ready. Click 'Ingest' to push into PostgreSQL/AGE."
     };
-    plan = plan with { ContentHash = contentHash, Status = analyzed };
+    plan = plan with { Status = analyzed };
 
     store.Upsert(analyzed);
     store.SavePlan(plan);
@@ -128,7 +291,243 @@ app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphI
 })
 .DisableAntiforgery();
 
-app.MapPost("/api/documents/{documentId:int}/ingest", async (int documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+app.MapPost("/api/documents/upload-cache", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
+{
+    if (!request.HasFormContentType)
+    {
+        return Results.BadRequest(new { error = "Upload must use multipart/form-data." });
+    }
+
+    var form = await request.ReadFormAsync(cancellationToken);
+    var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+
+    if (file is null || file.Length == 0)
+    {
+        return Results.BadRequest(new { error = "An analysis cache JSON file is required." });
+    }
+
+    if (!file.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "Only cache analysis .json files are supported." });
+    }
+
+    GraphIngestionPlan? imported;
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        imported = await JsonSerializer.DeserializeAsync<GraphIngestionPlan>(stream, cacheJsonOptions, cancellationToken);
+    }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = $"Invalid analysis cache JSON: {ex.Message}" });
+    }
+
+    if (imported is null)
+    {
+        return Results.BadRequest(new { error = "Analysis cache JSON was empty or could not be read." });
+    }
+
+    if (imported.DocumentId <= 0 || imported.Chunks.Count == 0)
+    {
+        return Results.BadRequest(new { error = "Analysis cache JSON must contain a documentId and at least one chunk." });
+    }
+
+    var contentHash = ResolveContentHash(imported, cache);
+    var identified = ingestionService.ApplyDocumentIdentity(imported, contentHash);
+
+    var metadata = ParseMetadata(form);
+    var metadataToUse = HasMetadataValues(metadata) ? metadata : identified.Metadata;
+    var fileName = string.IsNullOrWhiteSpace(identified.Status.FileName)
+        ? Path.ChangeExtension(file.FileName, ".md")
+        : identified.Status.FileName;
+
+    var refreshed = ingestionService.RefreshSql(identified with { Metadata = metadataToUse });
+    var status = refreshed.Status with
+    {
+        FileName = fileName,
+        State = "Cached",
+        UpdatedAt = DateTimeOffset.UtcNow,
+        Message = "Loaded from uploaded analysis cache JSON (no Foundry call). Click 'Ingest' to push into PostgreSQL/AGE."
+    };
+    var plan = refreshed with
+    {
+        Cached = true,
+        Metadata = metadataToUse,
+        Status = status
+    };
+
+    store.Upsert(status);
+    store.SavePlan(plan);
+    return Results.Ok(plan);
+})
+.DisableAntiforgery();
+
+app.MapPost("/api/documents/metadata", (BulkMetadataUpdateRequest request, IMarkdownGraphIngestionService ingestionService, IngestionStore store) =>
+{
+    if (request.DocumentIds is null || request.DocumentIds.Count == 0)
+    {
+        return Results.BadRequest(new { error = "At least one documentId is required." });
+    }
+
+    var metadata = ParseBulkMetadata(request);
+    if (!HasMetadataValues(metadata))
+    {
+        return Results.BadRequest(new { error = "At least one metadata field is required." });
+    }
+
+    var updated = new List<GraphIngestionPlan>();
+    var missing = new List<long>();
+    foreach (var documentId in request.DocumentIds.Distinct())
+    {
+        var plan = store.GetPlan(documentId);
+        if (plan is null)
+        {
+            missing.Add(documentId);
+            continue;
+        }
+
+        var refreshed = ingestionService.RefreshSql(plan with { Metadata = metadata });
+        var status = refreshed.Status with
+        {
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Message = "Metadata updated. Click 'Ingest' to push into PostgreSQL/AGE."
+        };
+        var updatedPlan = refreshed with { Metadata = metadata, Status = status };
+        store.Upsert(status);
+        store.SavePlan(updatedPlan);
+        updated.Add(updatedPlan);
+    }
+
+    if (updated.Count == 0)
+    {
+        return Results.NotFound(new { error = "No uploaded plans were found for the provided documentIds.", missing });
+    }
+
+    return Results.Ok(new { updated, missing });
+});
+
+app.MapPost("/api/noteassistant/import-metadata", async (NoteAssistantMetadataImportRequest request, IAgeDatabaseConnectionFactory connectionFactory, IOptions<DatabaseOptions> databaseOptions, CancellationToken cancellationToken) =>
+{
+    if (request.Files is null || request.Files.Count == 0)
+    {
+        return Results.BadRequest(new { error = "At least one metadata file is required." });
+    }
+
+    if (!connectionFactory.IsConfigured)
+    {
+        return Results.BadRequest(new { error = "ConnectionStrings:AgeDatabase is not configured." });
+    }
+
+    var schemaName = NormalizeSchemaName(databaseOptions.Value.SchemaName);
+    var results = new List<object>();
+    var updatedFileCount = 0;
+    var notFoundFileCount = 0;
+    await using var connection = await connectionFactory.OpenAsync(cancellationToken);
+
+    const string sql = """
+WITH matches AS (
+    SELECT id,
+           title,
+           file_name,
+           document_type,
+           document_date,
+           tags
+    FROM kg_data.documents
+    WHERE lower(regexp_replace(title, '_[^_]*$', '')) = lower(@matchKey)
+),
+updated AS (
+    UPDATE kg_data.documents AS documents
+    SET document_type = COALESCE(documents.document_type, @documentType),
+        document_date = COALESCE(documents.document_date, @documentDate),
+        tags = COALESCE(documents.tags, CAST(@tagsJson AS jsonb))
+    FROM matches
+    WHERE documents.id = matches.id
+    RETURNING documents.id,
+              documents.title,
+              documents.file_name,
+              matches.document_type IS NULL AS updated_document_type,
+              matches.document_date IS NULL AS updated_document_date,
+              matches.tags IS NULL AS updated_tags
+)
+SELECT json_build_object(
+    'matchedCount', (SELECT COUNT(*) FROM matches),
+    'updatedCount', (SELECT COUNT(*) FROM updated),
+    'updatedRows', COALESCE((SELECT json_agg(updated) FROM updated), '[]'::json),
+    'matchedRows', COALESCE((SELECT json_agg(matches) FROM matches), '[]'::json)
+);
+""";
+
+    await using var command = new NpgsqlCommand(sql.Replace("kg_data", schemaName), connection);
+
+    foreach (var file in request.Files)
+    {
+        var matchKey = NormalizeNoteAssistantSessionKey(file.NoteSession);
+        if (string.IsNullOrWhiteSpace(matchKey))
+        {
+            matchKey = NormalizeNoteAssistantFileNameKey(file.FileName);
+        }
+
+        var documentDate = ParseNoteAssistantFolderDate(file.FolderCreationDate);
+        var tags = BuildNoteAssistantTags(file);
+
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("matchKey", NpgsqlDbType.Text, matchKey);
+        command.Parameters.AddWithValue("documentType", NpgsqlDbType.Text, "meeting_summary");
+        var documentDateParameter = command.Parameters.Add("documentDate", NpgsqlDbType.Date);
+        documentDateParameter.Value = documentDate.HasValue ? documentDate.Value.ToDateTime(TimeOnly.MinValue) : DBNull.Value;
+        command.Parameters.AddWithValue("tagsJson", NpgsqlDbType.Jsonb, tags.GetRawText());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        object? payload = null;
+        if (await reader.ReadAsync(cancellationToken) && !reader.IsDBNull(0))
+        {
+            payload = JsonSerializer.Deserialize<JsonElement>(reader.GetString(0));
+        }
+        await reader.CloseAsync();
+
+        var summary = payload is JsonElement json
+            ? json
+            : JsonSerializer.SerializeToElement(new { matchedCount = 0, updatedCount = 0, updatedRows = Array.Empty<object>(), matchedRows = Array.Empty<object>() });
+
+        var matchedCount = summary.TryGetProperty("matchedCount", out var matchedValue) ? matchedValue.GetInt32() : 0;
+        var updatedCount = summary.TryGetProperty("updatedCount", out var updatedValue) ? updatedValue.GetInt32() : 0;
+
+        var status = matchedCount == 0 ? "not-found" : updatedCount == 0 ? "already-populated" : "updated";
+        if (status == "updated")
+        {
+            updatedFileCount++;
+        }
+        else if (status == "not-found")
+        {
+            notFoundFileCount++;
+        }
+
+        results.Add(new
+        {
+            fileName = file.FileName,
+            noteSession = file.NoteSession,
+            matchKey,
+            documentType = "meeting_summary",
+            documentDate = documentDate?.ToString("yyyy-MM-dd"),
+            tags,
+            hasTags = HasNoteAssistantTags(tags),
+            matchedCount,
+            updatedCount,
+            detail = summary,
+            status
+        });
+    }
+
+    return Results.Ok(new
+    {
+        processed = results.Count,
+        updated = updatedFileCount,
+        notFound = notFoundFileCount,
+        results
+    });
+});
+
+app.MapPost("/api/documents/{documentId:long}/ingest", async (long documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -168,7 +567,7 @@ app.MapPost("/api/documents/{documentId:int}/ingest", async (int documentId, Ing
     return execution.Success ? Results.Ok(ingestedPlan) : Results.Problem(updated.Message, statusCode: StatusCodes.Status500InternalServerError);
 });
 
-app.MapGet("/api/documents/{documentId:int}/ingest/preview", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/ingest/preview", (long documentId, IngestionStore store) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -186,7 +585,7 @@ app.MapGet("/api/documents/{documentId:int}/ingest/preview", (int documentId, In
     return Results.Ok(new { relationalStatements = relational, graphStatements = graph });
 });
 
-app.MapGet("/api/documents/{documentId:int}/ingest/log", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/ingest/log", (long documentId, IngestionStore store) =>
 {
     var log = store.GetExecutionLog(documentId);
     return log is null
@@ -194,7 +593,7 @@ app.MapGet("/api/documents/{documentId:int}/ingest/log", (int documentId, Ingest
         : Results.Ok(log);
 });
 
-app.MapPost("/api/documents/{documentId:int}/graph", async (int documentId, IngestionStore store, AgeGraphRepository repository, IOptions<DatabaseOptions> options, CancellationToken cancellationToken) =>
+app.MapPost("/api/documents/{documentId:long}/graph", async (long documentId, IngestionStore store, AgeGraphRepository repository, IOptions<DatabaseOptions> options, CancellationToken cancellationToken) =>
 {
     var plan = store.GetPlan(documentId);
     if (plan is null)
@@ -228,7 +627,7 @@ app.MapPost("/api/documents/{documentId:int}/graph", async (int documentId, Inge
     return execution.Success ? Results.Ok(updatedPlan) : Results.Problem(updated.Message, statusCode: StatusCodes.Status500InternalServerError);
 });
 
-app.MapGet("/api/documents/{documentId:int}/status", (int documentId, IngestionStore store) =>
+app.MapGet("/api/documents/{documentId:long}/status", (long documentId, IngestionStore store) =>
 {
     var status = store.Get(documentId);
     return status is null
@@ -239,6 +638,12 @@ app.MapGet("/api/documents/{documentId:int}/status", (int documentId, IngestionS
 app.MapPost("/api/query", async (GraphQueryRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
     var response = await repository.ExecuteSelectQueryAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/graph/node/details", async (GraphNodeDetailsRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetNodeDetailsAsync(request, cancellationToken);
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
@@ -256,6 +661,139 @@ app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeG
 {
     var response = await repository.ExecuteHybridRetrievalAsync(request, cancellationToken);
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/communities/build", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.BuildCommunitiesAsync(includeTrace: true, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/retrieval/global", async (GlobalGraphRagRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.ExecuteGlobalGraphRagAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory connectionFactory, CancellationToken cancellationToken) =>
+{
+    if (!connectionFactory.IsConfigured)
+    {
+        return Results.Problem("Database settings are not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var lookbackDays = Math.Clamp(days ?? 30, 1, 365);
+    await using var connection = await connectionFactory.OpenAsync(cancellationToken);
+    await EnsureTokenUsageTableAsync(connection, cancellationToken);
+
+    var since = DateTimeOffset.UtcNow.AddDays(-lookbackDays);
+    const string summarySql = """
+                              SELECT COUNT(*)::bigint AS calls,
+                                     COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                                     COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                                     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
+                              FROM "global".llm_token_usage
+                              WHERE occurred_at >= @since;
+                              """;
+    await using var summaryCommand = new NpgsqlCommand(summarySql, connection);
+    summaryCommand.Parameters.AddWithValue("since", since);
+    await using var summaryReader = await summaryCommand.ExecuteReaderAsync(cancellationToken);
+    await summaryReader.ReadAsync(cancellationToken);
+    var summary = new
+    {
+        calls = summaryReader.GetInt64(0),
+        promptTokens = summaryReader.GetInt64(1),
+        completionTokens = summaryReader.GetInt64(2),
+        totalTokens = summaryReader.GetInt64(3)
+    };
+    await summaryReader.CloseAsync();
+
+    const string byAgentSql = """
+                              SELECT agent,
+                                     operation,
+                                     COUNT(*)::bigint AS calls,
+                                     COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                                     COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                                     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+                                     MAX(occurred_at) AS last_seen
+                              FROM "global".llm_token_usage
+                              WHERE occurred_at >= @since
+                              GROUP BY agent, operation
+                              ORDER BY total_tokens DESC, calls DESC, agent, operation;
+                              """;
+    var byAgent = new List<object>();
+    await using (var command = new NpgsqlCommand(byAgentSql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            byAgent.Add(new
+            {
+                agent = reader.GetString(0),
+                operation = reader.GetString(1),
+                calls = reader.GetInt64(2),
+                promptTokens = reader.GetInt64(3),
+                completionTokens = reader.GetInt64(4),
+                totalTokens = reader.GetInt64(5),
+                lastSeen = reader.GetDateTime(6)
+            });
+        }
+    }
+
+    const string dailySql = """
+                            SELECT date_trunc('day', occurred_at) AS day,
+                                   COUNT(*)::bigint AS calls,
+                                   COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
+                            FROM "global".llm_token_usage
+                            WHERE occurred_at >= @since
+                            GROUP BY day
+                            ORDER BY day;
+                            """;
+    var daily = new List<object>();
+    await using (var command = new NpgsqlCommand(dailySql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            daily.Add(new
+            {
+                day = reader.GetDateTime(0),
+                calls = reader.GetInt64(1),
+                totalTokens = reader.GetInt64(2)
+            });
+        }
+    }
+
+    const string recentSql = """
+                             SELECT occurred_at, agent, operation, model_deployment, prompt_tokens, completion_tokens, total_tokens
+                             FROM "global".llm_token_usage
+                             WHERE occurred_at >= @since
+                             ORDER BY occurred_at DESC
+                             LIMIT 100;
+                             """;
+    var recent = new List<object>();
+    await using (var command = new NpgsqlCommand(recentSql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            recent.Add(new
+            {
+                occurredAt = reader.GetDateTime(0),
+                agent = reader.GetString(1),
+                operation = reader.GetString(2),
+                modelDeployment = reader.IsDBNull(3) ? null : reader.GetString(3),
+                promptTokens = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                completionTokens = reader.IsDBNull(5) ? 0 : reader.GetInt32(5),
+                totalTokens = reader.IsDBNull(6) ? 0 : reader.GetInt32(6)
+            });
+        }
+    }
+
+    return Results.Ok(new { days = lookbackDays, summary, byAgent, daily, recent });
 });
 
 app.MapGet("/api/health/foundry", async (IFoundryInferenceClient foundry, CancellationToken cancellationToken) =>
@@ -583,6 +1121,27 @@ app.MapGet("/api/deployment", () =>
         notes = "Run docker compose up in the backend project to provision PostgreSQL + Apache AGE."
     });
 });
+
+static async Task EnsureTokenUsageTableAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+{
+    const string sql = """
+                       CREATE SCHEMA IF NOT EXISTS "global";
+                       CREATE TABLE IF NOT EXISTS "global".llm_token_usage (
+                           id BIGSERIAL PRIMARY KEY,
+                           occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                           agent TEXT NOT NULL,
+                           operation TEXT NOT NULL,
+                           model_deployment TEXT NULL,
+                           prompt_tokens INTEGER NULL,
+                           completion_tokens INTEGER NULL,
+                           total_tokens INTEGER NULL
+                       );
+                       CREATE INDEX IF NOT EXISTS idx_llm_token_usage_occurred_at ON "global".llm_token_usage(occurred_at);
+                       CREATE INDEX IF NOT EXISTS idx_llm_token_usage_agent ON "global".llm_token_usage(agent);
+                       """;
+    await using var command = new NpgsqlCommand(sql, connection);
+    await command.ExecuteNonQueryAsync(cancellationToken);
+}
 
 app.Run();
 

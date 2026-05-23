@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -13,6 +14,11 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Tests;
 public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Program>>
 {
     private readonly WebApplicationFactory<Program> _factory;
+    private readonly FakeFoundryInferenceClient _foundry = new()
+    {
+        IsConfigured = true,
+        Embeddings = [new float[1536]]
+    };
 
     public ApiEndpointTests(WebApplicationFactory<Program> factory)
     {
@@ -39,11 +45,7 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
                     services.Remove(descriptor);
                 }
 
-                services.AddSingleton<IFoundryInferenceClient>(new FakeFoundryInferenceClient
-                {
-                    IsConfigured = true,
-                    Embeddings = [new float[1536]]
-                });
+                services.AddSingleton<IFoundryInferenceClient>(_foundry);
 
                 services.AddSingleton<IAgeDatabaseConnectionFactory>(new StubAgeDatabaseConnectionFactory
                 {
@@ -177,6 +179,40 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
     }
 
     [Fact]
+    public async Task BulkMetadata_UpdatesSelectedUploadedPlans()
+    {
+        var client = _factory.CreateClient();
+        using var firstUpload = await client.PostAsync("/api/documents/upload-cache", BuildCacheUploadContent(9001, "first-cache"));
+        using var secondUpload = await client.PostAsync("/api/documents/upload-cache", BuildCacheUploadContent(9002, "second-cache"));
+        var first = await firstUpload.Content.ReadFromJsonAsync<GraphIngestionPlan>();
+        var second = await secondUpload.Content.ReadFromJsonAsync<GraphIngestionPlan>();
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+
+        var request = new BulkMetadataUpdateRequest(
+            [first!.DocumentId],
+            "meeting_summary",
+            "2026-05-22",
+            "bulk, selected");
+        using var response = await client.PostAsJsonAsync("/api/documents/metadata", request);
+        var payload = await response.Content.ReadFromJsonAsync<BulkMetadataUpdateResponseShape>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        var updated = Assert.Single(payload!.Updated);
+        Assert.Equal(first.DocumentId, updated.DocumentId);
+        Assert.Equal("meeting_summary", updated.Metadata?.DocumentType);
+        Assert.Equal(new DateOnly(2026, 5, 22), updated.Metadata?.DocumentDate);
+        Assert.Contains("bulk", updated.Metadata?.Tags ?? []);
+        Assert.Contains(updated.SqlStatements, stmt => stmt.Contains("meeting_summary", StringComparison.OrdinalIgnoreCase));
+
+        using var secondIngest = await client.PostAsync($"/api/documents/{second!.DocumentId}/ingest", null);
+        var unchanged = await secondIngest.Content.ReadFromJsonAsync<GraphIngestionPlan>();
+        Assert.NotNull(unchanged);
+        Assert.NotEqual("meeting_summary", unchanged!.Metadata?.DocumentType);
+    }
+
+    [Fact]
     public async Task Upload_ReturnsBadRequest_WhenFileMissing()
     {
         var client = _factory.CreateClient();
@@ -201,6 +237,47 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
         using var response = await client.PostAsync("/api/documents/upload", content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UploadCache_LoadsPlanWithoutCallingFoundry()
+    {
+        var client = _factory.CreateClient();
+        var plan = new GraphIngestionPlan(
+            12345,
+            "knowledge_graph",
+            "cached-summary",
+            new DocumentMetadata("meeting_summary", DateOnly.FromDateTime(DateTime.Today), ["cache"]),
+            [new ChunkDto(12345001, 1, "Cached chunk mentions Azure.")],
+            [new EntityDto("Platform", "Azure")],
+            [new ChunkEntityLinkDto(12345001, "Platform", "Azure")],
+            [],
+            new IngestionStatusDto(12345, "cached-summary.md", "Analyzed", DateTimeOffset.UtcNow, "Cached analysis."),
+            "# Cached summary\n\nCached chunk mentions Azure.",
+            "abc123",
+            false,
+            "cached prompt");
+
+        var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        var content = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(json));
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        content.Add(fileContent, "file", "cached-summary.json");
+
+        using var response = await client.PostAsync("/api/documents/upload-cache", content);
+        var payload = await response.Content.ReadFromJsonAsync<GraphIngestionPlan>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.True(payload!.Cached);
+        Assert.Equal("Cached", payload.Status.State);
+        Assert.NotEqual(12345, payload.DocumentId);
+        Assert.Equal(payload.DocumentId, payload.Status.DocumentId);
+        Assert.All(payload.Mentions, mention => Assert.Contains(payload.Chunks, chunk => chunk.Id == mention.ChunkId));
+        Assert.Contains("no Foundry call", payload.Status.Message);
+        Assert.NotEmpty(payload.SqlStatements);
+        Assert.Equal(0, _foundry.CreateEmbeddingsCallCount);
+        Assert.Equal(0, _foundry.ExtractEntitiesCallCount);
     }
 
     [Fact]
@@ -240,6 +317,33 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
         };
         return content;
     }
+
+    private static MultipartFormDataContent BuildCacheUploadContent(int documentId, string title)
+    {
+        var plan = new GraphIngestionPlan(
+            documentId,
+            "knowledge_graph",
+            title,
+            new DocumentMetadata("initial", null, [title]),
+            [new ChunkDto(documentId * 1000 + 1, 1, $"{title} chunk mentions Azure.")],
+            [new EntityDto("Platform", "Azure")],
+            [new ChunkEntityLinkDto(documentId * 1000 + 1, "Platform", "Azure")],
+            [],
+            new IngestionStatusDto(documentId, $"{title}.md", "Analyzed", DateTimeOffset.UtcNow, "Cached analysis."),
+            $"# {title}\n\n{title} chunk mentions Azure.",
+            $"hash-{documentId}",
+            false,
+            "cached prompt");
+
+        var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        var content = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(json));
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        content.Add(fileContent, "file", $"{title}.json");
+        return content;
+    }
+
+    private sealed record BulkMetadataUpdateResponseShape(IReadOnlyList<GraphIngestionPlan> Updated, IReadOnlyList<long> Missing);
 
     [Fact]
     public async Task AssistQuery_ReturnsSuggestion()

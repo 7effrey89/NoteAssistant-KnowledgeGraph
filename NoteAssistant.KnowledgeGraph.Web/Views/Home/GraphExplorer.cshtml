@@ -1,0 +1,156 @@
+@using System.Text.Json
+@{
+    ViewData["Title"] = "Graph Explorer";
+    var backendBaseUrl = (string?)ViewData["BackendBaseUrl"] ?? "https://localhost:7228";
+    var encodedBackendBaseUrl = JsonSerializer.Serialize(backendBaseUrl.TrimEnd('/'));
+}
+
+<div class="kg-explorer">
+    <header class="kg-explorer-header">
+        <div>
+            <div class="kg-eyebrow">Sigma.js property graph</div>
+            <h1>Knowledge Graph Explorer</h1>
+        </div>
+        <div class="kg-header-actions">
+            <span class="kg-status-pill" id="kgBackendStatus">Checking backend</span>
+            <span class="kg-status-pill" id="kgGraphStatus">Graph status unknown</span>
+        </div>
+    </header>
+
+    <div class="kg-explorer-layout">
+        <aside class="kg-explorer-sidebar" aria-label="Graph explorer controls">
+            <section class="kg-control-section">
+                <div class="kg-section-title">Query</div>
+                <label class="form-label" for="kgGraphNameInput">Graph name</label>
+                <input class="form-control form-control-sm mb-2" id="kgGraphNameInput" value="knowledge_graph" />
+                <label class="form-label" for="kgQueryInput">Cypher</label>
+                <textarea class="form-control kg-query-input" id="kgQueryInput" spellcheck="false">MATCH p=(n)-[r]->(m)
+RETURN n, r, m
+LIMIT 150</textarea>
+                <div class="kg-button-grid mt-2">
+                    <button class="btn btn-success btn-sm" id="kgRunQueryBtn" type="button">Run query</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="kgLoadSampleBtn" type="button">Sample</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="kgExportBtn" type="button" disabled>Export JSON</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="kgRefreshStatusBtn" type="button">Refresh</button>
+                </div>
+                <div class="kg-query-message" id="kgQueryMessage"></div>
+            </section>
+
+            <section class="kg-control-section">
+                <div class="kg-section-title">Explore</div>
+                <label class="form-label" for="kgSearchInput">Search nodes</label>
+                <input class="form-control form-control-sm mb-2" id="kgSearchInput" placeholder="Name, label, property" />
+                <div class="kg-control-grid">
+                    <div>
+                        <div class="form-label" id="kgNodeTypeFilterLabel">Node label</div>
+                        <details class="kg-checkbox-dropdown" id="kgNodeTypeFilter">
+                            <summary id="kgNodeTypeFilterSummary" aria-labelledby="kgNodeTypeFilterLabel kgNodeTypeFilterSummary">All</summary>
+                            <div class="kg-checkbox-dropdown-menu" id="kgNodeTypeFilterList" role="group" aria-labelledby="kgNodeTypeFilterLabel"></div>
+                        </details>
+                    </div>
+                    <div>
+                        <div class="form-label" id="kgEdgeTypeFilterLabel">Relationship</div>
+                        <details class="kg-checkbox-dropdown" id="kgEdgeTypeFilter">
+                            <summary id="kgEdgeTypeFilterSummary" aria-labelledby="kgEdgeTypeFilterLabel kgEdgeTypeFilterSummary">All</summary>
+                            <div class="kg-checkbox-dropdown-menu" id="kgEdgeTypeFilterList" role="group" aria-labelledby="kgEdgeTypeFilterLabel"></div>
+                        </details>
+                    </div>
+                    <div>
+                        <label class="form-label" for="kgMinDegreeInput">Min degree</label>
+                        <input class="form-control form-control-sm" id="kgMinDegreeInput" type="number" min="0" step="1" value="0" />
+                    </div>
+                    <div>
+                        <label class="form-label" for="kgSizeModeSelect">Node size</label>
+                        <select class="form-select form-select-sm" id="kgSizeModeSelect">
+                            <option value="degree" selected>Degree</option>
+                            <option value="uniform">Uniform</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="kg-switches">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgLabelsToggle" checked />
+                        <label class="form-check-label" for="kgLabelsToggle">Node labels</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgNodeNamesInsideToggle" />
+                        <label class="form-check-label" for="kgNodeNamesInsideToggle">Names inside nodes</label>
+                    </div>
+                    <div>
+                        <label class="form-label" for="kgLabelDensitySlider">Label density</label>
+                        <input class="form-range" id="kgLabelDensitySlider" type="range" min="0" max="100" value="50" title="0=more abbreviated, 100=full text" />
+                        <small class="text-muted d-block">0: abbreviated | 50: balanced | 100: full</small>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgEdgeLabelsToggle" checked />
+                        <label class="form-check-label" for="kgEdgeLabelsToggle">Edge labels</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgCurvedEdgesToggle" checked />
+                        <label class="form-check-label" for="kgCurvedEdgesToggle">Curved edges</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgNeighborToggle" checked />
+                        <label class="form-check-label" for="kgNeighborToggle">Highlight neighborhood</label>
+                    </div>
+                </div>
+                <div class="kg-search-results" id="kgSearchResults">Run a query to search graph nodes.</div>
+            </section>
+
+            <section class="kg-control-section">
+                <div class="kg-section-title">Layout Algorithms</div>
+                <div class="kg-layout-group-title">Regular Layouts (One-time)</div>
+                <div class="kg-layout-stack kg-layout-buttons">
+                    <button class="kg-layout-choice active" data-kg-layout="random" type="button"><strong>Random</strong><span>Random node positioning</span></button>
+                    <button class="kg-layout-choice" data-kg-layout="circular" type="button"><strong>Circular</strong><span>Nodes arranged in a circle</span></button>
+                    <button class="kg-layout-choice" data-kg-layout="circlepack" type="button"><strong>Circle Pack</strong><span>Hierarchical circle packing</span></button>
+                </div>
+                <div class="kg-layout-group-title kg-layout-group-title-spaced">Worker Layouts (Continuous)</div>
+                <div class="kg-layout-stack kg-layout-buttons">
+                    <button class="kg-layout-choice" data-kg-worker-layout="force" type="button"><strong>Force</strong><span>Force-directed layout (worker)</span></button>
+                    <button class="kg-layout-choice" data-kg-worker-layout="forceatlas2" type="button"><strong>ForceAtlas2</strong><span>Advanced force-directed (worker)</span></button>
+                    <button class="kg-layout-choice" data-kg-worker-layout="noverlap" type="button"><strong>No Overlap</strong><span>Prevents node overlap (worker)</span></button>
+                </div>
+                <div class="kg-layout-status" id="kgLayoutStatus">
+                    <span id="kgLayoutStatusText"><strong>Current:</strong> none</span>
+                    <button class="kg-worker-toggle" id="kgWorkerLayoutToggleBtn" type="button" disabled>Start</button>
+                </div>
+            </section>
+        </aside>
+
+        <main class="kg-canvas-panel" aria-label="Sigma graph explorer">
+            <div class="kg-toolbar">
+                <div class="kg-stat-strip" id="kgStats"><span>0 nodes</span><span>0 edges</span><span>0 visible</span></div>
+                <div class="kg-legend" id="kgLegend"></div>
+            </div>
+            <div class="kg-sigma-frame">
+                <div id="kgSigmaContainer" class="kg-sigma-container" role="application" aria-label="Interactive knowledge graph"></div>
+                <div class="kg-canvas-history" aria-label="Graph interaction history">
+                    <button class="kg-canvas-control" id="kgHistoryBackBtn" type="button" title="Back" aria-label="Back" disabled>&larr;</button>
+                    <button class="kg-canvas-control" id="kgHistoryForwardBtn" type="button" title="Forward" aria-label="Forward" disabled>&rarr;</button>
+                </div>
+                <div class="kg-canvas-camera" aria-label="Graph camera controls">
+                    <button class="kg-canvas-control" id="kgCanvasFitBtn" type="button" title="Fit all" aria-label="Fit all">[]</button>
+                    <button class="kg-canvas-control" id="kgCanvasZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+                    <div class="kg-camera-rail" aria-hidden="true"><span></span></div>
+                    <button class="kg-canvas-control" id="kgCanvasZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+                    <button class="kg-canvas-control" id="kgCanvasCenterBtn" type="button" title="Center selected" aria-label="Center selected">o</button>
+                </div>
+                <div class="kg-empty-state" id="kgEmptyState">Run a Cypher query to render an interactive Sigma graph.</div>
+            </div>
+        </main>
+
+        <div class="kg-inspector-resize-handle" id="kgInspectorResizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize inspector panel" tabindex="0" title="Drag to resize inspector"></div>
+        <aside class="kg-inspector" id="kgInspectorPanel" aria-label="Selected graph element details">
+            <div class="kg-section-title">Inspector</div>
+            <div id="kgInspectorContent" class="kg-inspector-empty">Select a node or relationship in the graph.</div>
+        </aside>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        window.noteAssistantGraphExplorer = { backendBaseUrl: @Html.Raw(encodedBackendBaseUrl) };
+    </script>
+    <script type="module" src="~/js/graph-explorer.js" asp-append-version="true"></script>
+}

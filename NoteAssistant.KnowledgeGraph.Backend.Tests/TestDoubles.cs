@@ -9,12 +9,15 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
     public bool IsConfigured { get; init; } = true;
     public IReadOnlyList<float[]> Embeddings { get; init; } = Array.Empty<float[]>();
     public IReadOnlyList<EntityDto> Entities { get; init; } = Array.Empty<EntityDto>();
+    public int CreateEmbeddingsCallCount { get; private set; }
+    public int ExtractEntitiesCallCount { get; private set; }
 
     public Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken)
         => Task.FromResult(Embeddings.FirstOrDefault() ?? new float[1536]);
 
     public Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken)
     {
+        CreateEmbeddingsCallCount++;
         if (Embeddings.Count == inputs.Count)
         {
             return Task.FromResult(Embeddings);
@@ -25,7 +28,33 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
     }
 
     public Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken)
-        => Task.FromResult(Entities);
+    {
+        ExtractEntitiesCallCount++;
+        return Task.FromResult(Entities);
+    }
+
+    public Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken)
+    {
+        ExtractEntitiesCallCount++;
+        return Task.FromResult(new GraphExtractionDto(Entities, Array.Empty<RelationshipDto>()));
+    }
+
+    public string AnswerSystemPrompt => "test-answer-system-prompt";
+
+    public string AnalysisSystemPrompt => "test-analysis-system-prompt";
+
+    public string EntityExtractionSystemPrompt => "test-entity-extraction-system-prompt";
+
+    public Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken, string agentName = "Answer Agent")
+        => Task.FromResult(new AnswerResult("(fake answer)", null));
+
+    public Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken)
+        => Task.FromResult(new QuestionAnalysisResult(
+            Array.Empty<string>(),
+            null,
+            question,
+            AnalysisSystemPrompt,
+            $"Question: {question}"));
 }
 
 public sealed class StubAgeDatabaseConnectionFactory : IAgeDatabaseConnectionFactory
