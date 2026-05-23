@@ -33,4 +33,14 @@ public sealed class LeidenCommunityDetectorTests
         Assert.Equal(3, communities.Count);
         Assert.All(entities, id => Assert.Contains(communities, c => c.SetEquals([id])));
     }
+
+    [Fact]
+    public void DetectCommunities_ThrowsWhenEntityIdsContainDuplicates()
+    {
+        var entities = new List<long> { 1, 1, 2 };
+
+        var exception = Assert.Throws<ArgumentException>(() => LeidenCommunityDetector.DetectCommunities(entities, []));
+
+        Assert.Contains("unique", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

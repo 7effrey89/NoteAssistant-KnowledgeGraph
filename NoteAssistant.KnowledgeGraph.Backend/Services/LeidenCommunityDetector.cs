@@ -2,9 +2,17 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public static class LeidenCommunityDetector
 {
+    private const int DefaultMaxLocalMoveIterations = 12;
+    private const double ModularityGainTolerance = 1e-9;
+
     public static List<HashSet<long>> DetectCommunities(IReadOnlyList<long> entityIds, IReadOnlyList<(long SourceId, long TargetId)> relationships)
     {
-        var nodes = entityIds.Distinct().OrderBy(id => id).ToList();
+        var nodes = entityIds.OrderBy(id => id).ToList();
+        if (nodes.Count != nodes.Distinct().Count())
+        {
+            throw new ArgumentException("Entity IDs must be unique.", nameof(entityIds));
+        }
+
         if (nodes.Count == 0)
         {
             return [];
@@ -33,10 +41,7 @@ public static class LeidenCommunityDetector
         var communityByNode = nodes.ToDictionary(node => node, node => node);
         var communityDegree = nodeDegree.ToDictionary(pair => pair.Key, pair => pair.Value);
 
-        const int maxIterations = 12;
-        const double gainEpsilon = 1e-9;
-
-        for (var iteration = 0; iteration < maxIterations; iteration++)
+        for (var iteration = 0; iteration < DefaultMaxLocalMoveIterations; iteration++)
         {
             var moved = false;
             foreach (var node in nodes)
@@ -62,8 +67,8 @@ public static class LeidenCommunityDetector
                 foreach (var (candidateCommunity, candidateWeight) in weightToCommunity)
                 {
                     var gain = candidateWeight - (currentDegree * communityDegree[candidateCommunity] / totalEdgeWeightTimesTwo);
-                    if (gain > bestGain + gainEpsilon ||
-                        (Math.Abs(gain - bestGain) <= gainEpsilon && candidateCommunity < bestCommunity))
+                    if (gain > bestGain + ModularityGainTolerance ||
+                        (Math.Abs(gain - bestGain) <= ModularityGainTolerance && candidateCommunity < bestCommunity))
                     {
                         bestGain = gain;
                         bestCommunity = candidateCommunity;
@@ -100,7 +105,7 @@ public static class LeidenCommunityDetector
             var pending = new HashSet<long>(community);
             while (pending.Count > 0)
             {
-                var seed = pending.Min();
+                var seed = pending.First();
                 var component = new HashSet<long>();
                 var stack = new Stack<long>();
                 stack.Push(seed);
