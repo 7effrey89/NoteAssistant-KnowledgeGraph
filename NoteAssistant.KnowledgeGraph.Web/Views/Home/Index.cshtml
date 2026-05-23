@@ -1558,8 +1558,8 @@
                 renderProcessMap([], false);
             }
 
-            runHybridBtn.disabled = true;
-            hybridStatus.innerText = 'Processing retrieval...';
+            setButtonLoading(runHybridBtn, true, 'Running...');
+            setInlineStatus(hybridStatus, 'Processing retrieval...', 'text-muted');
 
             const response = await fetch(`${backendBaseUrl}/api/retrieval/hybrid`, {
                 method: 'POST',
@@ -1580,8 +1580,8 @@
             if (!response.ok) {
                 document.getElementById('hybridError').innerText = payload.error || 'Hybrid retrieval failed.';
                 appendProcessMap([{ title: 'Retrieval failed', body: payload.error || 'Hybrid retrieval failed.' }]);
-                hybridStatus.innerText = 'Retrieval failed.';
-                runHybridBtn.disabled = false;
+                setInlineStatus(hybridStatus, 'Retrieval failed.', 'text-danger');
+                setButtonLoading(runHybridBtn, false);
                 return;
             }
 
@@ -1649,8 +1649,8 @@
                     baseQuestion: payload.rewrittenQuestion || question
                 });
                 appendProcessMap(mapItems);
-                hybridStatus.innerText = 'Clarification required.';
-                runHybridBtn.disabled = false;
+                setInlineStatus(hybridStatus, 'Clarification required.', 'text-warning');
+                setButtonLoading(runHybridBtn, false);
                 return;
             }
 
@@ -1817,10 +1817,10 @@
 
             appendProcessMap(mapItems);
 
-            hybridStatus.innerText = 'Retrieval complete.';
+            setInlineStatus(hybridStatus, 'Retrieval complete.', 'text-success');
             hybridClarificationAttempts = 0;
             window.lastClarificationResponse = '';
-            runHybridBtn.disabled = false;
+            setButtonLoading(runHybridBtn, false);
         }
 
         function shouldUseGlobalMode(question) {
@@ -1830,8 +1830,8 @@
         async function buildCommunities() {
             const communityStatus = document.getElementById('communityStatus');
             document.getElementById('communityError').innerText = '';
-            buildCommunitiesBtn.disabled = true;
-            communityStatus.innerText = 'Building communities...';
+            setButtonLoading(buildCommunitiesBtn, true, 'Building...');
+            setInlineStatus(communityStatus, 'Building communities...', 'text-muted');
             document.getElementById('communityProcessMap').innerHTML = '';
 
             try {
@@ -1846,13 +1846,13 @@
                     payload.trace.steps.forEach(step => items.push(buildCommunityTraceItem(step)));
                 }
                 appendCommunityProcessMap(items);
-                communityStatus.innerText = 'Communities built.';
+                setInlineStatus(communityStatus, 'Communities built.', 'text-success');
             } catch (err) {
                 document.getElementById('communityError').innerText = err.message;
                 appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
-                communityStatus.innerText = 'Community build failed.';
+                setInlineStatus(communityStatus, 'Community build failed.', 'text-danger');
             } finally {
-                buildCommunitiesBtn.disabled = false;
+                setButtonLoading(buildCommunitiesBtn, false);
             }
         }
 
@@ -1947,7 +1947,7 @@
         function buildCommunitySqlTemplateTabs(sqlTemplates, sampleCommunityBlock) {
             const statements = splitCommunitySqlTemplates(sqlTemplates);
             const sample = parseCommunitySample(sampleCommunityBlock);
-            return buildTabsHtml('community-write-template-tabs', [
+            return `<div class="fw-semibold mb-1">Tables:</div>${buildTabsHtml('community-write-template-tabs', [
                 {
                     title: 'communities',
                     contentHtml: buildSqlVariablesOutputTabs(
@@ -1969,7 +1969,7 @@
                         `@@community_id = ${sample.id || '(generated community id)'}\n@@document_id = one source document id from community relationship evidence`,
                         sample.sourcesOutput || 'One row per distinct source document that contributed evidence to the community.')
                 }
-            ]);
+            ])}`;
         }
 
         function buildSqlVariablesOutputTabs(sql, variables, output) {
@@ -2090,8 +2090,8 @@
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
             document.getElementById('hybridError').innerText = '';
             renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
-            runHybridBtn.disabled = true;
-            hybridStatus.innerText = 'Running global GraphRAG...';
+            setButtonLoading(runHybridBtn, true, 'Running...');
+            setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
 
             try {
                 const response = await fetch(`${backendBaseUrl}/api/retrieval/global`, {
@@ -2120,13 +2120,13 @@
                     items.push({ title: 'Global GraphRAG answer', indent: true, scroll: true, body: payload.answer || '(no answer returned)' });
                 }
                 appendProcessMap(items);
-                hybridStatus.innerText = 'Global GraphRAG complete.';
+                setInlineStatus(hybridStatus, 'Global GraphRAG complete.', 'text-success');
             } catch (err) {
                 document.getElementById('hybridError').innerText = err.message;
                 appendProcessMap([{ title: 'Global GraphRAG failed', body: err.message }]);
-                hybridStatus.innerText = 'Global GraphRAG failed.';
+                setInlineStatus(hybridStatus, 'Global GraphRAG failed.', 'text-danger');
             } finally {
-                runHybridBtn.disabled = false;
+                setButtonLoading(runHybridBtn, false);
             }
         }
 
@@ -3784,6 +3784,22 @@
             const el = document.getElementById(id);
             el.className = cssClass;
             el.innerText = text;
+        }
+
+        function setInlineStatus(element, text, cssClass) {
+            element.className = cssClass;
+            element.innerText = text;
+        }
+
+        function setButtonLoading(button, isLoading, loadingText) {
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+
+            button.disabled = isLoading;
+            button.innerHTML = isLoading
+                ? `<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>${escapeHtml(loadingText || 'Processing...')}`
+                : button.dataset.originalHtml;
         }
     </script>
 }

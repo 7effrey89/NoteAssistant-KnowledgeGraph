@@ -384,10 +384,14 @@ function normalizeEdge(edge, index) {
 
 function buildNodeAttributes(node) {
   const degree = state.degreeById.get(node.id) || 0;
+  const size = calculateNodeSize(degree);
+  return { x: 0, y: 0, size, label: node.title, color: state.colorByLabel.get(node.label) || palette[0], kgLabel: node.label, title: node.title, properties: node.properties, degree };
+}
+
+function calculateNodeSize(degree) {
   const baseSizeInside = state.settings.nodeNamesInside ? 14 : 7;
   const maxSizeInside = state.settings.nodeNamesInside ? 28 : 18;
-  const size = state.settings.sizeMode === "degree" ? baseSizeInside + Math.min(maxSizeInside - baseSizeInside, degree * 2.4) : baseSizeInside + 3;
-  return { x: 0, y: 0, size, label: node.title, color: state.colorByLabel.get(node.label) || palette[0], kgLabel: node.label, title: node.title, properties: node.properties, degree };
+  return state.settings.sizeMode === "degree" ? baseSizeInside + Math.min(maxSizeInside - baseSizeInside, degree * 2.4) : baseSizeInside + 3;
 }
 
 function buildEdgeAttributes(edge) {
@@ -1211,7 +1215,10 @@ function renderChunkCard(chunk) {
   const meta = [chunk.linkReason, `chunk ${chunk.chunkIndex}`, chunk.documentDate, ...scoreParts].filter(Boolean).join(" · ");
 
   const chunkNodeAttribute = chunkNodeId ? ` data-chunk-node-id="${escapeHtml(chunkNodeId)}"` : "";
-  return `<article class="kg-chunk-card"${chunkNodeAttribute} data-chunk-id="${escapeHtml(chunk.id)}" data-document-id="${escapeHtml(chunk.documentId)}" data-chunk-index="${escapeHtml(chunk.chunkIndex)}" data-document-title="${escapeHtml(documentTitle)}" tabindex="0"><div class="kg-chunk-text">${escapeHtml(chunk.content)}</div><footer><span>${escapeHtml(meta)}</span><span class="kg-chunk-document-ref">Document: ${documentReference}</span></footer></article>`;
+  const addAction = chunkNodeId
+    ? ""
+    : '<button type="button" class="kg-add-chunk-btn" data-add-chunk-to-graph>Add to graph</button>';
+  return `<article class="kg-chunk-card"${chunkNodeAttribute} data-chunk-id="${escapeHtml(chunk.id)}" data-document-id="${escapeHtml(chunk.documentId)}" data-chunk-index="${escapeHtml(chunk.chunkIndex)}" data-document-title="${escapeHtml(documentTitle)}" tabindex="0"><div class="kg-chunk-text">${escapeHtml(chunk.content)}</div><footer><span>${escapeHtml(meta)}</span><span class="kg-chunk-document-ref">Document: ${documentReference}</span>${addAction}</footer></article>`;
 }
 
 function wireChunkCardHighlighting() {
@@ -1232,6 +1239,146 @@ function wireChunkCardHighlighting() {
     card.addEventListener("focus", highlight);
     card.addEventListener("blur", clear);
   });
+  el.inspectorContent.querySelectorAll("[data-add-chunk-to-graph]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      addChunkCardToGraph(button.closest(".kg-chunk-card"));
+    });
+  });
+}
+
+function addChunkCardToGraph(card) {
+  if (!card || !state.graph) return;
+  const chunk = findChunkFromDataset(card.dataset);
+  if (!chunk) return;
+
+  const chunkNodeId = ensureChunkNodeInGraph(chunk);
+  ensureChunkContextEdges(chunk, chunkNodeId);
+  card.dataset.chunkNodeId = chunkNodeId;
+  card.classList.add("is-in-graph");
+  const button = card.querySelector("[data-add-chunk-to-graph]");
+  if (button) {
+    button.textContent = "Added";
+    button.disabled = true;
+  }
+
+  updateGraphAfterExpansion([chunkNodeId]);
+  setInspectorHoveredNode(chunkNodeId);
+}
+
+function findChunkFromDataset(dataset) {
+  const details = state.selectedNode ? state.nodeDetailsCache.get(state.selectedNode) : null;
+  const chunks = details?.chunks || [];
+  return chunks.find(chunk => String(chunk.id ?? "") === String(dataset.chunkId ?? ""))
+    || chunks.find(chunk => String(chunk.documentId ?? "") === String(dataset.documentId ?? "")
+      && String(chunk.chunkIndex ?? "") === String(dataset.chunkIndex ?? ""));
+}
+
+function ensureChunkNodeInGraph(chunk) {
+  const existing = findChunkNodeId(chunk);
+  if (existing) return existing;
+
+  const nodeId = `chunk:${chunk.id}`;
+  const title = `Chunk ${chunk.chunkIndex}`;
+  const node = {
+    id: nodeId,
+    label: "Chunk",
+    title,
+    properties: {
+      id: String(chunk.id),
+      document_id: String(chunk.documentId),
+      document_title: chunk.documentTitle || chunk.documentFileName || `Document ${chunk.documentId}`,
+      chunk_index: String(chunk.chunkIndex),
+      content: chunk.content,
+      expanded_from_inspector: "true"
+    }
+  };
+  addGraphNode(node, state.selectedNode);
+  return nodeId;
+}
+
+function ensureChunkContextEdges(chunk, chunkNodeId) {
+  const documentNodeId = ensureDocumentNodeInGraph(chunk);
+  if (documentNodeId) addGraphEdge(documentNodeId, chunkNodeId, "HAS_CHUNK", { expanded_from_inspector: "true" });
+  if (state.selectedNode && state.graph.hasNode(state.selectedNode) && state.selectedNode !== chunkNodeId && state.graph.getNodeAttribute(state.selectedNode, "kgLabel") !== "Document") {
+    addGraphEdge(chunkNodeId, state.selectedNode, "MENTIONS", { expanded_from_inspector: "true" });
+  }
+}
+
+function ensureDocumentNodeInGraph(chunk) {
+  const existing = findDocumentNodeId(chunk.documentId);
+  if (existing) return existing;
+
+  const nodeId = `doc:${chunk.documentId}`;
+  addGraphNode({
+    id: nodeId,
+    label: "Document",
+    title: `Document: ${chunk.documentTitle || chunk.documentFileName || chunk.documentId}`,
+    properties: {
+      id: String(chunk.documentId),
+      title: chunk.documentTitle || chunk.documentFileName || `Document ${chunk.documentId}`,
+      document_date: chunk.documentDate || "",
+      expanded_from_inspector: "true"
+    }
+  }, state.selectedNode);
+  return nodeId;
+}
+
+function addGraphNode(node, anchorNodeId) {
+  if (state.graph.hasNode(node.id)) return;
+  ensureLabelColor(node.label);
+  state.rawNodes.push(node);
+  state.degreeById.set(node.id, 0);
+  state.graph.addNode(node.id, buildNodeAttributes(node));
+  placeExpandedNode(node.id, anchorNodeId);
+}
+
+function addGraphEdge(source, target, label, properties = {}) {
+  if (!state.graph.hasNode(source) || !state.graph.hasNode(target)) return;
+  const edgeId = `expanded:${source}->${target}:${label}`;
+  if (state.graph.hasEdge(edgeId)) return;
+  const edge = { id: edgeId, source, target, label, properties };
+  state.rawEdges.push(edge);
+  state.graph.addDirectedEdgeWithKey(edgeId, source, target, buildEdgeAttributes(edge));
+  bumpNodeDegree(source);
+  bumpNodeDegree(target);
+}
+
+function bumpNodeDegree(nodeId) {
+  const degree = (state.degreeById.get(nodeId) || 0) + 1;
+  state.degreeById.set(nodeId, degree);
+  if (!state.graph.hasNode(nodeId)) return;
+  state.graph.setNodeAttribute(nodeId, "degree", degree);
+  state.graph.setNodeAttribute(nodeId, "size", calculateNodeSize(degree));
+}
+
+function placeExpandedNode(nodeId, anchorNodeId) {
+  if (!state.graph.hasNode(nodeId)) return;
+  const anchor = anchorNodeId && state.graph.hasNode(anchorNodeId) ? state.graph.getNodeAttributes(anchorNodeId) : null;
+  const baseX = Number(anchor?.x ?? 0);
+  const baseY = Number(anchor?.y ?? 0);
+  const count = state.rawNodes.filter(node => node.properties?.expanded_from_inspector === "true").length;
+  const angle = count * 2.399963229728653;
+  const distance = Math.max(0.16, Math.sqrt(Math.max(state.graph.order, 1)) * 0.035);
+  state.graph.setNodeAttribute(nodeId, "x", baseX + Math.cos(angle) * distance);
+  state.graph.setNodeAttribute(nodeId, "y", baseY + Math.sin(angle) * distance);
+}
+
+function ensureLabelColor(label) {
+  if (state.colorByLabel.has(label)) return;
+  state.colorByLabel.set(label, palette[state.colorByLabel.size % palette.length]);
+}
+
+function updateGraphAfterExpansion(nodeIdsToHighlight = []) {
+  rebuildFilterOptions();
+  renderLegend();
+  renderStats();
+  updateSearchResults();
+  updateReducers();
+  el.exportBtn.disabled = false;
+  nodeIdsToHighlight.forEach(nodeId => state.graph.hasNode(nodeId) && state.graph.setNodeAttribute(nodeId, "highlighted", true));
+  refreshRenderer();
 }
 
 function setInspectorHoveredNode(nodeId) {

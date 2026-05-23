@@ -1411,6 +1411,10 @@ body.kg-inspector-resizing {
   outline: none;
 }
 
+.kg-chunk-card.is-in-graph {
+  border-color: #bfdbfe;
+}
+
 .kg-chunk-text {
   max-height: 190px;
   overflow: auto;
@@ -1429,6 +1433,33 @@ body.kg-inspector-resizing {
   color: #64748b;
   font-size: 0.75rem;
   line-height: 1.35;
+}
+
+.kg-add-chunk-btn {
+  justify-self: start;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.kg-add-chunk-btn:hover,
+.kg-add-chunk-btn:focus-visible {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  outline: none;
+}
+
+.kg-add-chunk-btn:disabled {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #475569;
+  cursor: default;
 }
 
 .kg-chunk-document-ref {
