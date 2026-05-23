@@ -23,6 +23,7 @@ const state = {
   selectedNode: null,
   selectedEdge: null,
   hoveredNode: null,
+  inspectorHighlightedNode: null,
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
   settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50 },
   currentLayout: "random",
@@ -34,7 +35,9 @@ const state = {
   historyIndex: -1,
   isRestoringHistory: false,
   isQueryRunning: false,
-  latestQueryRequestId: 0
+  latestQueryRequestId: 0,
+  nodeDetailsCache: new Map(),
+  latestNodeDetailsRequestId: 0
 };
 
 const el = {
@@ -316,8 +319,10 @@ function loadGraph(nodes, edges) {
   state.colorByLabel = buildColorMap(state.rawNodes);
   state.selectedNode = null;
   state.selectedEdge = null;
+  state.inspectorHighlightedNode = null;
   state.history = [];
   state.historyIndex = -1;
+  state.nodeDetailsCache = new Map();
   rebuildFilterOptions();
   rebuildGraph();
   renderInspector(null);
@@ -639,7 +644,7 @@ function nodeReducer(node, data) {
   }
   const isSelected = state.selectedNode === node;
   const isHovered = state.hoveredNode === node;
-  const anchor = state.selectedNode || state.hoveredNode;
+  const anchor = state.hoveredNode || state.selectedNode;
   const isNeighbor = anchor && (anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
   if (state.settings.highlightNeighborhood && anchor && !isNeighbor) {
@@ -651,13 +656,18 @@ function nodeReducer(node, data) {
     reduced.size = Math.max(data.size + 4, 15);
     reduced.forceLabel = true;
   }
-  if (isSelected || isHovered) {
+  if (isHovered) {
+    reduced.highlighted = true;
+    reduced.size = data.size + 5;
+    reduced.forceLabel = true;
+    reduced.zIndex = 10;
+  } else if (isSelected) {
     reduced.color = "#111827";
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   }
-  if (!state.settings.showLabels && !matchesSearch && !isSelected) reduced.label = "";
+  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered) reduced.label = "";
   return reduced;
 }
 
@@ -669,7 +679,7 @@ function edgeReducer(edge, data) {
     reduced.hidden = true;
     return reduced;
   }
-  const anchor = state.selectedNode || state.hoveredNode;
+  const anchor = state.hoveredNode || state.selectedNode;
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
@@ -982,6 +992,7 @@ function renderSearchResults(results) {
 
 function selectNode(node, options = {}) {
   if (!state.graph?.hasNode(node)) return;
+  clearInspectorHoverState();
   state.selectedNode = node;
   state.selectedEdge = null;
   renderInspector({ type: "node", id: node });
@@ -1110,8 +1121,9 @@ function roundCameraValue(value) {
   return Math.round(Number(value || 0) * 10000) / 10000;
 }
 
-function renderInspector(selection) {
+function renderInspector(selection, options = {}) {
   if (!selection || !state.graph) {
+    clearInspectorHoverState();
     el.inspectorContent.className = "kg-inspector-empty";
     el.inspectorContent.textContent = "Select a node or relationship in the graph.";
     return;
@@ -1120,18 +1132,185 @@ function renderInspector(selection) {
   if (selection.type === "node") {
     const data = state.graph.getNodeAttributes(selection.id);
     const neighbors = state.graph.neighbors(selection.id);
+    const details = options.details || state.nodeDetailsCache.get(selection.id) || null;
+    const properties = details?.attributes || data.properties;
     el.inspectorContent.className = "kg-inspector-content";
-    el.inspectorContent.innerHTML = `<div class="kg-inspector-heading"><span class="kg-color-dot" style="background:${data.color}"></span><div><strong>${escapeHtml(data.title)}</strong><small>${escapeHtml(data.kgLabel)} - degree ${data.degree}</small></div></div>${renderPropertyTable(data.properties)}<div class="kg-neighbor-list"><div class="kg-mini-title">Neighbors</div>${neighbors.slice(0, 40).map(id => `<button type="button" data-node-id="${escapeHtml(id)}">${escapeHtml(state.graph.getNodeAttribute(id, "title") || id)}</button>`).join("") || '<span class="text-muted small">No neighbors</span>'}</div>`;
+    el.inspectorContent.innerHTML = `<div class="kg-inspector-heading"><span class="kg-color-dot" style="background:${data.color}"></span><div><strong>${escapeHtml(data.title)}</strong><small>${escapeHtml(data.kgLabel)} - degree ${data.degree}</small></div></div>${renderPropertyTable(properties)}<div class="kg-neighbor-list"><div class="kg-mini-title">Neighbors</div>${neighbors.slice(0, 40).map(id => `<button type="button" data-node-id="${escapeHtml(id)}">${escapeHtml(state.graph.getNodeAttribute(id, "title") || id)}</button>`).join("") || '<span class="text-muted small">No neighbors</span>'}</div>${renderChunksSection(details, options.detailsError)}`;
     el.inspectorContent.querySelectorAll("[data-node-id]").forEach(button => button.addEventListener("click", () => selectNode(button.dataset.nodeId)));
+    wireChunkCardHighlighting();
+    if (!details && !options.detailsError && !options.skipDetailsLoad) {
+      loadNodeDetails(selection.id, data);
+    }
     return;
   }
 
   const data = state.graph.getEdgeAttributes(selection.id);
+  clearInspectorHoverState();
   const source = state.graph.source(selection.id);
   const target = state.graph.target(selection.id);
   el.inspectorContent.className = "kg-inspector-content";
   el.inspectorContent.innerHTML = `<div class="kg-inspector-heading"><span class="kg-relationship-mark"></span><div><strong>${escapeHtml(data.relationship)}</strong><small>${escapeHtml(source)} -> ${escapeHtml(target)}</small></div></div>${renderPropertyTable(data.properties)}<div class="kg-edge-endpoints"><button type="button" data-node-id="${escapeHtml(source)}">Source</button><button type="button" data-node-id="${escapeHtml(target)}">Target</button></div>`;
   el.inspectorContent.querySelectorAll("[data-node-id]").forEach(button => button.addEventListener("click", () => selectNode(button.dataset.nodeId)));
+}
+
+async function loadNodeDetails(nodeId, data) {
+  const requestId = ++state.latestNodeDetailsRequestId;
+  try {
+    const response = await fetch(`${backendBaseUrl}/api/graph/node/details`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: String(nodeId),
+        label: data.kgLabel || "",
+        title: data.title || "",
+        properties: data.properties || {}
+      })
+    });
+    const payload = await response.json().catch(() => null);
+    if (requestId !== state.latestNodeDetailsRequestId || state.selectedNode !== nodeId) return;
+
+    if (!response.ok) {
+      renderInspector({ type: "node", id: nodeId }, {
+        skipDetailsLoad: true,
+        detailsError: payload?.error || payload?.detail || `Could not load linked chunks (status ${response.status}).`
+      });
+      return;
+    }
+
+    state.nodeDetailsCache.set(nodeId, payload || {});
+    renderInspector({ type: "node", id: nodeId }, { details: payload || {}, skipDetailsLoad: true });
+  } catch (error) {
+    if (requestId !== state.latestNodeDetailsRequestId || state.selectedNode !== nodeId) return;
+    renderInspector({ type: "node", id: nodeId }, { skipDetailsLoad: true, detailsError: `Could not load linked chunks: ${error.message}` });
+  }
+}
+
+function renderChunksSection(details, error) {
+  const chunks = details?.chunks || [];
+  const content = error
+    ? `<div class="kg-chunks-message kg-chunks-error">${escapeHtml(error)}</div>`
+    : !details
+      ? '<div class="kg-chunks-message">Loading linked chunks...</div>'
+      : chunks.length === 0
+        ? '<div class="kg-chunks-message">No linked chunks found.</div>'
+        : `<div class="kg-chunk-card-list">${chunks.map(renderChunkCard).join("")}</div>`;
+
+  return `<div class="kg-inspector-divider" role="separator"></div><section class="kg-linked-chunks" aria-label="Chunks linked to selected node"><div class="kg-mini-title">CHUNKS</div>${content}</section>`;
+}
+
+function renderChunkCard(chunk) {
+  const chunkNodeId = findChunkNodeId(chunk);
+  const documentNodeId = findDocumentNodeId(chunk.documentId);
+  const documentTitle = chunk.documentTitle || chunk.documentFileName || `Document ${chunk.documentId}`;
+  const documentReference = documentNodeId
+    ? `<button type="button" data-node-id="${escapeHtml(documentNodeId)}">${escapeHtml(documentTitle)}</button>`
+    : `<span>${escapeHtml(documentTitle)}</span>`;
+  const scoreParts = [];
+  if (chunk.score != null) scoreParts.push(`score ${formatMetric(chunk.score)}`);
+  if (chunk.distance != null) scoreParts.push(`distance ${formatMetric(chunk.distance)}`);
+  const meta = [chunk.linkReason, `chunk ${chunk.chunkIndex}`, chunk.documentDate, ...scoreParts].filter(Boolean).join(" · ");
+
+  const chunkNodeAttribute = chunkNodeId ? ` data-chunk-node-id="${escapeHtml(chunkNodeId)}"` : "";
+  return `<article class="kg-chunk-card"${chunkNodeAttribute} data-chunk-id="${escapeHtml(chunk.id)}" data-document-id="${escapeHtml(chunk.documentId)}" data-chunk-index="${escapeHtml(chunk.chunkIndex)}" data-document-title="${escapeHtml(documentTitle)}" tabindex="0"><div class="kg-chunk-text">${escapeHtml(chunk.content)}</div><footer><span>${escapeHtml(meta)}</span><span class="kg-chunk-document-ref">Document: ${documentReference}</span></footer></article>`;
+}
+
+function wireChunkCardHighlighting() {
+  el.inspectorContent.querySelectorAll(".kg-chunk-card").forEach(card => {
+    const highlight = () => {
+      const nodeId = card.dataset.chunkNodeId || findChunkNodeIdFromDataset(card.dataset);
+      if (!nodeId) return;
+      card.dataset.chunkNodeId = nodeId;
+      card.classList.add("is-highlighting");
+      setInspectorHoveredNode(nodeId);
+    };
+    const clear = () => {
+      card.classList.remove("is-highlighting");
+      clearInspectorHoveredNode(card.dataset.chunkNodeId);
+    };
+    card.addEventListener("mouseenter", highlight);
+    card.addEventListener("mouseleave", clear);
+    card.addEventListener("focus", highlight);
+    card.addEventListener("blur", clear);
+  });
+}
+
+function setInspectorHoveredNode(nodeId) {
+  if (!nodeId || !state.graph?.hasNode(nodeId)) return;
+  if (state.inspectorHighlightedNode && state.inspectorHighlightedNode !== nodeId && state.graph.hasNode(state.inspectorHighlightedNode)) {
+    state.graph.removeNodeAttribute(state.inspectorHighlightedNode, "highlighted");
+  }
+  state.hoveredNode = nodeId;
+  state.inspectorHighlightedNode = nodeId;
+  state.graph.setNodeAttribute(nodeId, "highlighted", true);
+  refreshRenderer();
+}
+
+function clearInspectorHoveredNode(nodeId) {
+  if (state.hoveredNode !== nodeId) return;
+  clearInspectorHoverState();
+  refreshRenderer();
+}
+
+function clearInspectorHoverState() {
+  if (state.inspectorHighlightedNode && state.graph?.hasNode(state.inspectorHighlightedNode)) {
+    state.graph.removeNodeAttribute(state.inspectorHighlightedNode, "highlighted");
+  }
+  state.hoveredNode = null;
+  state.inspectorHighlightedNode = null;
+}
+
+function findChunkNodeIdFromDataset(dataset) {
+  return findChunkNodeId({
+    id: dataset.chunkId,
+    documentId: dataset.documentId,
+    chunkIndex: dataset.chunkIndex,
+    documentTitle: dataset.documentTitle
+  });
+}
+
+function findChunkNodeId(chunk) {
+  if (!chunk || !state.graph) return null;
+  const chunkId = String(chunk.id ?? "");
+  const prefixed = chunkId ? `chunk:${chunkId}` : null;
+  if (prefixed && state.graph.hasNode(prefixed)) return prefixed;
+
+  let match = null;
+  const chunkIndex = String(chunk.chunkIndex ?? "");
+  const documentId = String(chunk.documentId ?? "");
+  const documentTitle = String(chunk.documentTitle ?? "").toLowerCase();
+  state.graph.forEachNode((node, data) => {
+    if (match || data.kgLabel !== "Chunk") return;
+    const properties = data.properties || {};
+    const sameId = chunkId && String(properties.id ?? "") === chunkId;
+    const sameDocumentChunk = documentId && chunkIndex
+      && String(properties.document_id ?? "") === documentId
+      && String(properties.chunk_index ?? "") === chunkIndex;
+    const sameVisibleChunk = chunkIndex && String(properties.chunk_index ?? "") === chunkIndex
+      && (!state.selectedNode || state.graph.hasEdge(node, state.selectedNode) || state.graph.hasEdge(state.selectedNode, node));
+    const sameTitledChunk = chunkIndex && String(data.title || "").toLowerCase() === `chunk ${chunkIndex}`
+      && (!documentTitle || String(properties.document_title || properties.title || "").toLowerCase().includes(documentTitle));
+    if (sameId || sameDocumentChunk || sameVisibleChunk || sameTitledChunk) match = node;
+  });
+  return match;
+}
+
+function findDocumentNodeId(documentId) {
+  const target = String(documentId ?? "");
+  if (!target || !state.graph) return null;
+  const prefixed = `doc:${target}`;
+  if (state.graph.hasNode(prefixed)) return prefixed;
+
+  let match = null;
+  state.graph.forEachNode((node, data) => {
+    if (match || data.kgLabel !== "Document") return;
+    if (String(data.properties?.id ?? "") === target) match = node;
+  });
+  return match;
+}
+
+function formatMetric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : String(value);
 }
 
 function renderPropertyTable(properties) {

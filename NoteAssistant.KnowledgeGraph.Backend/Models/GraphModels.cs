@@ -84,7 +84,20 @@ public sealed record GraphNodeDetailsResponse(
     string NodeType,
     IReadOnlyDictionary<string, string?> Attributes,
     IReadOnlyDictionary<string, string>? AttributeSources = null,
-    IReadOnlyDictionary<string, string>? AttributeSourceSqls = null);
+    IReadOnlyDictionary<string, string>? AttributeSourceSqls = null,
+    IReadOnlyList<GraphNodeChunkDto>? Chunks = null);
+
+public sealed record GraphNodeChunkDto(
+    long Id,
+    long DocumentId,
+    int ChunkIndex,
+    string Content,
+    string? DocumentTitle,
+    string? DocumentFileName,
+    string? DocumentDate,
+    string LinkReason,
+    double? Score = null,
+    double? Distance = null);
 
 public sealed record StatementExecutionDto(int Index, string StatementType, bool Success, int DurationMs, string? Error, string Statement);
 
@@ -104,6 +117,48 @@ public sealed record HybridRetrievalRequest(
     bool IncludeAnswer = false,
     int ClarificationAttempts = 0,
     string? ClarificationResponse = null);
+
+public sealed record CommunityBuildResponse(
+    bool Success,
+    string? Error,
+    int CommunitiesBuilt,
+    int EntitiesAssigned,
+    int RelationshipsUsed,
+    HybridRetrievalTraceDto? Trace = null);
+
+public sealed record GlobalGraphRagRequest(
+    string Query,
+    int Limit = 6,
+    bool IncludeTrace = false,
+    bool IncludeAnswer = true,
+    float[]? QueryEmbedding = null);
+
+public sealed record GlobalCommunityResultDto(
+    long Id,
+    string Title,
+    string Summary,
+    double? Distance,
+    int EntityCount,
+    int RelationshipCount,
+    DateOnly? StartDate = null,
+    DateOnly? EndDate = null);
+
+public sealed record TemporalDocumentDto(
+    long Id,
+    string Title,
+    DateOnly? DocumentDate,
+    string? DocumentType,
+    string? Tags);
+
+public sealed record GlobalGraphRagResponse(
+    bool Success,
+    string? Error,
+    IReadOnlyList<GlobalCommunityResultDto> Communities,
+    IReadOnlyList<TemporalDocumentDto> Timeline,
+    string PromptContext,
+    string RetrievalOrder,
+    string? Answer = null,
+    HybridRetrievalTraceDto? Trace = null);
 
 public sealed record HybridChunkResultDto(
     long Id,

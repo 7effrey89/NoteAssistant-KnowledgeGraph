@@ -25,6 +25,12 @@ public class HomeController(IConfiguration configuration) : Controller
         return View();
     }
 
+    public IActionResult Statistics()
+    {
+        ViewData["BackendBaseUrl"] = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";
+        return View();
+    }
+
     public IActionResult Privacy()
     {
         return View();

@@ -16,6 +16,10 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private readonly IFoundryInferenceClient _foundry = foundry;
     private readonly IAgeDatabaseConnectionFactory _connectionFactory = connectionFactory;
 
+    private sealed record CommunityEntityRow(long Id, string Label, string Name);
+
+    private sealed record CommunityRelationshipRow(long SourceId, string SourceName, long TargetId, string TargetName, string Relationship, long? DocumentId, string? DocumentTitle, DateOnly? DocumentDate, int? ChunkIndex, string? Evidence);
+
     public bool IsConfigured => _connectionFactory.IsConfigured;
 
     public async Task<(bool Success, string? ErrorMessage)> TryExecuteIngestionPlanAsync(GraphIngestionPlan plan, CancellationToken cancellationToken)
@@ -623,6 +627,681 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], [], string.Empty, "Graph -> Vector -> LLM", null, traceFailure, null, rewrittenQuestion, _foundry.AnswerSystemPrompt, analysisSystemPrompt);
         }
     }
+
+    public async Task<CommunityBuildResponse> BuildCommunitiesAsync(bool includeTrace, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new CommunityBuildResponse(false, "Database settings are not configured.", 0, 0, 0);
+        }
+
+        if (!_foundry.IsConfigured)
+        {
+            return new CommunityBuildResponse(false, "Foundry inference is not configured.", 0, 0, 0);
+        }
+
+        var steps = includeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
+        void AddStep(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
+        {
+            HybridTokenUsageDto? usageDto = tokenUsage is null
+                ? null
+                : new HybridTokenUsageDto(tokenUsage.PromptTokens, tokenUsage.CompletionTokens);
+            steps?.Add(new HybridRetrievalTraceStepDto(name, summary, detail, durationMs, usageDto));
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            var setupTimer = Stopwatch.StartNew();
+            await EnsureCommunityTablesAsync(connection, cancellationToken);
+            setupTimer.Stop();
+            AddStep("community-schema", "Community tables ensured", BuildCommunitySchemaDetail(), (int)setupTimer.ElapsedMilliseconds);
+
+            var loadTimer = Stopwatch.StartNew();
+            var entities = await LoadCommunityEntitiesAsync(connection, cancellationToken);
+            var relationships = await LoadCommunityRelationshipsAsync(connection, cancellationToken);
+            loadTimer.Stop();
+            AddStep("community-load", $"Loaded {entities.Count} entities and {relationships.Count} relationships", BuildCommunityLoadDetail(entities, relationships), (int)loadTimer.ElapsedMilliseconds);
+
+            if (entities.Count == 0 || relationships.Count == 0)
+            {
+                var emptyTrace = steps is null ? null : new HybridRetrievalTraceDto("Build communities", steps);
+                return new CommunityBuildResponse(true, null, 0, 0, relationships.Count, emptyTrace);
+            }
+
+            var components = BuildRelationshipComponents(entities, relationships);
+            AddStep("community-clustering", $"Identified {components.Count} connected graph components", BuildCommunityClusteringDetail(components, entities, relationships));
+            var buildTimer = Stopwatch.StartNew();
+            await ClearCommunityTablesAsync(connection, cancellationToken);
+            AddStep("community-reset", "Existing community index cleared", "SQL:\nTRUNCATE TABLE community_sources, community_members, communities RESTART IDENTITY;");
+
+            var built = 0;
+            var assigned = 0;
+            var summaryDetails = new List<string>();
+            foreach (var component in components.Where(component => component.Count > 1).OrderByDescending(component => component.Count).Take(50))
+            {
+                var componentRelationships = relationships
+                    .Where(relationship => component.Contains(relationship.SourceId) && component.Contains(relationship.TargetId))
+                    .ToList();
+                if (componentRelationships.Count == 0)
+                {
+                    continue;
+                }
+
+                var componentEntities = entities.Where(entity => component.Contains(entity.Id)).ToList();
+                var context = BuildCommunitySummaryContext(componentEntities, componentRelationships);
+                const string summaryQuestion = "Summarize this graph community. Include the main topic, key entities, relationship patterns, and any temporal span.";
+                var summaryResult = await _foundry.AnswerQuestionAsync(summaryQuestion, context, cancellationToken, "Community Summary Agent");
+                var summary = string.IsNullOrWhiteSpace(summaryResult.Answer) ? context : summaryResult.Answer.Trim();
+                var embedding = await _foundry.CreateEmbeddingAsync(summary, cancellationToken);
+                var title = BuildCommunityTitle(componentEntities);
+                var key = ComputeCommunityKey(componentEntities);
+                var communityId = await UpsertCommunityAsync(connection, key, title, summary, embedding, componentEntities.Count, componentRelationships.Count, componentRelationships, cancellationToken);
+                await InsertCommunityMembersAsync(connection, communityId, componentEntities, cancellationToken);
+                await InsertCommunitySourcesAsync(connection, communityId, componentRelationships, cancellationToken);
+                if (summaryDetails.Count < 5)
+                {
+                    summaryDetails.Add(BuildCommunitySummaryTraceDetail(communityId, key, title, summaryQuestion, context, summary, componentEntities, componentRelationships));
+                }
+                built++;
+                assigned += componentEntities.Count;
+            }
+
+            buildTimer.Stop();
+            AddStep("community-summary", $"Built {built} community summaries", BuildCommunitySummaryBuildDetail(assigned, summaryDetails), (int)buildTimer.ElapsedMilliseconds);
+            var trace = steps is null ? null : new HybridRetrievalTraceDto("Build communities", steps);
+            return new CommunityBuildResponse(true, null, built, assigned, relationships.Count, trace);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Community build failed.");
+            var trace = steps is null ? null : new HybridRetrievalTraceDto("Build communities", steps);
+            return new CommunityBuildResponse(false, ex.Message, 0, 0, 0, trace);
+        }
+    }
+
+    public async Task<GlobalGraphRagResponse> ExecuteGlobalGraphRagAsync(GlobalGraphRagRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new GlobalGraphRagResponse(false, "Database settings are not configured.", [], [], string.Empty, "Global Community Summaries -> Temporal Timeline -> LLM");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Query))
+        {
+            return new GlobalGraphRagResponse(false, "Query is required.", [], [], string.Empty, "Global Community Summaries -> Temporal Timeline -> LLM");
+        }
+
+        var steps = request.IncludeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
+        void AddStep(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
+        {
+            HybridTokenUsageDto? usageDto = tokenUsage is null
+                ? null
+                : new HybridTokenUsageDto(tokenUsage.PromptTokens, tokenUsage.CompletionTokens);
+            steps?.Add(new HybridRetrievalTraceStepDto(name, summary, detail, durationMs, usageDto));
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureCommunityTablesAsync(connection, cancellationToken);
+            AddStep("global-question", "Global question received", request.Query);
+
+            var embeddingTimer = Stopwatch.StartNew();
+            var vector = request.QueryEmbedding is { Length: > 0 }
+                ? request.QueryEmbedding!
+                : await _foundry.CreateEmbeddingAsync(request.Query, cancellationToken);
+            embeddingTimer.Stop();
+            AddStep("global-embedding", "Generated global query embedding", $"Embedding length: {vector.Length.ToString(CultureInfo.InvariantCulture)}", (int)embeddingTimer.ElapsedMilliseconds);
+
+            var retrievalTimer = Stopwatch.StartNew();
+            var communities = await QueryRelevantCommunitiesAsync(connection, vector, request.Limit, cancellationToken);
+            retrievalTimer.Stop();
+            AddStep("community-retrieval", $"Retrieved {communities.Count} community summaries", BuildCommunityRetrievalDetail(communities), (int)retrievalTimer.ElapsedMilliseconds);
+
+            var timelineTimer = Stopwatch.StartNew();
+            var timeline = await QueryTemporalTimelineAsync(connection, request.Query, 20, cancellationToken);
+            timelineTimer.Stop();
+            AddStep("temporal-context", $"Loaded {timeline.Count} dated documents for temporal context", BuildTimelineDetail(timeline), (int)timelineTimer.ElapsedMilliseconds);
+
+            var prompt = BuildGlobalPromptContext(communities, timeline);
+            AddStep("global-prompt-context", "Built global prompt context", prompt);
+
+            string? answer = null;
+            if (request.IncludeAnswer)
+            {
+                var answerTimer = Stopwatch.StartNew();
+                var answerResult = await _foundry.AnswerQuestionAsync(request.Query, prompt, cancellationToken, "Global Answer Agent");
+                answer = answerResult.Answer;
+                answerTimer.Stop();
+                AddStep("global-answer", "Generated global GraphRAG answer", BuildPromptDetailPromptsOnly(_foundry.AnswerSystemPrompt, BuildAnswerUserPrompt(prompt, request.Query)), (int)answerTimer.ElapsedMilliseconds, answerResult.TokenUsage);
+            }
+
+            var trace = steps is null ? null : new HybridRetrievalTraceDto(request.Query, steps);
+            return new GlobalGraphRagResponse(true, null, communities, timeline, prompt, "Global Community Summaries -> Temporal Timeline -> LLM", answer, trace);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Global GraphRAG failed.");
+            var trace = steps is null ? null : new HybridRetrievalTraceDto(request.Query, steps);
+            return new GlobalGraphRagResponse(false, ex.Message, [], [], string.Empty, "Global Community Summaries -> Temporal Timeline -> LLM", null, trace);
+        }
+    }
+
+    private static async Task EnsureCommunityTablesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        var sql = CommunitySchemaSql();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string CommunitySchemaSql()
+        => """
+           CREATE TABLE IF NOT EXISTS communities (
+               id BIGSERIAL PRIMARY KEY,
+               community_key TEXT NOT NULL UNIQUE,
+               title TEXT NOT NULL,
+               summary TEXT NOT NULL,
+               embedding vector(1536),
+               entity_count INTEGER NOT NULL DEFAULT 0,
+               relationship_count INTEGER NOT NULL DEFAULT 0,
+               start_date DATE NULL,
+               end_date DATE NULL,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+           );
+           CREATE TABLE IF NOT EXISTS community_members (
+               community_id BIGINT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+               entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+               PRIMARY KEY (community_id, entity_id)
+           );
+           CREATE TABLE IF NOT EXISTS community_sources (
+               community_id BIGINT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+               document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+               PRIMARY KEY (community_id, document_id)
+           );
+           DO $$ BEGIN CREATE INDEX IF NOT EXISTS idx_communities_embedding ON communities USING diskann (embedding vector_cosine_ops); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'community diskann index creation skipped.'; END $$;
+           CREATE INDEX IF NOT EXISTS idx_community_members_entity ON community_members(entity_id);
+           CREATE INDEX IF NOT EXISTS idx_community_sources_document ON community_sources(document_id);
+           """;
+
+    private static string BuildCommunitySchemaDetail()
+        => string.Join(Environment.NewLine,
+        [
+            "Purpose: materialize a reusable global GraphRAG index over graph communities.",
+            string.Empty,
+            "Tables:",
+            "- communities: one row per detected graph component/community, with summary text and embedding.",
+            "- community_members: many-to-many mapping from community to entities.",
+            "- community_sources: documents that contributed evidence to the community.",
+            string.Empty,
+            "SQL:",
+            CommunitySchemaSql()
+        ]);
+
+    private static async Task ClearCommunityTablesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = "TRUNCATE TABLE community_sources, community_members, communities RESTART IDENTITY;";
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<List<CommunityEntityRow>> LoadCommunityEntitiesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        var sql = CommunityEntityLoadSql();
+        await using var command = new NpgsqlCommand(sql, connection);
+        var entities = new List<CommunityEntityRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            entities.Add(new CommunityEntityRow(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        }
+
+        return entities;
+    }
+
+    private static string CommunityEntityLoadSql()
+        => "SELECT id, label, name FROM entities ORDER BY id;";
+
+    private static async Task<List<CommunityRelationshipRow>> LoadCommunityRelationshipsAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        await EnsureRelationshipsTableForReadAsync(connection, cancellationToken);
+         var sql = CommunityRelationshipLoadSql();
+        await using var command = new NpgsqlCommand(sql, connection);
+        var relationships = new List<CommunityRelationshipRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            relationships.Add(new CommunityRelationshipRow(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetFieldValue<DateOnly>(7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
+        }
+
+        return relationships;
+    }
+
+        private static string CommunityRelationshipLoadSql()
+         => """
+            SELECT s.id AS source_id,
+                s.name AS source_name,
+                t.id AS target_id,
+                t.name AS target_name,
+                r.relationship_type,
+                c.document_id,
+                d.title,
+                d.document_date,
+                c.chunk_index,
+                COALESCE(r.evidence, c.content) AS evidence
+            FROM relationships r
+            JOIN entities s ON s.id = r.source_entity_id
+            JOIN entities t ON t.id = r.target_entity_id
+            LEFT JOIN chunks c ON c.id = r.chunk_id
+            LEFT JOIN documents d ON d.id = c.document_id
+            UNION ALL
+            SELECT e1.id,
+                e1.name,
+                e2.id,
+                e2.name,
+                'CO_MENTIONED_WITH',
+                c.document_id,
+                d.title,
+                d.document_date,
+                c.chunk_index,
+                c.content
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            JOIN chunk_entities ce1 ON ce1.chunk_id = c.id
+            JOIN entities e1 ON e1.id = ce1.entity_id
+            JOIN chunk_entities ce2 ON ce2.chunk_id = c.id
+            JOIN entities e2 ON e2.id = ce2.entity_id
+            WHERE e1.id < e2.id;
+            """;
+
+    private static async Task EnsureRelationshipsTableForReadAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           CREATE TABLE IF NOT EXISTS relationships (
+                               id BIGSERIAL PRIMARY KEY,
+                               source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                               target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                               relationship_type TEXT NOT NULL,
+                               chunk_id BIGINT NULL REFERENCES chunks(id) ON DELETE SET NULL,
+                               confidence DOUBLE PRECISION NULL,
+                               evidence TEXT NULL,
+                               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                               UNIQUE(source_entity_id, target_entity_id, relationship_type, chunk_id)
+                           );
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static List<HashSet<long>> BuildRelationshipComponents(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    {
+        var known = entities.Select(entity => entity.Id).ToHashSet();
+        var adjacency = known.ToDictionary(id => id, _ => new HashSet<long>());
+        foreach (var relationship in relationships)
+        {
+            if (!adjacency.ContainsKey(relationship.SourceId) || !adjacency.ContainsKey(relationship.TargetId))
+            {
+                continue;
+            }
+
+            adjacency[relationship.SourceId].Add(relationship.TargetId);
+            adjacency[relationship.TargetId].Add(relationship.SourceId);
+        }
+
+        var visited = new HashSet<long>();
+        var components = new List<HashSet<long>>();
+        foreach (var entityId in adjacency.Keys)
+        {
+            if (!visited.Add(entityId))
+            {
+                continue;
+            }
+
+            var component = new HashSet<long>();
+            var stack = new Stack<long>();
+            stack.Push(entityId);
+            while (stack.Count > 0)
+            {
+                var current = stack.Pop();
+                component.Add(current);
+                foreach (var next in adjacency[current])
+                {
+                    if (visited.Add(next))
+                    {
+                        stack.Push(next);
+                    }
+                }
+            }
+
+            components.Add(component);
+        }
+
+        return components;
+    }
+
+    private static string BuildCommunitySummaryContext(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    {
+        var entityText = string.Join(", ", entities.Take(40).Select(entity => $"{entity.Label}:{entity.Name}"));
+        var relationshipText = string.Join(Environment.NewLine, relationships.Take(80).Select(r => $"- {r.SourceName} -[{r.Relationship}]-> {r.TargetName} ({r.DocumentDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "undated"}; {r.DocumentTitle ?? "unknown document"})"));
+        var evidenceText = string.Join(Environment.NewLine, relationships.Select(r => r.Evidence).Where(evidence => !string.IsNullOrWhiteSpace(evidence)).Distinct(StringComparer.OrdinalIgnoreCase).Take(8));
+        return $"Entities:\n{entityText}\n\nRelationships:\n{relationshipText}\n\nEvidence:\n{evidenceText}";
+    }
+
+    private static string BuildCommunityClusteringDetail(IReadOnlyList<HashSet<long>> components, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    {
+        var entityLookup = entities.ToDictionary(entity => entity.Id, entity => entity);
+        var displayLimit = components.Count <= 50 ? components.Count : 50;
+        var ranked = components
+            .OrderByDescending(component => component.Count)
+            .Take(displayLimit)
+            .Select((component, index) =>
+            {
+                var names = component
+                    .Select(id => entityLookup.TryGetValue(id, out var entity) ? entity.Name : id.ToString(CultureInfo.InvariantCulture))
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .Take(12);
+                var edgeCount = relationships.Count(r => component.Contains(r.SourceId) && component.Contains(r.TargetId));
+                return $"{index + 1}. entities={component.Count}, relationships={edgeCount}: {string.Join(", ", names)}";
+            });
+
+        return string.Join(Environment.NewLine,
+        [
+            "Algorithm: pragmatic connected components over an undirected entity graph.",
+            "Nodes: rows from kg_data.entities.",
+            "Edges: typed kg_data.relationships plus chunk co-mentions (CO_MENTIONED_WITH fallback).",
+            "Rule: if A is connected to B by any relationship/co-mention, they belong to the same component; summaries are generated for components with more than one entity.",
+            string.Empty,
+            $"Total components: {components.Count}",
+            $"Singleton components: {components.Count(component => component.Count == 1)}",
+            $"Multi-entity components: {components.Count(component => component.Count > 1)}",
+            string.Empty,
+            components.Count <= displayLimit
+                ? $"Components (all {components.Count} shown):"
+                : $"Largest components (showing {displayLimit} of {components.Count}; {components.Count - displayLimit} smaller components omitted from this trace):",
+            string.Join(Environment.NewLine, ranked)
+        ]);
+    }
+
+    private static string BuildCommunitySummaryTraceDetail(long communityId, string key, string title, string question, string context, string summary, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+        => string.Join(Environment.NewLine,
+        [
+            $"Community id: {communityId}",
+            $"Community key: {key}",
+            $"Title: {title}",
+            $"Entities: {entities.Count}",
+            $"Relationships: {relationships.Count}",
+            string.Empty,
+            "Persisted communities row:",
+            $"id={communityId}, community_key={key}, title={title}, entity_count={entities.Count}, relationship_count={relationships.Count}",
+            string.Empty,
+            "Persisted community_members rows (top 50):",
+            string.Join(Environment.NewLine, entities.Take(50).Select(entity => $"community_id={communityId}, entity_id={entity.Id}, entity={entity.Label}:{entity.Name}")),
+            string.Empty,
+            "Persisted community_sources rows (top 50):",
+            string.Join(Environment.NewLine, relationships.Select(r => r.DocumentId).Where(id => id.HasValue).Select(id => id!.Value).Distinct().Take(50).Select(documentId => $"community_id={communityId}, document_id={documentId}")),
+            string.Empty,
+            "LLM question:",
+            question,
+            string.Empty,
+            "LLM context:",
+            TruncateTraceText(context, 3500),
+            string.Empty,
+            "Generated summary:",
+            TruncateTraceText(summary, 1800)
+        ]);
+
+    private static string BuildCommunitySummaryBuildDetail(int assigned, IReadOnlyList<string> summaryDetails)
+        => string.Join(Environment.NewLine + Environment.NewLine,
+        [
+            $"Entities assigned: {assigned}",
+            "For each selected multi-entity component:",
+            "1. Build LLM context from entity labels/names, relationship triples, document dates/titles, and evidence text.",
+            "2. Ask Foundry to summarize the community's main topic, key entities, relationship patterns, and temporal span.",
+            "3. Embed the summary and persist it to kg_data.communities.",
+            "4. Persist entity membership to kg_data.community_members and source documents to kg_data.community_sources.",
+            string.Empty,
+            "Write SQL templates:",
+            CommunityUpsertSql(),
+            string.Empty,
+            CommunityMemberInsertSql(),
+            string.Empty,
+            CommunitySourceInsertSql(),
+            string.Empty,
+            summaryDetails.Count == 0 ? "No community summary examples were generated." : string.Join(Environment.NewLine + Environment.NewLine + "---" + Environment.NewLine + Environment.NewLine, summaryDetails)
+        ]);
+
+    private static string CommunityUpsertSql()
+        => """
+           INSERT INTO communities(community_key, title, summary, embedding, entity_count, relationship_count, start_date, end_date, updated_at)
+           VALUES (@key, @title, @summary, CAST(@embedding AS vector), @entity_count, @relationship_count, @start_date, @end_date, NOW())
+           ON CONFLICT (community_key) DO UPDATE SET
+               title = EXCLUDED.title,
+               summary = EXCLUDED.summary,
+               embedding = EXCLUDED.embedding,
+               entity_count = EXCLUDED.entity_count,
+               relationship_count = EXCLUDED.relationship_count,
+               start_date = EXCLUDED.start_date,
+               end_date = EXCLUDED.end_date,
+               updated_at = NOW()
+           RETURNING id;
+           """;
+
+    private static string CommunityMemberInsertSql()
+        => "INSERT INTO community_members(community_id, entity_id) VALUES (@community_id, @entity_id) ON CONFLICT DO NOTHING;";
+
+    private static string CommunitySourceInsertSql()
+        => "INSERT INTO community_sources(community_id, document_id) VALUES (@community_id, @document_id) ON CONFLICT DO NOTHING;";
+
+    private static string TruncateTraceText(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength] + $"\n... truncated {value.Length - maxLength} characters";
+
+    private static string BuildCommunityTitle(IReadOnlyList<CommunityEntityRow> entities)
+        => string.Join(" / ", entities.OrderBy(entity => entity.Label == "Tag" ? 1 : 0).ThenBy(entity => entity.Name, StringComparer.OrdinalIgnoreCase).Take(4).Select(entity => entity.Name));
+
+    private static string ComputeCommunityKey(IReadOnlyList<CommunityEntityRow> entities)
+    {
+        var source = string.Join("|", entities.Select(entity => entity.Id).OrderBy(id => id));
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(hash)[..24].ToLowerInvariant();
+    }
+
+    private static async Task<long> UpsertCommunityAsync(NpgsqlConnection connection, string key, string title, string summary, float[] embedding, int entityCount, int relationshipCount, IReadOnlyList<CommunityRelationshipRow> relationships, CancellationToken cancellationToken)
+    {
+        var startDate = relationships.Where(r => r.DocumentDate.HasValue).Select(r => r.DocumentDate!.Value).DefaultIfEmpty().Min();
+        var endDate = relationships.Where(r => r.DocumentDate.HasValue).Select(r => r.DocumentDate!.Value).DefaultIfEmpty().Max();
+        var hasDates = relationships.Any(r => r.DocumentDate.HasValue);
+        var sql = CommunityUpsertSql();
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("key", key);
+        command.Parameters.AddWithValue("title", string.IsNullOrWhiteSpace(title) ? "Untitled community" : title);
+        command.Parameters.AddWithValue("summary", summary);
+        command.Parameters.AddWithValue("embedding", ToVectorLiteral(embedding, 1536));
+        command.Parameters.AddWithValue("entity_count", entityCount);
+        command.Parameters.AddWithValue("relationship_count", relationshipCount);
+        command.Parameters.AddWithValue("start_date", hasDates ? startDate : DBNull.Value);
+        command.Parameters.AddWithValue("end_date", hasDates ? endDate : DBNull.Value);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task InsertCommunityMembersAsync(NpgsqlConnection connection, long communityId, IReadOnlyList<CommunityEntityRow> entities, CancellationToken cancellationToken)
+    {
+        foreach (var entity in entities)
+        {
+            await using var command = new NpgsqlCommand(CommunityMemberInsertSql(), connection);
+            command.Parameters.AddWithValue("community_id", communityId);
+            command.Parameters.AddWithValue("entity_id", entity.Id);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task InsertCommunitySourcesAsync(NpgsqlConnection connection, long communityId, IReadOnlyList<CommunityRelationshipRow> relationships, CancellationToken cancellationToken)
+    {
+        foreach (var documentId in relationships.Select(r => r.DocumentId).Where(id => id.HasValue).Select(id => id!.Value).Distinct())
+        {
+            await using var command = new NpgsqlCommand(CommunitySourceInsertSql(), connection);
+            command.Parameters.AddWithValue("community_id", communityId);
+            command.Parameters.AddWithValue("document_id", documentId);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task<List<GlobalCommunityResultDto>> QueryRelevantCommunitiesAsync(NpgsqlConnection connection, float[] queryEmbedding, int limit, CancellationToken cancellationToken)
+    {
+        var constrainedLimit = Math.Clamp(limit, 1, 20);
+        const string sql = """
+                           SELECT id, title, summary, embedding <=> CAST(@query_vector AS vector) AS distance, entity_count, relationship_count, start_date, end_date
+                           FROM communities
+                           WHERE embedding IS NOT NULL
+                           ORDER BY embedding <=> CAST(@query_vector AS vector)
+                           LIMIT @limit;
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("query_vector", ToVectorLiteral(queryEmbedding, 1536));
+        command.Parameters.AddWithValue("limit", constrainedLimit);
+        var communities = new List<GlobalCommunityResultDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            communities.Add(new GlobalCommunityResultDto(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : Convert.ToDouble(reader.GetValue(3), CultureInfo.InvariantCulture),
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateOnly>(6),
+                reader.IsDBNull(7) ? null : reader.GetFieldValue<DateOnly>(7)));
+        }
+
+        return communities;
+    }
+
+    private static async Task<List<TemporalDocumentDto>> QueryTemporalTimelineAsync(NpgsqlConnection connection, string query, int limit, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           SELECT id, title, document_date, document_type, tags::text
+                           FROM documents
+                           ORDER BY document_date NULLS LAST, title
+                           LIMIT 200;
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        var docs = new List<TemporalDocumentDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var title = reader.GetString(1);
+            var date = reader.IsDBNull(2) ? TryParseDateFromTitle(title) : reader.GetFieldValue<DateOnly>(2);
+            docs.Add(new TemporalDocumentDto(
+                reader.GetInt64(0),
+                title,
+                date,
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+
+        return docs
+            .Where(doc => doc.DocumentDate.HasValue)
+            .OrderBy(doc => doc.DocumentDate)
+            .ThenBy(doc => doc.Title, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Clamp(limit, 1, 50))
+            .ToList();
+    }
+
+    private static DateOnly? TryParseDateFromTitle(string title)
+    {
+        var match = Regex.Match(title, @"(?<day>\d{2})-(?<month>\d{2})-(?<year>\d{2})(?:\s|_|$)");
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var day = int.Parse(match.Groups["day"].Value, CultureInfo.InvariantCulture);
+        var month = int.Parse(match.Groups["month"].Value, CultureInfo.InvariantCulture);
+        var year = 2000 + int.Parse(match.Groups["year"].Value, CultureInfo.InvariantCulture);
+        try
+        {
+            return new DateOnly(year, month, day);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    private static string BuildGlobalPromptContext(IReadOnlyList<GlobalCommunityResultDto> communities, IReadOnlyList<TemporalDocumentDto> timeline)
+    {
+        var communityText = communities.Count == 0
+            ? "No community summaries found. Build communities first."
+            : string.Join(Environment.NewLine + Environment.NewLine, communities.Select(c => $"Community {c.Id}: {c.Title}\nSpan: {c.StartDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "unknown"} to {c.EndDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "unknown"}\nEntities: {c.EntityCount}; Relationships: {c.RelationshipCount}\nSummary: {c.Summary}"));
+        var timelineText = timeline.Count == 0
+            ? "No dated documents found."
+            : string.Join(Environment.NewLine, timeline.Select(d => $"- {d.DocumentDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "undated"}: {d.Title} ({d.DocumentType ?? "unknown"}) {d.Tags ?? string.Empty}"));
+        return $"Community summaries:\n{communityText}\n\nChronological timeline:\n{timelineText}";
+    }
+
+    private static string BuildCommunityLoadDetail(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    {
+        var entitySample = entities.Count == 0
+            ? "(none)"
+            : string.Join(Environment.NewLine, entities.Take(50).Select(entity => $"{entity.Id}: {entity.Label} - {entity.Name}"));
+        var relationshipSample = relationships.Count == 0
+            ? "(none)"
+            : string.Join(Environment.NewLine, relationships.Take(50).Select(r => $"{r.SourceName} -[{r.Relationship}]-> {r.TargetName} ({r.DocumentDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "undated"}; {r.DocumentTitle ?? "unknown document"})"));
+
+        return relationships.Count == 0
+            ? string.Join(Environment.NewLine,
+            [
+                "This is a READ step. It does not insert anything; it loads already-ingested graph facts that will be clustered in later steps.",
+                "No relationships found.",
+                string.Empty,
+                "Entity SQL:",
+                CommunityEntityLoadSql(),
+                string.Empty,
+                "Entity output sample (top 50):",
+                entitySample,
+                string.Empty,
+                "Relationship SQL:",
+                CommunityRelationshipLoadSql(),
+                string.Empty,
+                "Relationship output sample (top 50):",
+                relationshipSample
+            ])
+            : string.Join(Environment.NewLine,
+            [
+                "This is a READ step. It does not insert anything; it loads already-ingested graph facts that will be clustered in later steps.",
+                "The INSERT/UPSERT statements happen later in the community-summary step after components are identified and summarized.",
+                string.Empty,
+                "Entity SQL:",
+                CommunityEntityLoadSql(),
+                string.Empty,
+                "Entity output sample (top 50):",
+                entitySample,
+                string.Empty,
+                "Relationship SQL:",
+                CommunityRelationshipLoadSql(),
+                string.Empty,
+                "Relationship output sample (top 50):",
+                relationshipSample
+            ]);
+    }
+
+    private static string BuildCommunityRetrievalDetail(IReadOnlyList<GlobalCommunityResultDto> communities)
+        => communities.Count == 0 ? "No communities found. Run Build Communities first." : string.Join(Environment.NewLine, communities.Select(c => $"{c.Id}: {c.Title} distance={c.Distance?.ToString("0.####", CultureInfo.InvariantCulture) ?? "n/a"}"));
+
+    private static string BuildTimelineDetail(IReadOnlyList<TemporalDocumentDto> timeline)
+        => timeline.Count == 0 ? "No dated documents found." : string.Join(Environment.NewLine, timeline.Select(d => $"{d.DocumentDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "undated"}: {d.Title}"));
 
     private static bool IsReadOnlyCypher(string query)
     {
@@ -1432,22 +2111,27 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("document_id", documentId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        IReadOnlyDictionary<string, string?> attributes;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            return MissingNodeDetails(request, $"No document row found for id {documentId}.");
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return MissingNodeDetails(request, $"No document row found for id {documentId}.");
+            }
+
+            attributes = ReadAttributes(reader, [
+                "id",
+                "title",
+                "file_name",
+                "document_type",
+                "document_date",
+                "content",
+                "tags",
+                "created_at"
+            ]);
         }
 
-        var attributes = ReadAttributes(reader, [
-            "id",
-            "title",
-            "file_name",
-            "document_type",
-            "document_date",
-            "content",
-            "tags",
-            "created_at"
-        ]);
+        var chunks = await GetDocumentChunksAsync(connection, documentId, cancellationToken);
         return new GraphNodeDetailsResponse(true, null, "Document", attributes, new Dictionary<string, string>
         {
             ["id"] = "documents.id",
@@ -1458,7 +2142,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             ["content"] = "documents.content",
             ["tags"] = "documents.tags",
             ["created_at"] = "documents.created_at"
-        });
+        }, Chunks: chunks);
     }
 
     private static async Task<GraphNodeDetailsResponse> GetChunkNodeDetailsAsync(
@@ -1534,6 +2218,19 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 "mentioned_entities",
                 "created_at"
             ]);
+            var chunks = new[]
+            {
+                new GraphNodeChunkDto(
+                    ToLong(attributes.GetValueOrDefault("id")),
+                    ToLong(attributes.GetValueOrDefault("document_id")),
+                    ToInt(attributes.GetValueOrDefault("chunk_index")),
+                    attributes.GetValueOrDefault("content") ?? string.Empty,
+                    attributes.GetValueOrDefault("document_title"),
+                    attributes.GetValueOrDefault("document_file_name"),
+                    null,
+                    "Selected chunk")
+            };
+
             return new GraphNodeDetailsResponse(true, null, "Chunk", attributes, new Dictionary<string, string>
             {
                 ["id"] = "chunks.id",
@@ -1544,7 +2241,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 ["content"] = "chunks.content",
                 ["mentioned_entities"] = "entities.label + entities.name via chunk_entities",
                 ["created_at"] = "chunks.created_at"
-            });
+            }, Chunks: chunks);
         }
     }
 
@@ -1613,22 +2310,26 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         GraphNodeDetailsRequest request,
         CancellationToken cancellationToken)
     {
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        IReadOnlyDictionary<string, string?> attributes;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            return MissingNodeDetails(request, "No entity row found for the selected node.");
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return MissingNodeDetails(request, "No entity row found for the selected node.");
+            }
+
+            attributes = ReadAttributes(reader, [
+                "id",
+                "label",
+                "name",
+                "chunks_mentioning_this_entity",
+                "documents_mentioning_this_entity",
+                "chunks",
+                "documents",
+                "created_at"
+            ]);
         }
 
-        var attributes = ReadAttributes(reader, [
-            "id",
-            "label",
-            "name",
-            "chunks_mentioning_this_entity",
-            "documents_mentioning_this_entity",
-            "chunks",
-            "documents",
-            "created_at"
-        ]);
         var entityId = attributes.TryGetValue("id", out var idValue) && long.TryParse(idValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId)
             ? parsedId
             : 0;
@@ -1651,8 +2352,83 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             ["documents"] = $"SELECT string_agg(DISTINCT d.title, ', ' ORDER BY d.title)\nFROM kg_data.entities e\nLEFT JOIN kg_data.chunk_entities ce ON ce.entity_id = e.id\nLEFT JOIN kg_data.chunks c ON c.id = ce.chunk_id\nLEFT JOIN kg_data.documents d ON d.id = c.document_id\nWHERE e.id = {entityId};"
         };
 
-        return new GraphNodeDetailsResponse(true, null, "Entity", attributes, sources, sourceSqls);
+        var chunks = command.Connection is null || entityId == 0
+            ? []
+            : await GetEntityChunksAsync(command.Connection, entityId, cancellationToken);
+
+        return new GraphNodeDetailsResponse(true, null, "Entity", attributes, sources, sourceSqls, chunks);
     }
+
+    private static async Task<IReadOnlyList<GraphNodeChunkDto>> GetDocumentChunksAsync(NpgsqlConnection connection, long documentId, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           SELECT c.id,
+                                  c.document_id,
+                                  c.chunk_index,
+                                  c.content,
+                                  d.title AS document_title,
+                                  d.file_name AS document_file_name,
+                                  d.document_date::text AS document_date
+                           FROM chunks c
+                           JOIN documents d ON d.id = c.document_id
+                           WHERE c.document_id = @document_id
+                           ORDER BY c.chunk_index
+                           LIMIT 50;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("document_id", documentId);
+        return await ReadNodeChunksAsync(command, "In selected document", cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<GraphNodeChunkDto>> GetEntityChunksAsync(NpgsqlConnection connection, long entityId, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           SELECT c.id,
+                                  c.document_id,
+                                  c.chunk_index,
+                                  c.content,
+                                  d.title AS document_title,
+                                  d.file_name AS document_file_name,
+                                  d.document_date::text AS document_date
+                           FROM chunks c
+                           JOIN chunk_entities ce ON ce.chunk_id = c.id
+                           JOIN documents d ON d.id = c.document_id
+                           WHERE ce.entity_id = @entity_id
+                           ORDER BY d.document_date DESC NULLS LAST, d.title, c.chunk_index
+                           LIMIT 50;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("entity_id", entityId);
+        return await ReadNodeChunksAsync(command, "Mentions selected entity", cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<GraphNodeChunkDto>> ReadNodeChunksAsync(NpgsqlCommand command, string linkReason, CancellationToken cancellationToken)
+    {
+        var chunks = new List<GraphNodeChunkDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            chunks.Add(new GraphNodeChunkDto(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt32(2),
+                reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                linkReason));
+        }
+
+        return chunks;
+    }
+
+    private static long ToLong(string? value)
+        => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+
+    private static int ToInt(string? value)
+        => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
 
     private static GraphNodeDetailsResponse MissingNodeDetails(GraphNodeDetailsRequest request, string message)
         => new(false, message, string.IsNullOrWhiteSpace(request.Label) ? "Node" : request.Label, new Dictionary<string, string?>(), new Dictionary<string, string>());

@@ -33,13 +33,19 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
         return Task.FromResult(Entities);
     }
 
+    public Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken)
+    {
+        ExtractEntitiesCallCount++;
+        return Task.FromResult(new GraphExtractionDto(Entities, Array.Empty<RelationshipDto>()));
+    }
+
     public string AnswerSystemPrompt => "test-answer-system-prompt";
 
     public string AnalysisSystemPrompt => "test-analysis-system-prompt";
 
     public string EntityExtractionSystemPrompt => "test-entity-extraction-system-prompt";
 
-    public Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
+    public Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken, string agentName = "Answer Agent")
         => Task.FromResult(new AnswerResult("(fake answer)", null));
 
     public Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken)

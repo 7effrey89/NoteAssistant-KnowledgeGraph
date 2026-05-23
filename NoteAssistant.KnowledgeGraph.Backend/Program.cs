@@ -663,6 +663,139 @@ app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeG
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapPost("/api/communities/build", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.BuildCommunitiesAsync(includeTrace: true, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/retrieval/global", async (GlobalGraphRagRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.ExecuteGlobalGraphRagAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory connectionFactory, CancellationToken cancellationToken) =>
+{
+    if (!connectionFactory.IsConfigured)
+    {
+        return Results.Problem("Database settings are not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var lookbackDays = Math.Clamp(days ?? 30, 1, 365);
+    await using var connection = await connectionFactory.OpenAsync(cancellationToken);
+    await EnsureTokenUsageTableAsync(connection, cancellationToken);
+
+    var since = DateTimeOffset.UtcNow.AddDays(-lookbackDays);
+    const string summarySql = """
+                              SELECT COUNT(*)::bigint AS calls,
+                                     COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                                     COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                                     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
+                              FROM "global".llm_token_usage
+                              WHERE occurred_at >= @since;
+                              """;
+    await using var summaryCommand = new NpgsqlCommand(summarySql, connection);
+    summaryCommand.Parameters.AddWithValue("since", since);
+    await using var summaryReader = await summaryCommand.ExecuteReaderAsync(cancellationToken);
+    await summaryReader.ReadAsync(cancellationToken);
+    var summary = new
+    {
+        calls = summaryReader.GetInt64(0),
+        promptTokens = summaryReader.GetInt64(1),
+        completionTokens = summaryReader.GetInt64(2),
+        totalTokens = summaryReader.GetInt64(3)
+    };
+    await summaryReader.CloseAsync();
+
+    const string byAgentSql = """
+                              SELECT agent,
+                                     operation,
+                                     COUNT(*)::bigint AS calls,
+                                     COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                                     COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                                     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+                                     MAX(occurred_at) AS last_seen
+                              FROM "global".llm_token_usage
+                              WHERE occurred_at >= @since
+                              GROUP BY agent, operation
+                              ORDER BY total_tokens DESC, calls DESC, agent, operation;
+                              """;
+    var byAgent = new List<object>();
+    await using (var command = new NpgsqlCommand(byAgentSql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            byAgent.Add(new
+            {
+                agent = reader.GetString(0),
+                operation = reader.GetString(1),
+                calls = reader.GetInt64(2),
+                promptTokens = reader.GetInt64(3),
+                completionTokens = reader.GetInt64(4),
+                totalTokens = reader.GetInt64(5),
+                lastSeen = reader.GetDateTime(6)
+            });
+        }
+    }
+
+    const string dailySql = """
+                            SELECT date_trunc('day', occurred_at) AS day,
+                                   COUNT(*)::bigint AS calls,
+                                   COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
+                            FROM "global".llm_token_usage
+                            WHERE occurred_at >= @since
+                            GROUP BY day
+                            ORDER BY day;
+                            """;
+    var daily = new List<object>();
+    await using (var command = new NpgsqlCommand(dailySql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            daily.Add(new
+            {
+                day = reader.GetDateTime(0),
+                calls = reader.GetInt64(1),
+                totalTokens = reader.GetInt64(2)
+            });
+        }
+    }
+
+    const string recentSql = """
+                             SELECT occurred_at, agent, operation, model_deployment, prompt_tokens, completion_tokens, total_tokens
+                             FROM "global".llm_token_usage
+                             WHERE occurred_at >= @since
+                             ORDER BY occurred_at DESC
+                             LIMIT 100;
+                             """;
+    var recent = new List<object>();
+    await using (var command = new NpgsqlCommand(recentSql, connection))
+    {
+        command.Parameters.AddWithValue("since", since);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            recent.Add(new
+            {
+                occurredAt = reader.GetDateTime(0),
+                agent = reader.GetString(1),
+                operation = reader.GetString(2),
+                modelDeployment = reader.IsDBNull(3) ? null : reader.GetString(3),
+                promptTokens = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                completionTokens = reader.IsDBNull(5) ? 0 : reader.GetInt32(5),
+                totalTokens = reader.IsDBNull(6) ? 0 : reader.GetInt32(6)
+            });
+        }
+    }
+
+    return Results.Ok(new { days = lookbackDays, summary, byAgent, daily, recent });
+});
+
 app.MapGet("/api/health/foundry", async (IFoundryInferenceClient foundry, CancellationToken cancellationToken) =>
 {
     if (!foundry.IsConfigured)
@@ -988,6 +1121,27 @@ app.MapGet("/api/deployment", () =>
         notes = "Run docker compose up in the backend project to provision PostgreSQL + Apache AGE."
     });
 });
+
+static async Task EnsureTokenUsageTableAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+{
+    const string sql = """
+                       CREATE SCHEMA IF NOT EXISTS "global";
+                       CREATE TABLE IF NOT EXISTS "global".llm_token_usage (
+                           id BIGSERIAL PRIMARY KEY,
+                           occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                           agent TEXT NOT NULL,
+                           operation TEXT NOT NULL,
+                           model_deployment TEXT NULL,
+                           prompt_tokens INTEGER NULL,
+                           completion_tokens INTEGER NULL,
+                           total_tokens INTEGER NULL
+                       );
+                       CREATE INDEX IF NOT EXISTS idx_llm_token_usage_occurred_at ON "global".llm_token_usage(occurred_at);
+                       CREATE INDEX IF NOT EXISTS idx_llm_token_usage_agent ON "global".llm_token_usage(agent);
+                       """;
+    await using var command = new NpgsqlCommand(sql, connection);
+    await command.ExecuteNonQueryAsync(cancellationToken);
+}
 
 app.Run();
 

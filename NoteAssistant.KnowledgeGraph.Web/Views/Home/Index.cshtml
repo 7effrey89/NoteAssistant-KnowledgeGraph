@@ -404,13 +404,38 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">6) Hybrid GraphRAG (Graph context → Hybrid retrieval → LLM context)</div>
+        <div class="card-header">6) Build Graph Communities (Optional - needed for Global Search in GraphRAG)</div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <div>
+                    <div class="fw-semibold">Build Communities</div>
+                    <div class="text-muted small">Optional. Needed for Global / Temporal GraphRAG search. Builds community summaries and embeddings from the entity relationship graph.</div>
+                </div>
+                <button class="btn btn-outline-primary" type="button" id="buildCommunitiesBtn">Build Communities</button>
+            </div>
+            <div class="mt-2"><small id="communityStatus" class="text-muted"></small></div>
+            <div id="communityError" class="text-danger mb-2"></div>
+            <h6>Process map</h6>
+            <div id="communityProcessMap" class="process-map"></div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">7) Hybrid GraphRAG (Graph context → Hybrid retrieval → LLM context)</div>
         <div class="card-body">
             <div class="mb-2">
                 <label class="form-label" for="hybridQuestion">Question</label>
                 <div class="input-group">
                     <input class="form-control" id="hybridQuestion" value="What did Microsoft do with OpenAI?" />
                     <button class="btn btn-primary" id="runHybridBtn">Run Hybrid Retrieval</button>
+                </div>
+                <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
+                    <label class="form-label mb-0" for="hybridModeSelect">Mode</label>
+                    <select class="form-select form-select-sm" id="hybridModeSelect" style="max-width: 220px;">
+                        <option value="auto" selected>Auto</option>
+                        <option value="hybrid">Local / Hybrid</option>
+                        <option value="global">Global / Temporal</option>
+                    </select>
                 </div>
                 <div class="mt-2 d-flex flex-wrap gap-2">
                     <span class="text-muted small">Quick questions:</span>
@@ -603,6 +628,8 @@
         const assistBtn = document.getElementById('assistBtn');
         const runQueryBtn = document.getElementById('runQueryBtn');
         const runHybridBtn = document.getElementById('runHybridBtn');
+        const buildCommunitiesBtn = document.getElementById('buildCommunitiesBtn');
+        const hybridModeSelect = document.getElementById('hybridModeSelect');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
         const initScriptBtn = document.getElementById('initScriptBtn');
@@ -640,6 +667,7 @@
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
         runHybridBtn.addEventListener('click', runHybridRetrieval);
+        buildCommunitiesBtn.addEventListener('click', buildCommunities);
         graphCheckBtn.addEventListener('click', refreshGraphCheck);
         resetDbBtn.addEventListener('click', resetDatabase);
         initScriptBtn.addEventListener('click', runInitScript);
@@ -1515,6 +1543,12 @@
                 return;
             }
 
+            const selectedMode = hybridModeSelect.value;
+            if (!isClarification && (selectedMode === 'global' || (selectedMode === 'auto' && shouldUseGlobalMode(question)))) {
+                await runGlobalGraphRag(question);
+                return;
+            }
+
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
@@ -1789,6 +1823,313 @@
             runHybridBtn.disabled = false;
         }
 
+        function shouldUseGlobalMode(question) {
+            return /\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i.test(question);
+        }
+
+        async function buildCommunities() {
+            const communityStatus = document.getElementById('communityStatus');
+            document.getElementById('communityError').innerText = '';
+            buildCommunitiesBtn.disabled = true;
+            communityStatus.innerText = 'Building communities...';
+            document.getElementById('communityProcessMap').innerHTML = '';
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/build`, { method: 'POST' });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    throw new Error(payload.error || 'Community build failed.');
+                }
+
+                const items = [];
+                if (payload.trace?.steps) {
+                    payload.trace.steps.forEach(step => items.push(buildCommunityTraceItem(step)));
+                }
+                appendCommunityProcessMap(items);
+                communityStatus.innerText = 'Communities built.';
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
+                communityStatus.innerText = 'Community build failed.';
+            } finally {
+                buildCommunitiesBtn.disabled = false;
+            }
+        }
+
+        function buildCommunityTraceItem(step) {
+            const detail = step.detail || '';
+            if (step.name === 'community-schema') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySchemaTabs(detail) };
+            }
+            if (step.name === 'community-load') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunityLoadTabs(detail) };
+            }
+            if (step.name === 'community-clustering') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunityClusteringTabs(detail) };
+            }
+            if (step.name === 'community-summary') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySummaryTabs(detail) };
+            }
+
+            return { title: step.summary || step.name, scroll: true, body: detail };
+        }
+
+        function buildCommunitySchemaTabs(detail) {
+            const sql = sectionAfter(detail, 'SQL:');
+            const overview = sectionBefore(detail, 'SQL:') || detail;
+            const tabs = [
+                { title: 'communities', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS communities'), pre: true },
+                { title: 'community_members', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS community_members'), pre: true },
+                { title: 'community_sources', content: extractSqlStatement(sql, 'CREATE TABLE IF NOT EXISTS community_sources'), pre: true },
+                { title: 'indexes', content: sql.split(';').map(s => s.trim()).filter(s => /^CREATE INDEX|^DO \$\$/i.test(s)).map(s => `${s};`).join('\n\n'), pre: true }
+            ];
+            return `<div class="fw-semibold mb-1">Tables:</div>${buildTabsHtml('community-schema-tabs', tabs, overview)}`;
+        }
+
+        function buildCommunityLoadTabs(detail) {
+            const overview = sectionBefore(detail, 'Entity SQL:') || detail;
+            const entitySql = betweenSections(detail, 'Entity SQL:', 'Entity output sample (top 50):');
+            const entityOutput = betweenSections(detail, 'Entity output sample (top 50):', 'Relationship SQL:');
+            const relationshipSql = betweenSections(detail, 'Relationship SQL:', 'Relationship output sample (top 50):');
+            const relationshipOutput = sectionAfter(detail, 'Relationship output sample (top 50):');
+            const entityContent = buildSqlAndResultsetHtml('Entity details', entitySql, entityOutput);
+            const relationshipContent = buildSqlAndResultsetHtml('Relationship details', relationshipSql, relationshipOutput);
+            return buildTabsHtml('community-load-tabs', [
+                { title: 'Entity', contentHtml: entityContent },
+                { title: 'Relationship', contentHtml: relationshipContent }
+            ], overview);
+        }
+
+        function buildCommunityClusteringTabs(detail) {
+            const allLines = detail.split(/\r?\n/);
+            const componentStart = allLines.findIndex(line => line.startsWith('Components') || line.startsWith('Largest components'));
+            const overview = componentStart >= 0 ? allLines.slice(0, componentStart).join('\n') : detail;
+            const components = componentStart >= 0 ? allLines.slice(componentStart + 1).filter(Boolean) : [];
+            const multi = components.filter(line => /entities=(?!1,)/.test(line));
+            const singletons = components.filter(line => /entities=1,/.test(line));
+            return buildTabsHtml('community-clustering-tabs', [
+                { title: `Multi-Entity (${multi.length})`, content: multi.join('\n') || '(none)', pre: true },
+                { title: `Singleton (${singletons.length})`, content: singletons.join('\n') || '(none)', pre: true },
+                { title: `All (${components.length})`, content: components.join('\n') || '(none)', pre: true }
+            ], overview);
+        }
+
+        function buildCommunitySummaryTabs(detail) {
+            const firstCommunity = detail.indexOf('Community id:');
+            const intro = firstCommunity >= 0 ? detail.slice(0, firstCommunity).trim() : detail;
+            const communitiesText = firstCommunity >= 0 ? detail.slice(firstCommunity).trim() : '';
+            const sqlStart = intro.indexOf('Write SQL templates:');
+            const bullets = sqlStart >= 0 ? intro.slice(0, sqlStart).trim() : intro;
+            const sqlTemplates = sqlStart >= 0 ? intro.slice(sqlStart + 'Write SQL templates:'.length).trim() : '';
+            const communityBlocks = communitiesText ? communitiesText.split(/\n\s*---\s*\n/).filter(Boolean) : [];
+            const tabs = communityBlocks.map((block, index) => ({ title: `Community ${index + 1}`, contentHtml: buildCommunityDetailTabs(block, sqlTemplates) }));
+            return buildTabsHtml('community-summary-tabs', tabs, bullets);
+        }
+
+        function buildCommunityDetailTabs(block, sqlTemplates) {
+            const variables = sectionBefore(block, 'LLM question:');
+            const prompt = betweenSections(block, 'LLM question:', 'LLM context:');
+            const context = betweenSections(block, 'LLM context:', 'Generated summary:');
+            const completion = sectionAfter(block, 'Generated summary:');
+            const sqlTemplateTabs = buildCommunitySqlTemplateTabs(sqlTemplates, block);
+            return buildTabsHtml('community-detail-tabs', [
+                { title: 'Variables', content: variables || '(none)', pre: true },
+                { title: 'Prompt', content: buildCommunityPromptText(prompt, context), pre: true },
+                { title: 'Completion', content: completion || '(none)', pre: true },
+                { title: 'SQL', contentHtml: sqlTemplateTabs }
+            ]);
+        }
+
+        function buildCommunityPromptText(question, context) {
+            return `LLM question:\n${(question || '(none)').trim()}\n\nLLM context:\n${(context || '(none)').trim()}`;
+        }
+
+        function buildCommunitySqlTemplateTabs(sqlTemplates, sampleCommunityBlock) {
+            const statements = splitCommunitySqlTemplates(sqlTemplates);
+            const sample = parseCommunitySample(sampleCommunityBlock);
+            return buildTabsHtml('community-write-template-tabs', [
+                {
+                    title: 'communities',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.communities,
+                        buildCommunityVariables(sample),
+                        sample.communitiesOutput || (sample.id ? `RETURNING id: ${sample.id}` : 'RETURNING id: (generated community id)'))
+                },
+                {
+                    title: 'community_members',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.members,
+                        `@@community_id = ${sample.id || '(generated community id)'}\n@@entity_id = one entity id from the selected component\nRows attempted = ${sample.entities || '(entity count)'}`,
+                        sample.membersOutput || (sample.entities ? `Inserted or kept ${sample.entities} community/entity membership rows.` : 'One row per entity in the community.'))
+                },
+                {
+                    title: 'community_sources',
+                    contentHtml: buildSqlVariablesOutputTabs(
+                        statements.sources,
+                        `@@community_id = ${sample.id || '(generated community id)'}\n@@document_id = one source document id from community relationship evidence`,
+                        sample.sourcesOutput || 'One row per distinct source document that contributed evidence to the community.')
+                }
+            ]);
+        }
+
+        function buildSqlVariablesOutputTabs(sql, variables, output) {
+            return buildTabsHtml('community-write-template-detail-tabs', [
+                { title: 'SQL', content: `Variables:\n${variables || '(none)'}\n\nSQL:\n${sql || '(none)'}`, pre: true },
+                { title: 'Real output', content: output || '(none)', pre: true }
+            ]);
+        }
+
+        function splitCommunitySqlTemplates(sqlTemplates) {
+            return {
+                communities: extractSqlStatement(sqlTemplates, 'INSERT INTO communities'),
+                members: extractSqlStatement(sqlTemplates, 'INSERT INTO community_members'),
+                sources: extractSqlStatement(sqlTemplates, 'INSERT INTO community_sources')
+            };
+        }
+
+        function parseCommunitySample(block) {
+            const read = (regex) => {
+                const match = block.match(regex);
+                return match ? match[1].trim() : '';
+            };
+            return {
+                id: read(/Community id:\s*(.+)/),
+                key: read(/Community key:\s*(.+)/),
+                title: read(/Title:\s*(.+)/),
+                entities: read(/Entities:\s*(\d+)/),
+                relationships: read(/Relationships:\s*(\d+)/),
+                communitiesOutput: readBlock(block, 'Persisted communities row:', 'Persisted community_members rows (top 50):'),
+                membersOutput: readBlock(block, 'Persisted community_members rows (top 50):', 'Persisted community_sources rows (top 50):'),
+                sourcesOutput: readBlock(block, 'Persisted community_sources rows (top 50):', 'LLM question:'),
+                summary: read(/Generated summary:\s*([\s\S]+)/)
+            };
+        }
+
+        function readBlock(value, startMarker, endMarker) {
+            const start = value.indexOf(startMarker);
+            if (start < 0) return '';
+            const contentStart = start + startMarker.length;
+            const end = value.indexOf(endMarker, contentStart);
+            return (end >= 0 ? value.slice(contentStart, end) : value.slice(contentStart)).trim();
+        }
+
+        function buildCommunityVariables(sample) {
+            const summaryPreview = sample.summary ? truncateText(sample.summary.replace(/\s+/g, ' '), 240) : '(generated summary text)';
+            return [
+                `@@key = ${sample.key || '(computed from sorted entity ids)'}`,
+                `@@title = ${sample.title || '(top community entity names)'}`,
+                `@@summary = ${summaryPreview}`,
+                '@@embedding = vector embedding of @@summary (1536 dimensions)',
+                `@@entity_count = ${sample.entities || '(entity count)'}`,
+                `@@relationship_count = ${sample.relationships || '(relationship count)'}`,
+                '@@start_date = earliest document_date in community evidence, if present',
+                '@@end_date = latest document_date in community evidence, if present'
+            ].join('\n');
+        }
+
+        function buildTabsHtml(idPrefix, tabs, overview = '') {
+            const id = `${idPrefix}-${Math.random().toString(36).slice(2)}`;
+            const safeTabs = tabs.filter(tab => tab && (tab.contentHtml || tab.content || tab.content === ''));
+            const normalizedOverview = normalizeDisplayText(overview);
+            const overviewHtml = normalizedOverview ? `<div class="community-tab-overview mb-2">${escapeHtml(normalizedOverview).replace(/\n/g, '<br />')}</div>` : '';
+            if (safeTabs.length === 0) {
+                return `<div class="community-tabs">${overviewHtml}</div>`;
+            }
+
+            const buttons = safeTabs.map((tab, index) => `<button type="button" class="btn btn-sm btn-outline-secondary community-tab-btn ${index === 0 ? 'active' : ''}" data-tab-target="${id}-${index}" aria-selected="${index === 0 ? 'true' : 'false'}">${escapeHtml(tab.title)}</button>`).join('');
+            const panels = safeTabs.map((tab, index) => {
+                const content = escapeHtml((tab.content || '').trim() || '(none)');
+                const body = tab.contentHtml || (tab.pre ? `<pre class="sql-toggle-view mb-0">${content}</pre>` : `<div>${content.replace(/\n/g, '<br />')}</div>`);
+                return `<div class="community-tab-panel ${index === 0 ? '' : 'd-none'}" id="${id}-${index}" data-tab-index="${index}">${body}</div>`;
+            }).join('');
+            return `<div class="community-tabs">${overviewHtml}<div class="btn-group btn-group-sm flex-wrap mb-2" role="group">${buttons}</div>${panels}</div>`;
+        }
+
+        function buildSqlAndResultsetHtml(label, sql, resultset) {
+            const nestedTabs = buildTabsHtml('community-nested-sql-tabs', [
+                { title: 'SQL', content: sql || '(none)', pre: true },
+                { title: 'SQL resultset', content: resultset || '(none)', pre: true }
+            ]);
+            return `<div class="border rounded px-2 py-1 mt-2 bg-white"><div class="text-muted small fw-semibold mb-1">${escapeHtml(label)}</div>${nestedTabs}</div>`;
+        }
+
+            function normalizeDisplayText(value) {
+                return String(value || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            }
+
+        function sectionBefore(value, marker) {
+            const index = value.indexOf(marker);
+            return index >= 0 ? value.slice(0, index).trim() : value.trim();
+        }
+
+        function sectionAfter(value, marker) {
+            const index = value.indexOf(marker);
+            return index >= 0 ? value.slice(index + marker.length).trim() : '';
+        }
+
+        function betweenSections(value, startMarker, endMarker) {
+            const start = value.indexOf(startMarker);
+            if (start < 0) return '';
+            const end = value.indexOf(endMarker, start + startMarker.length);
+            return (end >= 0 ? value.slice(start + startMarker.length, end) : value.slice(start + startMarker.length)).trim();
+        }
+
+        function extractSqlStatement(sql, prefix) {
+            const start = sql.indexOf(prefix);
+            if (start < 0) return '';
+            const end = sql.indexOf(';', start);
+            return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
+        }
+
+        async function runGlobalGraphRag(question) {
+            const hybridStatus = document.getElementById('hybridStatus');
+            const includeTrace = document.getElementById('hybridTraceToggle').checked;
+            const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
+            document.getElementById('hybridError').innerText = '';
+            renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            runHybridBtn.disabled = true;
+            hybridStatus.innerText = 'Running global GraphRAG...';
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/retrieval/global`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: question, limit: 6, includeTrace, includeAnswer })
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    throw new Error(payload.error || 'Global GraphRAG failed.');
+                }
+
+                const items = [];
+                if (payload.trace?.steps) {
+                    payload.trace.steps.forEach(step => items.push({
+                        title: step.summary || step.name,
+                        scroll: true,
+                        body: step.detail || ''
+                    }));
+                }
+                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
+                items.push({ title: 'Community summary output', indent: true, scroll: true, body: communityLines.length ? communityLines.join('\n\n') : '(none - build communities first)' });
+                const timelineLines = (payload.timeline || []).map(d => `${d.documentDate || 'undated'}: ${d.title}`);
+                items.push({ title: 'Temporal timeline output', indent: true, scroll: true, body: timelineLines.length ? timelineLines.join('\n') : '(none)' });
+                if (includeAnswer) {
+                    items.push({ title: 'Global GraphRAG answer', indent: true, scroll: true, body: payload.answer || '(no answer returned)' });
+                }
+                appendProcessMap(items);
+                hybridStatus.innerText = 'Global GraphRAG complete.';
+            } catch (err) {
+                document.getElementById('hybridError').innerText = err.message;
+                appendProcessMap([{ title: 'Global GraphRAG failed', body: err.message }]);
+                hybridStatus.innerText = 'Global GraphRAG failed.';
+            } finally {
+                runHybridBtn.disabled = false;
+            }
+        }
+
         function renderDecomposition(payload) {
             const systemPrompt = payload.decompositionSystemPrompt || '(no system prompt returned)';
             document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
@@ -1819,8 +2160,8 @@
             }
         }
 
-        function renderProcessMap(items, append = false) {
-            const container = document.getElementById('hybridProcessMap');
+        function renderProcessMap(items, append = false, containerId = 'hybridProcessMap') {
+            const container = document.getElementById(containerId);
             if (!append) {
                 container.innerHTML = '';
             }
@@ -1858,6 +2199,14 @@
 
         function appendProcessMap(items) {
             renderProcessMap(items, true);
+        }
+
+        function renderCommunityProcessMap(items, append = false) {
+            renderProcessMap(items, append, 'communityProcessMap');
+        }
+
+        function appendCommunityProcessMap(items) {
+            renderCommunityProcessMap(items, true);
         }
 
         function createProcessBubble(item) {
@@ -2035,6 +2384,30 @@
         }
 
         document.addEventListener('click', (event) => {
+            const communityTabButton = event.target.closest('.community-tab-btn');
+            if (communityTabButton) {
+                const wrapper = communityTabButton.closest('.community-tabs');
+                if (!wrapper) {
+                    return;
+                }
+
+                const buttons = getOwnCommunityTabButtons(wrapper);
+                const panels = getOwnCommunityTabPanels(wrapper);
+                buttons.forEach(btn => btn.classList.remove('active'));
+                buttons.forEach(btn => btn.setAttribute('aria-selected', 'false'));
+                panels.forEach(panel => panel.classList.add('d-none'));
+                communityTabButton.classList.add('active');
+                communityTabButton.setAttribute('aria-selected', 'true');
+                const target = panels.find(panel => panel.id === communityTabButton.dataset.tabTarget);
+                if (target) {
+                    target.classList.remove('d-none');
+                    resetNestedCommunityTabs(target);
+                } else {
+                    showFirstCommunityTab(wrapper);
+                }
+                return;
+            }
+
             const button = event.target.closest('.sql-toggle-btn');
             if (!button) {
                 return;
@@ -2053,6 +2426,38 @@
                 btn.classList.toggle('active', btn === button);
             });
         });
+
+        function showFirstCommunityTab(wrapper) {
+            const buttons = getOwnCommunityTabButtons(wrapper);
+            const panels = getOwnCommunityTabPanels(wrapper);
+            const firstButton = buttons[0];
+            const firstPanel = panels[0];
+            if (!firstButton || !firstPanel) {
+                return;
+            }
+
+            buttons.forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-selected', 'false');
+            });
+            panels.forEach(panel => panel.classList.add('d-none'));
+            firstButton.classList.add('active');
+            firstButton.setAttribute('aria-selected', 'true');
+            firstPanel.classList.remove('d-none');
+            resetNestedCommunityTabs(firstPanel);
+        }
+
+        function getOwnCommunityTabButtons(wrapper) {
+            return Array.from(wrapper.querySelectorAll(':scope > .btn-group > .community-tab-btn'));
+        }
+
+        function getOwnCommunityTabPanels(wrapper) {
+            return Array.from(wrapper.querySelectorAll(':scope > .community-tab-panel'));
+        }
+
+        function resetNestedCommunityTabs(container) {
+            container.querySelectorAll('.community-tabs').forEach(showFirstCommunityTab);
+        }
 
         function renderResults(rows) {
             const table = document.getElementById('resultsTable');

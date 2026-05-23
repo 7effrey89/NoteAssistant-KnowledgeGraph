@@ -1,10 +1,12 @@
 using System.ClientModel;
+using System.Data;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.Options;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
+using Npgsql;
 using OpenAI.Chat;
 using OpenAI.Embeddings;
 
@@ -31,7 +33,7 @@ public interface IFoundryInferenceClient
     Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken);
     Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken);
     Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken);
-    Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken);
+    Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken, string agentName = "Answer Agent");
     Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken);
     string AnswerSystemPrompt { get; }
     string AnalysisSystemPrompt { get; }
@@ -76,16 +78,18 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         "Only include relationships grounded in the text. No prose.";
     private readonly FoundryOptions _copilot;
     private readonly ILogger<FoundryInferenceClient> _logger;
+    private readonly IAgeDatabaseConnectionFactory _connectionFactory;
     private readonly EmbeddingClient? _embeddingsClient;
     private readonly ChatClient? _chatClient;
     private readonly string _answerSystemPrompt;
     private readonly string _analysisSystemPrompt;
     private readonly string _entityExtractionSystemPrompt;
 
-    public FoundryInferenceClient(IOptions<FoundryOptions> copilotOptions, ILogger<FoundryInferenceClient> logger, IHostEnvironment environment)
+    public FoundryInferenceClient(IOptions<FoundryOptions> copilotOptions, ILogger<FoundryInferenceClient> logger, IHostEnvironment environment, IAgeDatabaseConnectionFactory connectionFactory)
     {
         _copilot = copilotOptions.Value;
         _logger = logger;
+        _connectionFactory = connectionFactory;
         _answerSystemPrompt = LoadPromptTemplate(environment, AnswerSystemPromptFileName, DefaultAnswerSystemPrompt);
         _analysisSystemPrompt = LoadPromptTemplate(environment, AnalysisSystemPromptFileName, LegacyAnalysisSystemPromptFileName, DefaultAnalysisSystemPrompt);
         _entityExtractionSystemPrompt = LoadPromptTemplate(environment, EntityExtractionSystemPromptFileName, DefaultEntityExtractionSystemPrompt);
@@ -182,6 +186,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var response = await _chatClient!.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var content = response.Value.Content.Count > 0 ? response.Value.Content[0].Text : string.Empty;
+        await LogTokenUsageAsync("Graph Maker Agent", "extract-graph", response.Value.Usage, cancellationToken).ConfigureAwait(false);
 
         if (!TryParseGraphExtraction(content ?? string.Empty, out var extraction))
         {
@@ -192,7 +197,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         return extraction;
     }
 
-    public async Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
+    public async Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken, string agentName = "Answer Agent")
     {
         if (_chatClient is null)
         {
@@ -207,6 +212,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
         var response = await _chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Value.Content.Count > 0 ? response.Value.Content[0].Text ?? string.Empty : string.Empty;
+        await LogTokenUsageAsync(agentName, "answer-question", response.Value.Usage, cancellationToken).ConfigureAwait(false);
         return new AnswerResult(answer, ExtractTokenUsage(response.Value.Usage));
     }
 
@@ -228,6 +234,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         var response = await _chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var content = response.Value.Content.Count > 0 ? response.Value.Content[0].Text : string.Empty;
         var tokenUsage = ExtractTokenUsage(response.Value.Usage);
+        await LogTokenUsageAsync("Question Analysis Agent", "analyze-question", response.Value.Usage, cancellationToken).ConfigureAwait(false);
 
         if (!TryParseQuestionAnalysis(content ?? string.Empty, out var result))
         {
@@ -295,6 +302,55 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         }
 
         return new LlmTokenUsage(usage.InputTokenCount, usage.OutputTokenCount);
+    }
+
+    private async Task LogTokenUsageAsync(string agentName, string operation, OpenAI.Chat.ChatTokenUsage? usage, CancellationToken cancellationToken)
+    {
+        if (usage is null || !_connectionFactory.IsConfigured)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+            const string schemaSql = """
+                                     CREATE SCHEMA IF NOT EXISTS "global";
+                                     CREATE TABLE IF NOT EXISTS "global".llm_token_usage (
+                                         id BIGSERIAL PRIMARY KEY,
+                                         occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                         agent TEXT NOT NULL,
+                                         operation TEXT NOT NULL,
+                                         model_deployment TEXT NULL,
+                                         prompt_tokens INTEGER NULL,
+                                         completion_tokens INTEGER NULL,
+                                         total_tokens INTEGER NULL
+                                     );
+                                     CREATE INDEX IF NOT EXISTS idx_llm_token_usage_occurred_at ON "global".llm_token_usage(occurred_at);
+                                     CREATE INDEX IF NOT EXISTS idx_llm_token_usage_agent ON "global".llm_token_usage(agent);
+                                     """;
+            await using (var schemaCommand = new NpgsqlCommand(schemaSql, connection))
+            {
+                await schemaCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            const string insertSql = """
+                                     INSERT INTO "global".llm_token_usage(agent, operation, model_deployment, prompt_tokens, completion_tokens, total_tokens)
+                                     VALUES (@agent, @operation, @model_deployment, @prompt_tokens, @completion_tokens, @total_tokens);
+                                     """;
+            await using var command = new NpgsqlCommand(insertSql, connection) { CommandType = CommandType.Text };
+            command.Parameters.AddWithValue("agent", agentName);
+            command.Parameters.AddWithValue("operation", operation);
+            command.Parameters.AddWithValue("model_deployment", string.IsNullOrWhiteSpace(_copilot.ModelDeployment) ? DBNull.Value : _copilot.ModelDeployment);
+            command.Parameters.AddWithValue("prompt_tokens", usage.InputTokenCount);
+            command.Parameters.AddWithValue("completion_tokens", usage.OutputTokenCount);
+            command.Parameters.AddWithValue("total_tokens", usage.TotalTokenCount);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to log token usage for {AgentName} {Operation}.", agentName, operation);
+        }
     }
 
     private bool TryBuildEndpoint(out Uri endpoint)
