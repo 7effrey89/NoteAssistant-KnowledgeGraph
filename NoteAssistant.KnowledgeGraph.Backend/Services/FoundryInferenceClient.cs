@@ -30,6 +30,7 @@ public interface IFoundryInferenceClient
     Task<float[]> CreateEmbeddingAsync(string input, CancellationToken cancellationToken);
     Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> inputs, CancellationToken cancellationToken);
     Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken);
+    Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken);
     Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken);
     Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken);
     string AnswerSystemPrompt { get; }
@@ -69,8 +70,10 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         "If no clarification is needed, use null. " +
         "rewrittenQuestion should be a clearer version of the question with explicit entities when possible.";
     private const string DefaultEntityExtractionSystemPrompt =
-        "Extract key entities from the user content. Return ONLY a JSON array of objects with 'label' and 'name'. " +
-        "Use labels like Company, Product, Platform, Technology, Concept, Person, or Organization. No prose.";
+        "Extract key entities and typed relationships from the user content. Return ONLY JSON in this shape: " +
+        "{\"entities\":[{\"label\":\"Company\",\"name\":\"...\"}],\"relationships\":[{\"sourceName\":\"...\",\"relationship\":\"uses|evaluates|asks_about|partners_with|competes_with|depends_on|mentions|related_to\",\"targetName\":\"...\",\"confidence\":0.0}]}. " +
+        "Use entity labels like Customer, Company, Product, Platform, Technology, Service, Concept, Person, or Organization. " +
+        "Only include relationships grounded in the text. No prose.";
     private readonly FoundryOptions _copilot;
     private readonly ILogger<FoundryInferenceClient> _logger;
     private readonly EmbeddingClient? _embeddingsClient;
@@ -160,6 +163,12 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
 
     public async Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, CancellationToken cancellationToken)
     {
+        var extraction = await ExtractGraphAsync(markdownContent, cancellationToken).ConfigureAwait(false);
+        return extraction.Entities;
+    }
+
+    public async Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken)
+    {
         if (!IsConfigured)
         {
             throw new InvalidOperationException("Foundry inference is not configured. Set Copilot settings and credentials.");
@@ -174,13 +183,13 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         var response = await _chatClient!.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var content = response.Value.Content.Count > 0 ? response.Value.Content[0].Text : string.Empty;
 
-        if (!TryParseEntities(content ?? string.Empty, out var entities))
+        if (!TryParseGraphExtraction(content ?? string.Empty, out var extraction))
         {
-            _logger.LogWarning("Failed to parse entity JSON from Foundry response.");
-            return Array.Empty<EntityDto>();
+            _logger.LogWarning("Failed to parse graph extraction JSON from Foundry response.");
+            return new GraphExtractionDto(Array.Empty<EntityDto>(), Array.Empty<RelationshipDto>());
         }
 
-        return entities;
+        return extraction;
     }
 
     public async Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken)
@@ -341,6 +350,47 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         => string.Equals(authMode, "ApiKey", StringComparison.OrdinalIgnoreCase)
            || string.Equals(authMode, "Key", StringComparison.OrdinalIgnoreCase);
 
+    private static bool TryParseGraphExtraction(string content, out GraphExtractionDto extraction)
+    {
+        extraction = new GraphExtractionDto(Array.Empty<EntityDto>(), Array.Empty<RelationshipDto>());
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        var objectJson = ExtractJsonObject(content);
+        if (!string.IsNullOrWhiteSpace(objectJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(objectJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    var entities = doc.RootElement.TryGetProperty("entities", out var entitiesValue)
+                        ? ParseEntities(entitiesValue)
+                        : [];
+                    var relationships = doc.RootElement.TryGetProperty("relationships", out var relationshipsValue)
+                        ? ParseRelationships(relationshipsValue)
+                        : [];
+                    extraction = new GraphExtractionDto(entities, relationships);
+                    return entities.Count > 0 || relationships.Count > 0;
+                }
+            }
+            catch (JsonException)
+            {
+                // Fall through to the legacy array parser.
+            }
+        }
+
+        if (TryParseEntities(content, out var legacyEntities))
+        {
+            extraction = new GraphExtractionDto(legacyEntities, Array.Empty<RelationshipDto>());
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryParseEntities(string content, out List<EntityDto> entities)
     {
         entities = new List<EntityDto>();
@@ -358,36 +408,7 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                return false;
-            }
-
-            foreach (var item in doc.RootElement.EnumerateArray())
-            {
-                if (item.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                var label = item.TryGetProperty("label", out var labelValue) ? labelValue.GetString() : null;
-                var name = item.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
-
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    continue;
-                }
-
-                label = string.IsNullOrWhiteSpace(label) ? "Concept" : label.Trim();
-                name = name.Trim();
-
-                if (name.Length is < 2 or > 80)
-                {
-                    continue;
-                }
-
-                entities.Add(new EntityDto(label, name));
-            }
+            entities = ParseEntities(doc.RootElement).ToList();
 
             return entities.Count > 0;
         }
@@ -397,10 +418,139 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
         }
     }
 
+    private static IReadOnlyList<EntityDto> ParseEntities(JsonElement value)
+    {
+        var entities = new List<EntityDto>();
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            return entities;
+        }
+
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var label = item.TryGetProperty("label", out var labelValue) ? labelValue.GetString() : null;
+            var name = item.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            label = string.IsNullOrWhiteSpace(label) ? "Concept" : label.Trim();
+            name = name.Trim();
+
+            if (name.Length is < 2 or > 80)
+            {
+                continue;
+            }
+
+            if (!entities.Any(entity => string.Equals(entity.Label, label, StringComparison.OrdinalIgnoreCase)
+                                        && string.Equals(entity.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                entities.Add(new EntityDto(label, name));
+            }
+        }
+
+        return entities;
+    }
+
+    private static IReadOnlyList<RelationshipDto> ParseRelationships(JsonElement value)
+    {
+        var relationships = new List<RelationshipDto>();
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            return relationships;
+        }
+
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var source = ReadStringProperty(item, "sourceName", "source", "head", "from");
+            var relation = ReadStringProperty(item, "relationship", "relation", "type", "label");
+            var target = ReadStringProperty(item, "targetName", "target", "tail", "to");
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target))
+            {
+                continue;
+            }
+
+            relation = string.IsNullOrWhiteSpace(relation) ? "related_to" : NormalizeRelationshipType(relation);
+            var confidence = ReadDoubleProperty(item, "confidence", "score");
+            relationships.Add(new RelationshipDto(source.Trim(), relation, target.Trim(), confidence));
+        }
+
+        return relationships
+            .Where(r => r.SourceName.Length <= 80 && r.TargetName.Length <= 80 && r.Relationship.Length <= 80)
+            .DistinctBy(r => $"{r.SourceName}\t{r.Relationship}\t{r.TargetName}", StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? ReadStringProperty(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static double? ReadDoubleProperty(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!item.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeRelationshipType(string value)
+    {
+        var normalized = new string(value.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+        while (normalized.Contains("__", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+        }
+
+        return normalized.Trim('_');
+    }
+
     private static string ExtractJsonArray(string content)
     {
         var start = content.IndexOf('[', StringComparison.Ordinal);
         var end = content.LastIndexOf(']');
+        if (start < 0 || end <= start)
+        {
+            return string.Empty;
+        }
+
+        return content.Substring(start, end - start + 1);
+    }
+
+    private static string ExtractJsonObject(string content)
+    {
+        var start = content.IndexOf('{');
+        var end = content.LastIndexOf('}');
         if (start < 0 || end <= start)
         {
             return string.Empty;

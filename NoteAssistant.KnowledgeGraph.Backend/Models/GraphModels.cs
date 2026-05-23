@@ -2,9 +2,23 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Models;
 
 public sealed record ChunkDto(long Id, int ChunkIndex, string Text, float[]? Embedding = null);
 
-public sealed record EntityDto(string Label, string Name);
+public sealed record EntityDto(string Label, string Name, string? EmbeddingText = null, float[]? Embedding = null);
+
+public sealed record RelationshipDto(string SourceName, string Relationship, string TargetName, double? Confidence = null);
 
 public sealed record ChunkEntityLinkDto(long ChunkId, string EntityLabel, string EntityName);
+
+public sealed record ChunkRelationshipDto(
+    long? ChunkId,
+    string SourceName,
+    string Relationship,
+    string TargetName,
+    double? Confidence = null,
+    string? Evidence = null);
+
+public sealed record GraphExtractionDto(
+    IReadOnlyList<EntityDto> Entities,
+    IReadOnlyList<RelationshipDto> Relationships);
 
 public sealed record IngestionStatusDto(long DocumentId, string FileName, string State, DateTimeOffset UpdatedAt, string Message);
 
@@ -42,7 +56,8 @@ public sealed record GraphIngestionPlan(
     string OriginalContent = "",
     string ContentHash = "",
     bool Cached = false,
-    string DecompositionSystemPrompt = "");
+    string DecompositionSystemPrompt = "",
+    IReadOnlyList<ChunkRelationshipDto>? Relationships = null);
 
 public sealed record GraphQueryRequest(string Cypher, string GraphName = "knowledge_graph");
 
@@ -90,7 +105,23 @@ public sealed record HybridRetrievalRequest(
     int ClarificationAttempts = 0,
     string? ClarificationResponse = null);
 
-public sealed record HybridChunkResultDto(long Id, long DocumentId, int ChunkIndex, string Content, double? Distance);
+public sealed record HybridChunkResultDto(
+    long Id,
+    long DocumentId,
+    int ChunkIndex,
+    string Content,
+    double? Distance,
+    int? VectorRank = null,
+    int? KeywordRank = null,
+    double? Score = null);
+
+public sealed record HybridGraphRelationshipDto(
+    string Source,
+    string Relationship,
+    string Target,
+    long? DocumentId = null,
+    int? ChunkIndex = null,
+    string? SourceText = null);
 
 public sealed record HybridTokenUsageDto(int? PromptTokens, int? CompletionTokens);
 
@@ -117,4 +148,5 @@ public sealed record HybridRetrievalResponse(
     string? ClarificationQuestion = null,
     string? RewrittenQuestion = null,
     string? SystemPrompt = null,
-    string? AnalysisSystemPrompt = null);
+    string? AnalysisSystemPrompt = null,
+    IReadOnlyList<HybridGraphRelationshipDto>? GraphRelationships = null);

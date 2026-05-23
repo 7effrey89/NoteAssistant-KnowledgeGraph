@@ -120,6 +120,9 @@
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="tab-links-btn" data-bs-toggle="tab" data-bs-target="#tab-links" type="button" role="tab" aria-controls="tab-links" aria-selected="false">Links</button>
                                 </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="tab-relationships-btn" data-bs-toggle="tab" data-bs-target="#tab-relationships" type="button" role="tab" aria-controls="tab-relationships" aria-selected="false">Relationships</button>
+                                </li>
                             </ul>
                             <div class="tab-content decomposition-subtab-content">
                                 <div class="tab-pane fade show active" id="tab-chunks" role="tabpanel" aria-labelledby="tab-chunks-btn">
@@ -130,6 +133,9 @@
                                 </div>
                                 <div class="tab-pane fade" id="tab-links" role="tabpanel" aria-labelledby="tab-links-btn">
                                     <ul id="mentionsOutput" class="mb-0"></ul>
+                                </div>
+                                <div class="tab-pane fade" id="tab-relationships" role="tabpanel" aria-labelledby="tab-relationships-btn">
+                                    <ul id="relationshipsOutput" class="mb-0"></ul>
                                 </div>
                             </div>
                         </div>
@@ -398,7 +404,7 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header">6) Hybrid GraphRAG (Graph → Vector → LLM context)</div>
+        <div class="card-header">6) Hybrid GraphRAG (Graph context → Hybrid retrieval → LLM context)</div>
         <div class="card-body">
             <div class="mb-2">
                 <label class="form-label" for="hybridQuestion">Question</label>
@@ -910,6 +916,7 @@
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
+            renderList('relationshipsOutput', []);
             setMetadataForm(null);
             renderUploadedDocuments();
 
@@ -1448,6 +1455,7 @@
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
+            renderList('relationshipsOutput', []);
             setMetadataForm(null);
             renderUploadedDocuments();
             renderResults([]);
@@ -1555,6 +1563,7 @@
             const answerStep = getTraceStep(trace, 'llm-answer');
             const matchStep = getTraceStep(trace, 'entity-match');
             const expansionStep = getTraceStep(trace, 'graph-expansion');
+            const relationshipsStep = getTraceStep(trace, 'graph-relationships');
             const embeddingStep = getTraceStep(trace, 'embedding');
             const vectorStep = getTraceStep(trace, 'vector-search');
             const fallbackStep = getTraceStep(trace, 'entity-fallback');
@@ -1565,6 +1574,7 @@
                     variant: 'agent',
                     role,
                     systemPrompt,
+                    systemPromptTitle: `${title} (System Prompt)`,
                     tokenUsage: step && step.tokenUsage ? step.tokenUsage : null
                 };
             }
@@ -1685,6 +1695,31 @@
                 body: (payload.graphEntities || []).join(', ') || '(none)'
             });
 
+            const relationshipDetail = includeTrace && relationshipsStep?.detail ? relationshipsStep.detail : '(trace disabled)';
+            mapItems.push({
+                title: 'Graph relationship context',
+                variant: 'purpose',
+                purpose: 'Load entity → relationship → entity triples with source chunk evidence so the answer agent can reason over graph structure, not just use the graph as a filter.'
+            });
+            mapItems.push({
+                title: 'Graph relationship query',
+                indent: true,
+                scroll: true,
+                body: truncateText(relationshipDetail, 1600)
+            });
+            const relationshipLines = (payload.graphRelationships || []).map(r => {
+                const doc = r.documentId ?? 'n/a';
+                const chunk = r.chunkIndex ?? 'n/a';
+                const text = r.sourceText ? `\n  evidence: ${truncateText(r.sourceText, 220)}` : '';
+                return `${r.source} -[${r.relationship}]-> ${r.target} (doc:${doc} chunk:${chunk})${text}`;
+            });
+            mapItems.push({
+                title: 'Graph relationship output',
+                indent: true,
+                scroll: true,
+                body: relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n')
+            });
+
             // Phase 5: Question Embedding ---------------------------------
             mapItems.push({
                 title: 'Question Embedding',
@@ -1708,13 +1743,13 @@
                 body: embeddingOutputText
             });
 
-            // Phase 6: Vector Search --------------------------------------
+            // Phase 6: Hybrid Chunk Retrieval -----------------------------
             const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
             const vectorSql = parseSqlSections(vectorDetail);
             const vectorBubble = {
-                title: 'Vector Search',
+                title: 'Hybrid Chunk Retrieval',
                 variant: 'purpose',
-                purpose: 'Find relevant chunks filtered by relevant entities to answer the user question.'
+                purpose: 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
             };
             if (vectorSql) {
                 vectorBubble.bodyHtml = buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable);
@@ -1723,9 +1758,9 @@
             }
             mapItems.push(vectorBubble);
 
-            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'})`);
+            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
             mapItems.push({
-                title: 'Vector Search Output',
+                title: 'Hybrid Retrieval Output',
                 indent: true,
                 scroll: true,
                 body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
@@ -1762,6 +1797,11 @@
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
+            renderList('relationshipsOutput', (payload.relationships || []).map(r => {
+                const chunk = r.chunkId ? ` | chunk ${r.chunkId}` : '';
+                const confidence = r.confidence !== null && r.confidence !== undefined ? ` | confidence ${r.confidence}` : '';
+                return `${r.sourceName} -[${r.relationship}]-> ${r.targetName}${chunk}${confidence}`;
+            }));
         }
 
         function renderStatus(status) {
@@ -1876,7 +1916,7 @@
                 const details = document.createElement('details');
                 details.className = 'process-bubble-systemprompt';
                 const summary = document.createElement('summary');
-                summary.innerText = 'Graph Maker Agent (System Prompt)';
+                summary.innerText = item.systemPromptTitle || 'Agent System Prompt';
                 details.appendChild(summary);
                 const pre = document.createElement('pre');
                 pre.innerText = item.systemPrompt;

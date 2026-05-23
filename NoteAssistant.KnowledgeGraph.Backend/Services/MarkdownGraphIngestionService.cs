@@ -33,14 +33,17 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         var chunkEmbeddings = await _foundry.CreateEmbeddingsAsync(chunks.Select(c => c.Text).ToList(), cancellationToken);
         var enrichedChunks = MergeEmbeddings(chunks, chunkEmbeddings);
 
-        var entities = await ExtractEntitiesAsync(markdownContent, enrichedChunks, cancellationToken);
+        var extraction = await ExtractGraphAsync(markdownContent, enrichedChunks, cancellationToken);
+        var entities = extraction.Entities;
         var mentions = BuildMentions(enrichedChunks, entities).ToList();
+        var relationships = BuildChunkRelationships(enrichedChunks, extraction.Relationships).ToList();
+        entities = await EnrichEntityEmbeddingsAsync(entities, mentions, relationships, enrichedChunks, cancellationToken);
 
         var normalizedMetadata = NormalizeMetadata(metadata);
-        var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, contentHash, enrichedChunks, entities, mentions, normalizedMetadata);
+        var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, contentHash, enrichedChunks, entities, mentions, relationships, normalizedMetadata);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
-        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, contentHash, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt);
+        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, contentHash, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt, Relationships: relationships);
     }
 
     public GraphIngestionPlan ApplyDocumentIdentity(GraphIngestionPlan plan, string contentHash)
@@ -55,6 +58,11 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
                 ? mention with { ChunkId = chunkId }
                 : mention)
             .ToList();
+        var relationships = (plan.Relationships ?? Array.Empty<ChunkRelationshipDto>())
+            .Select(relationship => relationship.ChunkId.HasValue && chunkIdMap.TryGetValue(relationship.ChunkId.Value, out var chunkId)
+                ? relationship with { ChunkId = chunkId }
+                : relationship)
+            .ToList();
         var status = plan.Status with { DocumentId = documentId };
 
         return plan with
@@ -63,14 +71,15 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             Chunks = chunks,
             Mentions = mentions,
             Status = status,
-            ContentHash = contentHash
+            ContentHash = contentHash,
+            Relationships = relationships
         };
     }
 
     public GraphIngestionPlan RefreshSql(GraphIngestionPlan plan)
     {
         var fileName = plan.Status.FileName;
-        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.ContentHash, plan.Chunks, plan.Entities, plan.Mentions, NormalizeMetadata(plan.Metadata));
+        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.ContentHash, plan.Chunks, plan.Entities, plan.Mentions, plan.Relationships ?? Array.Empty<ChunkRelationshipDto>(), NormalizeMetadata(plan.Metadata));
         return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql, DecompositionSystemPrompt = string.IsNullOrWhiteSpace(plan.DecompositionSystemPrompt) ? _foundry.EntityExtractionSystemPrompt : plan.DecompositionSystemPrompt };
     }
 
@@ -134,17 +143,18 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private async Task<IReadOnlyList<EntityDto>> ExtractEntitiesAsync(string markdownContent, IReadOnlyList<ChunkDto> chunks, CancellationToken cancellationToken)
+    private async Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, IReadOnlyList<ChunkDto> chunks, CancellationToken cancellationToken)
     {
-        var extracted = await _foundry.ExtractEntitiesAsync(markdownContent, cancellationToken);
-        var normalized = NormalizeEntities(extracted);
+        var extracted = await _foundry.ExtractGraphAsync(markdownContent, cancellationToken);
+        var normalized = NormalizeEntities(extracted.Entities);
+        var relationships = NormalizeRelationships(extracted.Relationships, normalized);
 
         if (normalized.Count > 0)
         {
-            return normalized;
+            return new GraphExtractionDto(normalized, relationships);
         }
 
-        return ExtractEntitiesHeuristic(markdownContent, chunks).ToList();
+        return new GraphExtractionDto(ExtractEntitiesHeuristic(markdownContent, chunks).ToList(), Array.Empty<RelationshipDto>());
     }
 
     private static IEnumerable<EntityDto> ExtractEntitiesHeuristic(string markdownContent, IReadOnlyList<ChunkDto> chunks)
@@ -211,6 +221,131 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             .ToList();
     }
 
+    private static IReadOnlyList<RelationshipDto> NormalizeRelationships(IEnumerable<RelationshipDto> relationships, IReadOnlyList<EntityDto> entities)
+    {
+        var entityNames = entities.Select(entity => entity.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var normalized = new Dictionary<string, RelationshipDto>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relationship in relationships)
+        {
+            var source = relationship.SourceName?.Trim();
+            var target = relationship.TargetName?.Trim();
+            var type = NormalizeRelationshipType(relationship.Relationship);
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(type))
+            {
+                continue;
+            }
+
+            if (source.Length > 80 || target.Length > 80 || type.Length > 80)
+            {
+                continue;
+            }
+
+            if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (entityNames.Count > 0 && (!entityNames.Contains(source) || !entityNames.Contains(target)))
+            {
+                continue;
+            }
+
+            double? confidence = relationship.Confidence.HasValue
+                ? Math.Clamp(relationship.Confidence.Value, 0, 1)
+                : null;
+            normalized.TryAdd($"{source}\t{type}\t{target}", new RelationshipDto(source, type, target, confidence));
+        }
+
+        return normalized.Values
+            .OrderBy(r => r.SourceName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.Relationship, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.TargetName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IEnumerable<ChunkRelationshipDto> BuildChunkRelationships(IReadOnlyList<ChunkDto> chunks, IReadOnlyList<RelationshipDto> relationships)
+    {
+        foreach (var relationship in relationships)
+        {
+            var supportingChunk = chunks.FirstOrDefault(chunk =>
+                chunk.Text.Contains(relationship.SourceName, StringComparison.OrdinalIgnoreCase)
+                && chunk.Text.Contains(relationship.TargetName, StringComparison.OrdinalIgnoreCase));
+
+            yield return new ChunkRelationshipDto(
+                supportingChunk?.Id,
+                relationship.SourceName,
+                relationship.Relationship,
+                relationship.TargetName,
+                relationship.Confidence,
+                supportingChunk?.Text);
+        }
+    }
+
+    private async Task<IReadOnlyList<EntityDto>> EnrichEntityEmbeddingsAsync(
+        IReadOnlyList<EntityDto> entities,
+        IReadOnlyList<ChunkEntityLinkDto> mentions,
+        IReadOnlyList<ChunkRelationshipDto> relationships,
+        IReadOnlyList<ChunkDto> chunks,
+        CancellationToken cancellationToken)
+    {
+        if (entities.Count == 0)
+        {
+            return entities;
+        }
+
+        var chunkLookup = chunks.ToDictionary(chunk => chunk.Id, chunk => chunk.Text);
+        var embeddingTexts = entities
+            .Select(entity => BuildEntityEmbeddingText(entity, mentions, relationships, chunkLookup))
+            .ToList();
+        var embeddings = await _foundry.CreateEmbeddingsAsync(embeddingTexts, cancellationToken);
+
+        return entities.Select((entity, index) => entity with
+        {
+            EmbeddingText = embeddingTexts[index],
+            Embedding = index < embeddings.Count ? embeddings[index] : null
+        }).ToList();
+    }
+
+    private static string BuildEntityEmbeddingText(
+        EntityDto entity,
+        IReadOnlyList<ChunkEntityLinkDto> mentions,
+        IReadOnlyList<ChunkRelationshipDto> relationships,
+        IReadOnlyDictionary<long, string> chunkLookup)
+    {
+        var lines = new List<string>
+        {
+            $"Entity: {entity.Name}",
+            $"Type: {entity.Label}"
+        };
+
+        var relationLines = relationships
+            .Where(relationship => string.Equals(relationship.SourceName, entity.Name, StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(relationship.TargetName, entity.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(relationship => $"Relation: {relationship.SourceName} {relationship.Relationship} {relationship.TargetName}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+        lines.AddRange(relationLines);
+
+        var sourceTexts = mentions
+            .Where(mention => string.Equals(mention.EntityName, entity.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(mention => chunkLookup.TryGetValue(mention.ChunkId, out var text) ? text : null)
+            .Concat(relationships
+                .Where(relationship => string.Equals(relationship.SourceName, entity.Name, StringComparison.OrdinalIgnoreCase)
+                                       || string.Equals(relationship.TargetName, entity.Name, StringComparison.OrdinalIgnoreCase))
+                .Select(relationship => relationship.Evidence))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+        if (sourceTexts.Count > 0)
+        {
+            lines.Add($"Context: {string.Join(" ", sourceTexts)}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
     private static IEnumerable<ChunkEntityLinkDto> BuildMentions(IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities)
     {
         foreach (var chunk in chunks)
@@ -225,7 +360,17 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private List<string> BuildSql(long documentId, string fileName, string title, string rawContent, string contentHash, IReadOnlyList<ChunkDto> chunks, IReadOnlyList<EntityDto> entities, IReadOnlyList<ChunkEntityLinkDto> mentions, DocumentMetadata metadata)
+    private List<string> BuildSql(
+        long documentId,
+        string fileName,
+        string title,
+        string rawContent,
+        string contentHash,
+        IReadOnlyList<ChunkDto> chunks,
+        IReadOnlyList<EntityDto> entities,
+        IReadOnlyList<ChunkEntityLinkDto> mentions,
+        IReadOnlyList<ChunkRelationshipDto> relationships,
+        DocumentMetadata metadata)
     {
         var graphName = _databaseOptions.GraphName;
         var extensions = _databaseOptions.Extensions;
@@ -251,12 +396,19 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags JSONB;",
             "ALTER TABLE documents DROP COLUMN IF EXISTS source_created_at;",
             "CREATE TABLE IF NOT EXISTS entities (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+            "ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding vector(1536);",
+            "ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding_text TEXT;",
             "CREATE TABLE IF NOT EXISTS chunks (id BIGSERIAL PRIMARY KEY, document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, embedding vector(1536), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(document_id, chunk_index));",
             "CREATE TABLE IF NOT EXISTS chunk_entities (chunk_id BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, PRIMARY KEY(chunk_id, entity_id));",
+            "CREATE TABLE IF NOT EXISTS relationships (id BIGSERIAL PRIMARY KEY, source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, relationship_type TEXT NOT NULL, chunk_id BIGINT NULL REFERENCES chunks(id) ON DELETE SET NULL, confidence DOUBLE PRECISION NULL, evidence TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(source_entity_id, target_entity_id, relationship_type, chunk_id));",
             "CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id, chunk_index);",
             "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);",
+            BuildEntityDiskAnnIndexStatement(extensions),
             BuildDiskAnnIndexStatement(extensions),
             "CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity_id ON chunk_entities(entity_id);",
+            "CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_entity_id);",
+            "CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_entity_id);",
+            "CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(relationship_type);",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash) WHERE content_hash IS NOT NULL AND content_hash <> '';",
             "CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);",
             "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'summary') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'content') THEN ALTER TABLE documents RENAME COLUMN summary TO content; END IF; END $$;",
@@ -286,7 +438,13 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         foreach (var entity in entities)
         {
-            statements.Add($"INSERT INTO entities(label, name) VALUES ('{EscapeSql(entity.Label)}', '{EscapeSql(entity.Name)}') ON CONFLICT (name) DO UPDATE SET label = EXCLUDED.label;");
+            var entityEmbeddingLiteral = entity.Embedding is { Length: > 0 }
+                ? $"'{ToVectorLiteral(entity.Embedding, 1536)}'"
+                : "NULL";
+            var entityEmbeddingTextLiteral = string.IsNullOrWhiteSpace(entity.EmbeddingText)
+                ? "NULL"
+                : $"'{EscapeSql(entity.EmbeddingText)}'";
+            statements.Add($"INSERT INTO entities(label, name, embedding, embedding_text) VALUES ('{EscapeSql(entity.Label)}', '{EscapeSql(entity.Name)}', {entityEmbeddingLiteral}, {entityEmbeddingTextLiteral}) ON CONFLICT (name) DO UPDATE SET label = EXCLUDED.label, embedding = COALESCE(EXCLUDED.embedding, entities.embedding), embedding_text = COALESCE(EXCLUDED.embedding_text, entities.embedding_text);");
             statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (e:{entity.Label} {{name:\"{Escape(entity.Name)}\"}}) RETURN e $$) as (e agtype);");
         }
 
@@ -300,6 +458,20 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
             statements.Add($"INSERT INTO chunk_entities(chunk_id, entity_id) SELECT c.id, e.id FROM chunks c JOIN entities e ON e.name = '{EscapeSql(mention.EntityName)}' WHERE c.document_id = {documentId} AND c.chunk_index = {chunkIndex} ON CONFLICT DO NOTHING;");
             statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MATCH (c:Chunk {{id:{mention.ChunkId}}}), (e) WHERE e.name=\"{Escape(mention.EntityName)}\" MERGE (c)-[r:MENTIONS]->(e) RETURN r $$) as (r agtype);");
+        }
+
+        foreach (var relationship in relationships)
+        {
+            var relationshipChunkIndex = relationship.ChunkId.HasValue && chunkIndexLookup.TryGetValue(relationship.ChunkId.Value, out var resolvedChunkIndex)
+                ? resolvedChunkIndex
+                : (int?)null;
+            var chunkJoin = relationshipChunkIndex.HasValue
+                ? $"LEFT JOIN chunks c ON c.document_id = {documentId} AND c.chunk_index = {relationshipChunkIndex.Value}"
+                : "LEFT JOIN chunks c ON false";
+            var confidenceLiteral = relationship.Confidence.HasValue ? relationship.Confidence.Value.ToString("0.####", CultureInfo.InvariantCulture) : "NULL";
+            var evidenceLiteral = string.IsNullOrWhiteSpace(relationship.Evidence) ? "NULL" : $"'{EscapeSql(relationship.Evidence)}'";
+            statements.Add($"INSERT INTO relationships(source_entity_id, target_entity_id, relationship_type, chunk_id, confidence, evidence) SELECT s.id, t.id, '{EscapeSql(relationship.Relationship)}', c.id, {confidenceLiteral}, {evidenceLiteral} FROM entities s JOIN entities t ON t.name = '{EscapeSql(relationship.TargetName)}' {chunkJoin} WHERE s.name = '{EscapeSql(relationship.SourceName)}' ON CONFLICT (source_entity_id, target_entity_id, relationship_type, chunk_id) DO UPDATE SET confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence;");
+            statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MATCH (a), (b) WHERE a.name=\"{Escape(relationship.SourceName)}\" AND b.name=\"{Escape(relationship.TargetName)}\" MERGE (a)-[r:RELATION {{type:\"{Escape(relationship.Relationship)}\"}}]->(b) SET r.confidence={(relationship.Confidence.HasValue ? relationship.Confidence.Value.ToString("0.####", CultureInfo.InvariantCulture) : "null")}, r.chunk_id={(relationship.ChunkId.HasValue ? relationship.ChunkId.Value.ToString(CultureInfo.InvariantCulture) : "null")}, r.evidence={(string.IsNullOrWhiteSpace(relationship.Evidence) ? "null" : $"\"{Escape(relationship.Evidence)}\"")} RETURN r $$) as (r agtype);");
         }
 
         foreach (var pair in BuildEntityPairsByChunk(mentions))
@@ -379,6 +551,22 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
     private static string EscapeSql(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
 
+    private static string NormalizeRelationshipType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "related_to";
+        }
+
+        var normalized = new string(value.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+        while (normalized.Contains("__", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+        }
+
+        return string.IsNullOrWhiteSpace(normalized.Trim('_')) ? "related_to" : normalized.Trim('_');
+    }
+
     private static string CleanText(string value)
     {
         var withoutHeaders = Regex.Replace(value, "^#{1,6}\\s*", string.Empty, RegexOptions.Multiline);
@@ -445,6 +633,11 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         => extensions.Any(name => string.Equals(name, "pg_diskann", StringComparison.OrdinalIgnoreCase))
             ? "DO $$ BEGIN CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING diskann (embedding vector_cosine_ops); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'diskann index creation skipped.'; END $$;"
             : "DO $$ BEGIN RAISE NOTICE 'diskann index creation disabled by configuration.'; END $$;";
+
+    private static string BuildEntityDiskAnnIndexStatement(string[] extensions)
+        => extensions.Any(name => string.Equals(name, "pg_diskann", StringComparison.OrdinalIgnoreCase))
+            ? "DO $$ BEGIN CREATE INDEX IF NOT EXISTS idx_entities_embedding ON entities USING diskann (embedding vector_cosine_ops); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'entity diskann index creation skipped.'; END $$;"
+            : "DO $$ BEGIN RAISE NOTICE 'entity diskann index creation disabled by configuration.'; END $$;";
 
     private static string BuildTagsJsonLiteral(IReadOnlyList<string>? tags)
     {

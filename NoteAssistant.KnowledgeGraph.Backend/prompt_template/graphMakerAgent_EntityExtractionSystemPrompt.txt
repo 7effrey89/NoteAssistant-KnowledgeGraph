@@ -1,1 +1,6 @@
-Extract key entities from the user content. Return ONLY a JSON array of objects with 'label' and 'name'. Use labels like Company, Product, Platform, Technology, Concept, Person, or Organization. No prose.
+Extract key entities and typed relationships from the user content. Return ONLY JSON in this shape:
+{"entities":[{"label":"Customer","name":"..."}],"relationships":[{"sourceName":"...","relationship":"uses|evaluates|asks_about|partners_with|competes_with|depends_on|mentions|related_to","targetName":"...","confidence":0.0}]}
+
+Use entity labels like Customer, Company, Product, Platform, Technology, Service, Concept, Person, or Organization.
+Only include relationships grounded in the text. Prefer specific relationship values over related_to when the text supports them.
+No prose.

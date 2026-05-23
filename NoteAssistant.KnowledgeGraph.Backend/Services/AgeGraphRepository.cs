@@ -455,11 +455,15 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                     "Proceeding without additional clarification.");
             }
 
+            var queryEmbeddingForEntityMatch = request.QueryEmbedding is { Length: > 0 }
+                ? request.QueryEmbedding!
+                : (_foundry.IsConfigured ? await _foundry.CreateEmbeddingAsync(rewrittenQuestion, cancellationToken) : []);
+
             var expansionSeeds = detectedEntities;
             if (detectedEntities.Count > 0)
             {
                 var matchTimer = Stopwatch.StartNew();
-                var matchResult = await MatchEntitiesAsync(connection, detectedEntities, cancellationToken);
+                var matchResult = await MatchEntitiesAsync(connection, detectedEntities, queryEmbeddingForEntityMatch, cancellationToken);
                 matchedEntities = matchResult.Matched;
                 var matchCandidates = matchResult.ExpandedCandidates;
                 matchTimer.Stop();
@@ -515,11 +519,23 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             var entityFilter = graphEntities.Count > 0
                 ? graphEntities
                 : (expansionSeeds.Count > 0 ? expansionSeeds : detectedEntities);
+
+            var relationshipTimer = Stopwatch.StartNew();
+            var graphRelationships = entityFilter.Count > 0
+                ? await QueryGraphRelationshipsAsync(connection, entityFilter, request.Limit * 3, cancellationToken)
+                : [];
+            relationshipTimer.Stop();
+            AddStep(
+                "graph-relationships",
+                $"Loaded {graphRelationships.Count} relationship triples with source evidence",
+                BuildGraphRelationshipDetail(entityFilter, graphRelationships),
+                (int)relationshipTimer.ElapsedMilliseconds);
+
             var embeddingTimer = Stopwatch.StartNew();
             var usedProvidedEmbedding = request.QueryEmbedding is { Length: > 0 };
             var vector = usedProvidedEmbedding
                 ? request.QueryEmbedding!
-                : await _foundry.CreateEmbeddingAsync(rewrittenQuestion, cancellationToken);
+                : (queryEmbeddingForEntityMatch.Length > 0 ? queryEmbeddingForEntityMatch : await _foundry.CreateEmbeddingAsync(rewrittenQuestion, cancellationToken));
             embeddingTimer.Stop();
             var vectorLiteral = ToVectorLiteral(vector, 1536);
             var embeddingOutput = $"Vector:\n{vectorLiteral}\nEmbedding length: {vector.Length.ToString(CultureInfo.InvariantCulture)}";
@@ -538,19 +554,19 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
             var vectorTimer = Stopwatch.StartNew();
             var chunks = entityFilter.Count > 0
-                ? await QueryChunksByEntitiesAndVectorAsync(connection, entityFilter, vector, request.Limit, cancellationToken)
+                ? await QueryChunksByEntitiesHybridAsync(connection, entityFilter, rewrittenQuestion, vector, request.Limit, cancellationToken)
                 : [];
             vectorTimer.Stop();
             AddStep(
                 "vector-search",
-                $"Vector search returned {chunks.Count} chunks (limit={request.Limit})",
-                BuildVectorSearchDetail(entityFilter, request.Limit, vector),
+                $"Hybrid chunk retrieval returned {chunks.Count} chunks (vector + keyword RRF, limit={request.Limit})",
+                BuildHybridChunkSearchDetail(entityFilter, rewrittenQuestion, request.Limit, vector),
                 (int)vectorTimer.ElapsedMilliseconds);
 
-            var prompt = BuildPromptContext(entityFilter, chunks);
+            var prompt = BuildPromptContext(entityFilter, graphRelationships, chunks);
             AddStep(
                 "prompt-context",
-                $"Prompt context built from {chunks.Count} chunks",
+                $"Prompt context built from {graphRelationships.Count} graph triples and {chunks.Count} chunks",
                 prompt);
 
             string? answer = null;
@@ -597,7 +613,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 null,
                 rewrittenQuestion,
                 _foundry.AnswerSystemPrompt,
-                analysisSystemPrompt);
+                analysisSystemPrompt,
+                graphRelationships);
         }
         catch (Exception ex)
         {
@@ -710,29 +727,92 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return result;
     }
 
-    private static string BuildVectorSearchDetail(IReadOnlyCollection<string> entityFilter, int limit, float[] queryEmbedding)
+    private static string BuildGraphRelationshipDetail(IReadOnlyCollection<string> entityFilter, IReadOnlyCollection<HybridGraphRelationshipDto> relationships)
     {
-        const string parameterizedSql = "SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding <=> CAST(@query_vector AS vector) AS distance\n" +
-                                        "FROM chunks c\n" +
-                                        "JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
-                                        "JOIN entities e ON e.id = ce.entity_id\n" +
-                                        "WHERE e.name = ANY(@entity_names)\n" +
-                                        "  AND c.embedding IS NOT NULL\n" +
-                                        "ORDER BY c.embedding <=> CAST(@query_vector AS vector)\n" +
+        const string parameterizedSql = "WITH typed_relationships AS (\n" +
+                        "    SELECT s.name AS source, r.relationship_type AS relationship, t.name AS target, c.document_id, c.chunk_index, COALESCE(r.evidence, c.content) AS source_text, 0 AS priority\n" +
+                        "    FROM relationships r\n" +
+                        "    JOIN entities s ON s.id = r.source_entity_id\n" +
+                        "    JOIN entities t ON t.id = r.target_entity_id\n" +
+                        "    LEFT JOIN chunks c ON c.id = r.chunk_id\n" +
+                        "    WHERE s.name = ANY(@entity_names) OR t.name = ANY(@entity_names)\n" +
+                        "), co_mentions AS (\n" +
+                        "    SELECT e1.name AS source, 'CO_MENTIONED_WITH' AS relationship, e2.name AS target, c.document_id, c.chunk_index, c.content AS source_text, 1 AS priority\n" +
+                        "    FROM chunks c\n" +
+                        "    JOIN chunk_entities ce1 ON ce1.chunk_id = c.id\n" +
+                        "    JOIN entities e1 ON e1.id = ce1.entity_id\n" +
+                        "    JOIN chunk_entities ce2 ON ce2.chunk_id = c.id\n" +
+                        "    JOIN entities e2 ON e2.id = ce2.entity_id\n" +
+                        "    WHERE e1.name = ANY(@entity_names) AND e2.name <> e1.name\n" +
+                        ")\n" +
+                        "SELECT source, relationship, target, document_id, chunk_index, source_text\n" +
+                        "FROM (SELECT * FROM typed_relationships UNION ALL SELECT * FROM co_mentions) rels\n" +
+                        "ORDER BY priority, document_id DESC NULLS LAST, chunk_index NULLS LAST, source, target\n" +
+                        "LIMIT @limit;";
+        var triples = relationships.Count == 0
+            ? "(none)"
+            : string.Join(Environment.NewLine, relationships.Select(r => $"{r.Source} -[{r.Relationship}]-> {r.Target} (doc:{r.DocumentId?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} chunk:{r.ChunkIndex?.ToString(CultureInfo.InvariantCulture) ?? "n/a"})"));
+
+        return string.Join(Environment.NewLine,
+        [
+            "Purpose: retrieve typed graph triples plus source evidence before chunk ranking; fall back to co-mentioned entities when typed relations are unavailable.",
+            string.Empty,
+            "SQL:",
+            parameterizedSql,
+            string.Empty,
+            $"Entity filter: {FormatEntityList(entityFilter, 20)}",
+            string.Empty,
+            "Relationship triples:",
+            triples
+        ]);
+    }
+
+    private static string BuildHybridChunkSearchDetail(IReadOnlyCollection<string> entityFilter, string query, int limit, float[] queryEmbedding)
+    {
+        const string parameterizedSql = "WITH entity_chunks AS (\n" +
+                                        "    SELECT DISTINCT c.id, c.document_id, c.chunk_index, c.content, c.embedding\n" +
+                                        "    FROM chunks c\n" +
+                                        "    JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
+                                        "    JOIN entities e ON e.id = ce.entity_id\n" +
+                                        "    WHERE e.name = ANY(@entity_names)\n" +
+                                        "),\n" +
+                                        "semantic_search AS (\n" +
+                                        "    SELECT id, RANK() OVER (ORDER BY embedding <=> CAST(@query_vector AS vector)) AS vector_rank, embedding <=> CAST(@query_vector AS vector) AS distance\n" +
+                                        "    FROM entity_chunks\n" +
+                                        "    WHERE embedding IS NOT NULL\n" +
+                                        "    ORDER BY embedding <=> CAST(@query_vector AS vector)\n" +
+                                        "    LIMIT 20\n" +
+                                        "),\n" +
+                                        "keyword_search AS (\n" +
+                                        "    SELECT id, RANK() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC) AS keyword_rank\n" +
+                                        "    FROM entity_chunks\n" +
+                                        "    WHERE to_tsvector('english', content) @@ plainto_tsquery('english', @query)\n" +
+                                        "    ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC\n" +
+                                        "    LIMIT 20\n" +
+                                        "),\n" +
+                                        "ranked AS (\n" +
+                                        "    SELECT COALESCE(s.id, k.id) AS id, s.distance, s.vector_rank, k.keyword_rank,\n" +
+                                        "           COALESCE(1.0 / (@rrf_k + s.vector_rank), 0.0) + COALESCE(1.0 / (@rrf_k + k.keyword_rank), 0.0) AS score\n" +
+                                        "    FROM semantic_search s\n" +
+                                        "    FULL OUTER JOIN keyword_search k ON k.id = s.id\n" +
+                                        ")\n" +
+                                        "SELECT c.id, c.document_id, c.chunk_index, c.content, r.distance, r.vector_rank, r.keyword_rank, r.score\n" +
+                                        "FROM ranked r\n" +
+                                        "JOIN chunks c ON c.id = r.id\n" +
+                                        "ORDER BY r.score DESC\n" +
                                         "LIMIT @limit;";
         var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
         var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
         var entityArray = entityFilter.Count == 0
             ? "ARRAY[]::text[]"
             : $"ARRAY[{string.Join(", ", entityFilter.Select(e => $"'{EscapeSqlLiteral(e)}'"))}]::text[]";
-        var executableSql = "SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding <=> '" + vectorLiteral + "'::vector AS distance\n" +
-                            "FROM chunks c\n" +
-                            "JOIN chunk_entities ce ON ce.chunk_id = c.id\n" +
-                            "JOIN entities e ON e.id = ce.entity_id\n" +
-                            "WHERE e.name = ANY(" + entityArray + ")\n" +
-                            "  AND c.embedding IS NOT NULL\n" +
-                            "ORDER BY c.embedding <=> '" + vectorLiteral + "'::vector\n" +
-                            "LIMIT " + constrainedLimit + ";";
+        var safeQuery = EscapeSqlLiteral(query);
+        var executableSql = parameterizedSql
+            .Replace("@entity_names", entityArray, StringComparison.Ordinal)
+            .Replace("CAST(@query_vector AS vector)", "'" + vectorLiteral + "'::vector", StringComparison.Ordinal)
+            .Replace("@query", "'" + safeQuery + "'", StringComparison.Ordinal)
+            .Replace("@rrf_k", "60", StringComparison.Ordinal)
+            .Replace("@limit", constrainedLimit.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
         return $"Parameterized SQL:\n{parameterizedSql}\n\nExecutable SQL:\n{executableSql}";
     }
@@ -751,6 +831,11 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                            "   OR name ILIKE ANY(@patterns)\n" +
                            "ORDER BY CASE WHEN lower(name) = ANY(@exact) THEN 0 ELSE 1 END, name\n" +
                            "LIMIT 20;";
+        const string semanticSql = "SELECT name, embedding <=> CAST(@query_vector AS vector) AS distance\n" +
+                       "FROM entities\n" +
+                       "WHERE embedding IS NOT NULL\n" +
+                       "ORDER BY embedding <=> CAST(@query_vector AS vector)\n" +
+                       "LIMIT 8;";
         var lowered = expandedCandidates.Select(c => c.ToLowerInvariant()).ToList();
         var patterns = expandedCandidates.Select(c => $"%{c}%").ToList();
         var output = matched.Count == 0 ? "(none)" : string.Join(", ", matched);
@@ -761,10 +846,14 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             "SQL:",
             sql,
             string.Empty,
+            "Semantic SQL:",
+            semanticSql,
+            string.Empty,
             $"Parameters:",
             $"- @exact ({lowered.Count}): {FormatEntityList(lowered, 12)}",
             $"- @patterns ({patterns.Count}): {FormatEntityList(patterns, 12)}",
             showExpanded ? $"- Expanded candidates ({expandedCandidates.Count}): {FormatEntityList(expandedCandidates, 12)}" : "- Expanded candidates: (none)",
+            "- Fuzzy fallback: applied in memory against known entity names after exact/pattern matching.",
             string.Empty,
             $"Matched entities: {output}"
         ]);
@@ -847,6 +936,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private static async Task<(List<string> Matched, List<string> ExpandedCandidates)> MatchEntitiesAsync(
         NpgsqlConnection connection,
         IReadOnlyCollection<string> candidates,
+        float[] queryEmbedding,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
@@ -884,7 +974,189 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             }
         }
 
+        await reader.CloseAsync();
+
+        var semanticMatches = await SemanticMatchEntitiesAsync(connection, queryEmbedding, matches, cancellationToken);
+        foreach (var match in semanticMatches)
+        {
+            if (!matches.Contains(match, StringComparer.OrdinalIgnoreCase))
+            {
+                matches.Add(match);
+            }
+        }
+
+        var fuzzyMatches = await FuzzyMatchEntitiesAsync(connection, expandedCandidates, matches, cancellationToken);
+        foreach (var match in fuzzyMatches)
+        {
+            if (!matches.Contains(match, StringComparer.OrdinalIgnoreCase))
+            {
+                matches.Add(match);
+            }
+        }
+
         return (matches, expandedCandidates);
+    }
+
+    private static async Task<List<string>> SemanticMatchEntitiesAsync(
+        NpgsqlConnection connection,
+        float[] queryEmbedding,
+        IReadOnlyCollection<string> existingMatches,
+        CancellationToken cancellationToken)
+    {
+        if (queryEmbedding.Length == 0)
+        {
+            return [];
+        }
+
+        const string ensureSql = "ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding vector(1536);";
+        await using (var ensureCommand = new NpgsqlCommand(ensureSql, connection))
+        {
+            await ensureCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
+        const string sql = """
+                           SELECT name, embedding <=> CAST(@query_vector AS vector) AS distance
+                           FROM entities
+                           WHERE embedding IS NOT NULL
+                           ORDER BY embedding <=> CAST(@query_vector AS vector)
+                           LIMIT 8;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("query_vector", vectorLiteral);
+        var matches = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.IsDBNull(0) || reader.IsDBNull(1))
+            {
+                continue;
+            }
+
+            var name = reader.GetString(0);
+            var distance = Convert.ToDouble(reader.GetValue(1), CultureInfo.InvariantCulture);
+            if (distance <= 0.42 && !existingMatches.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                matches.Add(name);
+            }
+        }
+
+        return matches;
+    }
+
+    private static async Task<List<string>> FuzzyMatchEntitiesAsync(
+        NpgsqlConnection connection,
+        IReadOnlyCollection<string> candidates,
+        IReadOnlyCollection<string> existingMatches,
+        CancellationToken cancellationToken)
+    {
+        var normalizedCandidates = candidates
+            .Select(candidate => candidate.Trim())
+            .Where(candidate => candidate.Length >= 4)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (normalizedCandidates.Count == 0)
+        {
+            return [];
+        }
+
+        const string sql = "SELECT name FROM entities ORDER BY id DESC LIMIT 1000;";
+        await using var command = new NpgsqlCommand(sql, connection);
+        var matches = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.IsDBNull(0))
+            {
+                continue;
+            }
+
+            var entityName = reader.GetString(0);
+            if (existingMatches.Contains(entityName, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var normalizedEntity = NormalizeForFuzzyMatch(entityName);
+            foreach (var candidate in normalizedCandidates)
+            {
+                var normalizedCandidate = NormalizeForFuzzyMatch(candidate);
+                if (IsLikelyEntityMatch(normalizedCandidate, normalizedEntity)
+                    || TokenizeForFuzzyMatch(entityName).Any(token => IsLikelyEntityMatch(normalizedCandidate, token)))
+                {
+                    matches.Add(entityName);
+                    break;
+                }
+            }
+        }
+
+        return matches
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+    }
+
+    private static bool IsLikelyEntityMatch(string candidate, string entity)
+    {
+        if (candidate.Length < 4 || entity.Length < 4)
+        {
+            return false;
+        }
+
+        if (entity.Contains(candidate, StringComparison.OrdinalIgnoreCase) || candidate.Contains(entity, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var suffixLength = Math.Min(4, Math.Min(candidate.Length, entity.Length));
+        if (candidate[^suffixLength..].Equals(entity[^suffixLength..], StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var distance = LevenshteinDistance(candidate, entity);
+        var maxLength = Math.Max(candidate.Length, entity.Length);
+        return maxLength <= 8 && distance <= 2;
+    }
+
+    private static string NormalizeForFuzzyMatch(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant()
+            .Replace("å", "aa", StringComparison.Ordinal)
+            .Replace("æ", "ae", StringComparison.Ordinal)
+            .Replace("ø", "o", StringComparison.Ordinal)
+            .Replace("ö", "o", StringComparison.Ordinal);
+        return Regex.Replace(normalized, "[^a-z0-9]", string.Empty);
+    }
+
+    private static IEnumerable<string> TokenizeForFuzzyMatch(string value)
+        => Regex.Matches(value, "[A-Za-zÅåÆæØøÖö0-9]{4,}")
+            .Select(match => NormalizeForFuzzyMatch(match.Value))
+            .Where(token => token.Length >= 4);
+
+    private static int LevenshteinDistance(string left, string right)
+    {
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                current[j] = Math.Min(Math.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static async Task<List<string>> LoadFallbackEntitiesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
@@ -1423,9 +1695,103 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return long.TryParse(id[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
     }
 
-    private static async Task<List<HybridChunkResultDto>> QueryChunksByEntitiesAndVectorAsync(
+    private static async Task<List<HybridGraphRelationshipDto>> QueryGraphRelationshipsAsync(
         NpgsqlConnection connection,
         IReadOnlyCollection<string> entities,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (entities.Count == 0)
+        {
+            return [];
+        }
+
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        const string ensureSql = """
+                               CREATE TABLE IF NOT EXISTS relationships (
+                                   id BIGSERIAL PRIMARY KEY,
+                                   source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                                   target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                                   relationship_type TEXT NOT NULL,
+                                   chunk_id BIGINT NULL REFERENCES chunks(id) ON DELETE SET NULL,
+                                   confidence DOUBLE PRECISION NULL,
+                                   evidence TEXT NULL,
+                                   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                   UNIQUE(source_entity_id, target_entity_id, relationship_type, chunk_id)
+                               );
+                               """;
+        await using (var ensureCommand = new NpgsqlCommand(ensureSql, connection))
+        {
+            await ensureCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        const string sql = """
+                           WITH typed_relationships AS (
+                               SELECT s.name AS source,
+                                      r.relationship_type AS relationship,
+                                      t.name AS target,
+                                      c.document_id,
+                                      c.chunk_index,
+                                      COALESCE(r.evidence, c.content) AS source_text,
+                                      0 AS priority
+                               FROM relationships r
+                               JOIN entities s ON s.id = r.source_entity_id
+                               JOIN entities t ON t.id = r.target_entity_id
+                               LEFT JOIN chunks c ON c.id = r.chunk_id
+                               WHERE s.name = ANY(@entity_names)
+                                  OR t.name = ANY(@entity_names)
+                           ),
+                           co_mentions AS (
+                               SELECT e1.name AS source,
+                                      'CO_MENTIONED_WITH' AS relationship,
+                                      e2.name AS target,
+                                      c.document_id,
+                                      c.chunk_index,
+                                      c.content AS source_text,
+                                      1 AS priority
+                               FROM chunks c
+                               JOIN chunk_entities ce1 ON ce1.chunk_id = c.id
+                               JOIN entities e1 ON e1.id = ce1.entity_id
+                               JOIN chunk_entities ce2 ON ce2.chunk_id = c.id
+                               JOIN entities e2 ON e2.id = ce2.entity_id
+                               WHERE e1.name = ANY(@entity_names)
+                                 AND e2.name <> e1.name
+                           )
+                           SELECT source, relationship, target, document_id, chunk_index, source_text
+                           FROM (
+                               SELECT * FROM typed_relationships
+                               UNION ALL
+                               SELECT * FROM co_mentions
+                           ) rels
+                           ORDER BY priority, document_id DESC NULLS LAST, chunk_index NULLS LAST, source, target
+                           LIMIT @limit;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("entity_names", entities.ToArray());
+        command.Parameters.AddWithValue("limit", constrainedLimit);
+
+        var relationships = new List<HybridGraphRelationshipDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            relationships.Add(new HybridGraphRelationshipDto(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        await reader.CloseAsync();
+        return relationships;
+    }
+
+    private static async Task<List<HybridChunkResultDto>> QueryChunksByEntitiesHybridAsync(
+        NpgsqlConnection connection,
+        IReadOnlyCollection<string> entities,
+        string query,
         float[] queryEmbedding,
         int limit,
         CancellationToken cancellationToken)
@@ -1438,23 +1804,58 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
         var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
         const string sql = """
+                           WITH entity_chunks AS (
+                               SELECT DISTINCT c.id, c.document_id, c.chunk_index, c.content, c.embedding
+                               FROM chunks c
+                               JOIN chunk_entities ce ON ce.chunk_id = c.id
+                               JOIN entities e ON e.id = ce.entity_id
+                               WHERE e.name = ANY(@entity_names)
+                           ),
+                           semantic_search AS (
+                               SELECT id,
+                                      RANK() OVER (ORDER BY embedding <=> CAST(@query_vector AS vector)) AS vector_rank,
+                                      embedding <=> CAST(@query_vector AS vector) AS distance
+                               FROM entity_chunks
+                               WHERE embedding IS NOT NULL
+                               ORDER BY embedding <=> CAST(@query_vector AS vector)
+                               LIMIT 20
+                           ),
+                           keyword_search AS (
+                               SELECT id,
+                                      RANK() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC) AS keyword_rank
+                               FROM entity_chunks
+                               WHERE to_tsvector('english', content) @@ plainto_tsquery('english', @query)
+                               ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC
+                               LIMIT 20
+                           ),
+                           ranked AS (
+                               SELECT COALESCE(s.id, k.id) AS id,
+                                      s.distance,
+                                      s.vector_rank,
+                                      k.keyword_rank,
+                                      COALESCE(1.0 / (@rrf_k + s.vector_rank), 0.0) + COALESCE(1.0 / (@rrf_k + k.keyword_rank), 0.0) AS score
+                               FROM semantic_search s
+                               FULL OUTER JOIN keyword_search k ON k.id = s.id
+                           )
                            SELECT c.id,
                                   c.document_id,
                                   c.chunk_index,
                                   c.content,
-                                  c.embedding <=> CAST(@query_vector AS vector) AS distance
-                           FROM chunks c
-                           JOIN chunk_entities ce ON ce.chunk_id = c.id
-                           JOIN entities e ON e.id = ce.entity_id
-                           WHERE e.name = ANY(@entity_names)
-                             AND c.embedding IS NOT NULL
-                           ORDER BY c.embedding <=> CAST(@query_vector AS vector)
+                                  r.distance,
+                                  r.vector_rank,
+                                  r.keyword_rank,
+                                  r.score
+                           FROM ranked r
+                           JOIN chunks c ON c.id = r.id
+                           ORDER BY r.score DESC
                            LIMIT @limit;
                            """;
 
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("entity_names", entities.ToArray());
         command.Parameters.AddWithValue("query_vector", vectorLiteral);
+        command.Parameters.AddWithValue("query", query);
+        command.Parameters.AddWithValue("rrf_k", 60);
         command.Parameters.AddWithValue("limit", constrainedLimit);
 
         var chunks = new List<HybridChunkResultDto>();
@@ -1465,25 +1866,35 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             var documentId = reader.GetInt64(1);
             var chunkIndex = reader.GetInt32(2);
             var content = reader.GetString(3);
-            double? distance = reader.IsDBNull(4) ? null : reader.GetDouble(4);
-            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance));
+            double? distance = reader.IsDBNull(4) ? null : Convert.ToDouble(reader.GetValue(4), CultureInfo.InvariantCulture);
+            int? vectorRank = reader.IsDBNull(5) ? null : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture);
+            int? keywordRank = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6), CultureInfo.InvariantCulture);
+            double? score = reader.IsDBNull(7) ? null : Convert.ToDouble(reader.GetValue(7), CultureInfo.InvariantCulture);
+            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance, vectorRank, keywordRank, score));
         }
 
         await reader.CloseAsync();
         return chunks;
     }
 
-    private static string BuildPromptContext(IReadOnlyCollection<string> graphEntities, IReadOnlyCollection<HybridChunkResultDto> chunks)
+    private static string BuildPromptContext(
+        IReadOnlyCollection<string> graphEntities,
+        IReadOnlyCollection<HybridGraphRelationshipDto> graphRelationships,
+        IReadOnlyCollection<HybridChunkResultDto> chunks)
     {
         var graphFactSection = graphEntities.Count == 0
             ? "No graph entities found."
             : $"Graph entities ({graphEntities.Count}): {string.Join(", ", graphEntities)}";
 
-        var chunkSection = chunks.Count == 0
-            ? "No vector-ranked chunks found (ensure embeddings are populated in chunks.embedding)."
-            : string.Join(Environment.NewLine, chunks.Select(c => $"- [doc:{c.DocumentId} chunk:{c.ChunkIndex}] {c.Content}"));
+        var relationshipSection = graphRelationships.Count == 0
+            ? "No graph relationship triples found."
+            : string.Join(Environment.NewLine, graphRelationships.Select(r => $"- {r.Source} -[{r.Relationship}]-> {r.Target} (doc:{r.DocumentId?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} chunk:{r.ChunkIndex?.ToString(CultureInfo.InvariantCulture) ?? "n/a"})"));
 
-        return $"{graphFactSection}{Environment.NewLine}Relevant chunks:{Environment.NewLine}{chunkSection}";
+        var chunkSection = chunks.Count == 0
+            ? "No hybrid-ranked chunks found (ensure embeddings and chunk text are populated)."
+            : string.Join(Environment.NewLine, chunks.Select(c => $"- [doc:{c.DocumentId} chunk:{c.ChunkIndex} score:{c.Score?.ToString("0.####", CultureInfo.InvariantCulture) ?? "n/a"}] {c.Content}"));
+
+        return $"{graphFactSection}{Environment.NewLine}{Environment.NewLine}Graph relationship triples:{Environment.NewLine}{relationshipSection}{Environment.NewLine}{Environment.NewLine}Relevant chunks:{Environment.NewLine}{chunkSection}";
     }
 
     private static string ToVectorLiteral(float[] input, int dimension)
