@@ -669,8 +669,10 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 return new CommunityBuildResponse(true, null, 0, 0, relationships.Count, emptyTrace);
             }
 
-            var components = BuildRelationshipComponents(entities, relationships);
-            AddStep("community-clustering", $"Identified {components.Count} connected graph components", BuildCommunityClusteringDetail(components, entities, relationships));
+            var components = LeidenCommunityDetector.DetectCommunities(
+                entities.Select(entity => entity.Id).ToList(),
+                relationships.Select(relationship => (relationship.SourceId, relationship.TargetId)).ToList());
+            AddStep("community-clustering", $"Identified {components.Count} graph communities with Leiden optimization", BuildCommunityClusteringDetail(components, entities, relationships));
             var buildTimer = Stopwatch.StartNew();
             await ClearCommunityTablesAsync(connection, cancellationToken);
             AddStep("community-reset", "Existing community index cleared", "SQL:\nTRUNCATE TABLE community_sources, community_members, communities RESTART IDENTITY;");
@@ -944,52 +946,6 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static List<HashSet<long>> BuildRelationshipComponents(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
-    {
-        var known = entities.Select(entity => entity.Id).ToHashSet();
-        var adjacency = known.ToDictionary(id => id, _ => new HashSet<long>());
-        foreach (var relationship in relationships)
-        {
-            if (!adjacency.ContainsKey(relationship.SourceId) || !adjacency.ContainsKey(relationship.TargetId))
-            {
-                continue;
-            }
-
-            adjacency[relationship.SourceId].Add(relationship.TargetId);
-            adjacency[relationship.TargetId].Add(relationship.SourceId);
-        }
-
-        var visited = new HashSet<long>();
-        var components = new List<HashSet<long>>();
-        foreach (var entityId in adjacency.Keys)
-        {
-            if (!visited.Add(entityId))
-            {
-                continue;
-            }
-
-            var component = new HashSet<long>();
-            var stack = new Stack<long>();
-            stack.Push(entityId);
-            while (stack.Count > 0)
-            {
-                var current = stack.Pop();
-                component.Add(current);
-                foreach (var next in adjacency[current])
-                {
-                    if (visited.Add(next))
-                    {
-                        stack.Push(next);
-                    }
-                }
-            }
-
-            components.Add(component);
-        }
-
-        return components;
-    }
-
     private static string BuildCommunitySummaryContext(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
     {
         var entityText = string.Join(", ", entities.Take(40).Select(entity => $"{entity.Label}:{entity.Name}"));
@@ -1017,18 +973,18 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
         return string.Join(Environment.NewLine,
         [
-            "Algorithm: pragmatic connected components over an undirected entity graph.",
+            "Algorithm: Leiden community detection (local moving with connectivity refinement) over an undirected weighted entity graph.",
             "Nodes: rows from kg_data.entities.",
             "Edges: typed kg_data.relationships plus chunk co-mentions (CO_MENTIONED_WITH fallback).",
-            "Rule: if A is connected to B by any relationship/co-mention, they belong to the same component; summaries are generated for components with more than one entity.",
+            "Rule: maximize modularity by moving nodes into strongly connected communities, then refine disconnected assignments; summaries are generated for communities with more than one entity.",
             string.Empty,
-            $"Total components: {components.Count}",
-            $"Singleton components: {components.Count(component => component.Count == 1)}",
-            $"Multi-entity components: {components.Count(component => component.Count > 1)}",
+            $"Total communities: {components.Count}",
+            $"Singleton communities: {components.Count(component => component.Count == 1)}",
+            $"Multi-entity communities: {components.Count(component => component.Count > 1)}",
             string.Empty,
             components.Count <= displayLimit
-                ? $"Components (all {components.Count} shown):"
-                : $"Largest components (showing {displayLimit} of {components.Count}; {components.Count - displayLimit} smaller components omitted from this trace):",
+                ? $"Communities (all {components.Count} shown):"
+                : $"Largest communities (showing {displayLimit} of {components.Count}; {components.Count - displayLimit} smaller communities omitted from this trace):",
             string.Join(Environment.NewLine, ranked)
         ]);
     }
