@@ -663,10 +663,41 @@ app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeG
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
-app.MapPost("/api/communities/build", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+app.MapPost("/api/communities/build", async (int? parallelism, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
-    var response = await repository.BuildCommunitiesAsync(includeTrace: true, cancellationToken);
+    var response = await repository.BuildCommunitiesAsync(includeTrace: true, cancellationToken, maxParallelism: Math.Clamp(parallelism ?? 1, 1, 8));
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/communities/build/stream", async (HttpContext httpContext, int? parallelism, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    httpContext.Response.ContentType = "application/x-ndjson";
+    httpContext.Response.Headers.CacheControl = "no-cache";
+    var writeLock = new SemaphoreSlim(1, 1);
+
+    async Task WriteEventAsync(string type, object payload, CancellationToken token)
+    {
+        await writeLock.WaitAsync(token);
+        try
+        {
+            await JsonSerializer.SerializeAsync(httpContext.Response.Body, new { type, payload }, cacheJsonOptions, token);
+            await httpContext.Response.WriteAsync("\n", token);
+            await httpContext.Response.Body.FlushAsync(token);
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+    }
+
+    var response = await repository.BuildCommunitiesAsync(
+        includeTrace: true,
+        cancellationToken,
+        async (step, token) => await WriteEventAsync("step", step, token),
+        async (name, summary, token) => await WriteEventAsync("step-start", new { name, summary }, token),
+        Math.Clamp(parallelism ?? 1, 1, 8));
+
+    await WriteEventAsync("complete", response, cancellationToken);
 });
 
 app.MapPost("/api/retrieval/global", async (GlobalGraphRagRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
