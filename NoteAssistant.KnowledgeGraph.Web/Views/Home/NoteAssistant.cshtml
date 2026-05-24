@@ -5,7 +5,7 @@
     var encodedBackendBaseUrl = JsonSerializer.Serialize(backendBaseUrl.TrimEnd('/'));
 }
 
-<div class="container py-4">
+<div class="container-fluid py-4 noteassistant-page">
     <div class="d-flex flex-column flex-lg-row align-items-lg-end justify-content-between gap-3 mb-4">
         <div>
             <h1 class="mb-1">NoteAssistant</h1>
@@ -17,7 +17,7 @@
     </div>
 
     <div class="row g-4">
-        <div class="col-12 col-xl-4">
+        <div class="col-12 col-xxl-3">
             <div class="card shadow-sm">
                 <div class="card-body">
                     <h2 class="h5">Folder Input</h2>
@@ -47,55 +47,43 @@
             </div>
         </div>
 
-        <div class="col-12 col-xl-8">
-            <div class="card shadow-sm mb-4">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h2 class="h5 mb-0">Selected Metadata Files</h2>
-                        <span class="badge text-bg-secondary" id="naSelectedCount">0 files</span>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                            <thead>
-                                <tr>
-                                    <th>File</th>
-                                    <th>NoteSession</th>
-                                    <th>Date</th>
-                                    <th>Customers</th>
-                                    <th>Services</th>
-                                </tr>
-                            </thead>
-                            <tbody id="naPreviewBody">
-                                <tr>
-                                    <td colspan="5" class="text-muted">Select a folder to preview metadata files.</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
+        <div class="col-12 col-xxl-9">
             <div class="card shadow-sm">
                 <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h2 class="h5 mb-0">Import Results</h2>
-                        <div class="small text-muted" id="naResultSummary">Nothing imported yet.</div>
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <h2 class="h5 mb-0">Metadata Files & Import Results</h2>
+                            <span class="badge text-bg-secondary" id="naSelectedCount">0 files</span>
+                        </div>
+                        <div class="small text-muted" id="naResultSummary">Select a folder to preview metadata files.</div>
                     </div>
                     <div class="table-responsive">
-                        <table class="table table-sm align-middle">
+                        <table class="table table-sm align-middle na-results-table">
                             <thead>
                                 <tr>
-                                    <th>Status</th>
-                                    <th>File</th>
-                                    <th>Match key</th>
-                                    <th>Matched rows</th>
-                                    <th>Updated rows</th>
-                                    <th>Document date</th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="updated">Updated</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="fileName">File</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="noteSession">NoteSession</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="documentDate">Date</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="customers">Customers</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="services">Services</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="matchKey">Match key</button></th>
+                                    <th><button type="button" class="btn btn-link btn-sm p-0 na-sort" data-sort="matchedCount">Matched</button></th>
+                                </tr>
+                                <tr class="na-filter-row">
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="updated" placeholder="updated" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="fileName" placeholder="file" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="noteSession" placeholder="session" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="documentDate" placeholder="date" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="customers" placeholder="customers" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="services" placeholder="services" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="matchKey" placeholder="match" /></th>
+                                    <th><input class="form-control form-control-sm na-filter" data-filter="matchedCount" placeholder="matched" /></th>
                                 </tr>
                             </thead>
-                            <tbody id="naResultsBody">
+                            <tbody id="naConsolidatedBody">
                                 <tr>
-                                    <td colspan="6" class="text-muted">Run an import to see per-file results.</td>
+                                    <td colspan="8" class="text-muted">Select a folder to preview metadata files.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -116,15 +104,25 @@
     const folderHint = document.getElementById('naFolderHint');
     const message = document.getElementById('naMessage');
     const selectedCount = document.getElementById('naSelectedCount');
-    const previewBody = document.getElementById('naPreviewBody');
-    const resultsBody = document.getElementById('naResultsBody');
+    const consolidatedBody = document.getElementById('naConsolidatedBody');
     const resultSummary = document.getElementById('naResultSummary');
+    const sortButtons = Array.from(document.querySelectorAll('.na-sort'));
+    const filterInputs = Array.from(document.querySelectorAll('.na-filter'));
 
     let metadataFiles = [];
+    let importResults = new Map();
+    let sortState = { key: 'updated', direction: 'desc' };
+    let filters = {};
 
     folderInput.addEventListener('change', onFolderSelected);
     importBtn.addEventListener('click', importMetadata);
     clearBtn.addEventListener('click', resetPage);
+    sortButtons.forEach(button => button.addEventListener('click', () => setSort(button.dataset.sort)));
+    filterInputs.forEach(input => input.addEventListener('input', () => {
+        filters[input.dataset.filter] = input.value.trim().toLowerCase();
+        renderConsolidatedTable();
+    }));
+    updateSortIndicators();
 
     async function onFolderSelected() {
         const files = Array.from(folderInput.files || []);
@@ -163,7 +161,8 @@
             ? `Selected folder: ${files[0].webkitRelativePath.split('/')[0]}`
             : `${files.length} file${files.length === 1 ? '' : 's'} selected`;
         importBtn.disabled = metadataFiles.length === 0;
-        renderPreview();
+        importResults = new Map();
+        renderConsolidatedTable();
 
         if (invalid.length > 0) {
             setMessage(`Loaded ${metadataFiles.length} metadata file(s). Skipped ${invalid.length} invalid file(s).`, 'text-warning');
@@ -172,27 +171,6 @@
         } else {
             setMessage('No *_metadata.json files were found in the selected folder.', 'text-warning');
         }
-    }
-
-    function renderPreview() {
-        if (metadataFiles.length === 0) {
-            previewBody.innerHTML = '<tr><td colspan="5" class="text-muted">Select a folder to preview metadata files.</td></tr>';
-            return;
-        }
-
-        previewBody.innerHTML = metadataFiles.map(file => {
-            const date = normalizeDate(file.folderCreationDate);
-            const customers = file.customers.length ? escapeHtml(file.customers.join(', ')) : '<span class="text-muted">none</span>';
-            const services = file.services.length ? escapeHtml(file.services.join(', ')) : '<span class="text-muted">none</span>';
-            return `
-                <tr>
-                    <td>${escapeHtml(file.fileName)}</td>
-                    <td>${escapeHtml(file.noteSession || '(missing)')}</td>
-                    <td>${escapeHtml(date || '(missing)')}</td>
-                    <td>${customers}</td>
-                    <td>${services}</td>
-                </tr>`;
-        }).join('');
     }
 
     async function importMetadata() {
@@ -230,34 +208,127 @@
             return;
         }
 
-        renderResults(payload.results || []);
+        importResults = new Map((payload.results || []).map(result => [result.fileName || '', result]));
+        sortState = { key: 'updated', direction: 'desc' };
+        renderConsolidatedTable();
         resultSummary.textContent = `${payload.processed || 0} processed | ${payload.updated || 0} updated | ${payload.notFound || 0} not found`;
         setMessage('Import completed.', 'text-success');
     }
 
-    function renderResults(results) {
-        if (!Array.isArray(results) || results.length === 0) {
-            resultsBody.innerHTML = '<tr><td colspan="6" class="text-muted">No results returned.</td></tr>';
+    function renderConsolidatedTable() {
+        updateSortIndicators();
+
+        if (metadataFiles.length === 0) {
+            consolidatedBody.innerHTML = '<tr><td colspan="8" class="text-muted">Select a folder to preview metadata files.</td></tr>';
+            resultSummary.textContent = 'Select a folder to preview metadata files.';
             return;
         }
 
-        resultsBody.innerHTML = results.map(result => {
-            const statusClass = result.status === 'updated'
-                ? 'text-bg-success'
-                : result.status === 'already-populated'
-                    ? 'text-bg-secondary'
-                    : 'text-bg-warning';
+        const rows = metadataFiles.map(file => buildConsolidatedRow(file, importResults.get(file.fileName)));
+        const filtered = rows.filter(row => Object.entries(filters).every(([key, value]) => !value || getFilterText(row, key).includes(value)));
+        filtered.sort(compareRows);
 
+        if (filtered.length === 0) {
+            consolidatedBody.innerHTML = '<tr><td colspan="8" class="text-muted">No rows match the active filters.</td></tr>';
+            resultSummary.textContent = `${metadataFiles.length} selected | 0 shown after filters`;
+            return;
+        }
+
+        consolidatedBody.innerHTML = filtered.map(row => {
+            const statusClass = row.status === 'updated'
+                ? 'text-bg-success'
+                : row.status === 'already-populated'
+                    ? 'text-bg-secondary'
+                    : row.status === 'not-found'
+                        ? 'text-bg-warning'
+                        : 'text-bg-light text-dark';
+            const customers = row.customers ? escapeHtml(row.customers) : '<span class="text-muted">none</span>';
+            const services = row.services ? escapeHtml(row.services) : '<span class="text-muted">none</span>';
             return `
                 <tr>
-                    <td><span class="badge ${statusClass}">${escapeHtml(result.status || 'unknown')}</span></td>
-                    <td>${escapeHtml(result.fileName || '')}</td>
-                    <td>${escapeHtml(result.matchKey || '')}</td>
-                    <td>${escapeHtml(String(result.matchedCount ?? 0))}</td>
-                    <td>${escapeHtml(String(result.updatedCount ?? 0))}</td>
-                    <td>${escapeHtml(result.documentDate || '')}</td>
+                    <td><span class="badge ${statusClass}">${escapeHtml(row.updatedLabel)}</span></td>
+                    <td>${escapeHtml(row.fileName)}</td>
+                    <td>${escapeHtml(row.noteSession || '(missing)')}</td>
+                    <td>${escapeHtml(row.documentDate || '(missing)')}</td>
+                    <td>${customers}</td>
+                    <td>${services}</td>
+                    <td>${escapeHtml(row.matchKey || '')}</td>
+                    <td>${escapeHtml(String(row.matchedCount))}</td>
                 </tr>`;
         }).join('');
+
+        const updated = rows.filter(row => row.status === 'updated').length;
+        const notFound = rows.filter(row => row.status === 'not-found').length;
+        const imported = rows.filter(row => row.status).length;
+        resultSummary.textContent = `${metadataFiles.length} selected | ${filtered.length} shown | ${imported} imported | ${updated} updated | ${notFound} not found`;
+    }
+
+    function buildConsolidatedRow(file, result) {
+        const documentDate = result?.documentDate || normalizeDate(file.folderCreationDate);
+        const status = result?.status || '';
+        const updatedCount = Number(result?.updatedCount ?? 0);
+        return {
+            fileName: file.fileName,
+            noteSession: file.noteSession,
+            documentDate,
+            customers: file.customers.join(', '),
+            services: file.services.join(', '),
+            matchKey: result?.matchKey || deriveMatchKey(file),
+            matchedCount: Number(result?.matchedCount ?? 0),
+            updatedCount,
+            updated: status === 'updated' ? 2 : status ? (updatedCount > 0 ? 2 : 1) : 0,
+            updatedLabel: status ? `${updatedCount} ${status}` : 'pending',
+            status
+        };
+    }
+
+    function deriveMatchKey(file) {
+        const noteSession = (file.noteSession || '').trim();
+        if (noteSession) {
+            return noteSession.replace(/_metadata$/i, '').replace(/\.md$/i, '').trim();
+        }
+
+        return (file.fileName || '')
+            .split(/[\\/]/).pop()
+            ?.replace(/_metadata\.json$/i, '')
+            .replace(/_summary$/i, '') || '';
+    }
+
+    function setSort(key) {
+        if (sortState.key === key) {
+            sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortState = { key, direction: key === 'updated' ? 'desc' : 'asc' };
+        }
+        renderConsolidatedTable();
+    }
+
+    function getFilterText(row, key) {
+        if (key === 'updated') {
+            return `${row.updatedLabel} ${row.status}`.toLowerCase();
+        }
+
+        return String(row[key] ?? '').toLowerCase();
+    }
+
+    function compareRows(left, right) {
+        const direction = sortState.direction === 'asc' ? 1 : -1;
+        const key = sortState.key;
+        const leftValue = left[key];
+        const rightValue = right[key];
+        if (typeof leftValue === 'number' || typeof rightValue === 'number') {
+            return ((Number(leftValue) || 0) - (Number(rightValue) || 0)) * direction || left.fileName.localeCompare(right.fileName);
+        }
+        return String(leftValue || '').localeCompare(String(rightValue || ''), undefined, { numeric: true, sensitivity: 'base' }) * direction;
+    }
+
+    function updateSortIndicators() {
+        sortButtons.forEach(button => {
+            const active = button.dataset.sort === sortState.key;
+            button.classList.toggle('fw-semibold', active);
+            const label = button.textContent.replace(/\s+[▲▼]$/, '');
+            button.textContent = active ? `${label} ${sortState.direction === 'asc' ? '▲' : '▼'}` : label;
+        });
     }
 
     function normalizeDate(value) {
@@ -275,14 +346,18 @@
 
     function resetPage() {
         metadataFiles = [];
+        importResults = new Map();
+        filters = {};
+        filterInputs.forEach(input => input.value = '');
+        sortState = { key: 'updated', direction: 'desc' };
         folderInput.value = '';
         selectedCount.textContent = '0 files';
         folderHint.textContent = 'No folder selected.';
-        previewBody.innerHTML = '<tr><td colspan="5" class="text-muted">Select a folder to preview metadata files.</td></tr>';
-        resultsBody.innerHTML = '<tr><td colspan="6" class="text-muted">Run an import to see per-file results.</td></tr>';
-        resultSummary.textContent = 'Nothing imported yet.';
+        consolidatedBody.innerHTML = '<tr><td colspan="8" class="text-muted">Select a folder to preview metadata files.</td></tr>';
+        resultSummary.textContent = 'Select a folder to preview metadata files.';
         importBtn.disabled = true;
         setMessage('', 'text-muted');
+        updateSortIndicators();
     }
 
     function setMessage(text, className) {

@@ -433,6 +433,42 @@ body {
   background: #f8f9fa;
 }
 
+.noteassistant-page .table-responsive {
+  overflow-x: auto;
+}
+
+.na-results-table {
+  min-width: 1320px;
+}
+
+.na-results-table th,
+.na-results-table td {
+  vertical-align: top;
+}
+
+.na-results-table th:nth-child(1),
+.na-results-table td:nth-child(1) {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.na-results-table th:nth-child(2),
+.na-results-table td:nth-child(2) {
+  min-width: 320px;
+}
+
+.na-results-table th:nth-child(3),
+.na-results-table td:nth-child(3) {
+  min-width: 260px;
+}
+
+.na-results-table th:nth-child(5),
+.na-results-table td:nth-child(5),
+.na-results-table th:nth-child(6),
+.na-results-table td:nth-child(6) {
+  min-width: 220px;
+}
+
 .query-workbench-sidebar {
   min-width: 0;
 }
