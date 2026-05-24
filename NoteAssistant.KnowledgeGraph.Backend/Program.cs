@@ -224,6 +224,21 @@ var cacheJsonOptions = new JsonSerializerOptions
     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
 };
 
+async Task<CommunityBuildRequest> ReadCommunityBuildRequestAsync(HttpContext httpContext, int? parallelism, CancellationToken cancellationToken)
+{
+    CommunityBuildRequest? request = null;
+    if ((httpContext.Request.ContentLength ?? 0) > 0)
+    {
+        request = await JsonSerializer.DeserializeAsync<CommunityBuildRequest>(httpContext.Request.Body, cacheJsonOptions, cancellationToken);
+    }
+
+    request ??= new CommunityBuildRequest();
+    return request with
+    {
+        Parallelism = Math.Clamp(request.Parallelism > 0 ? request.Parallelism : parallelism ?? 1, 1, 8)
+    };
+}
+
 app.MapPost("/api/documents/upload", async (HttpRequest request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
@@ -663,14 +678,20 @@ app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeG
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
-app.MapPost("/api/communities/build", async (int? parallelism, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+app.MapPost("/api/communities/build", async (HttpContext httpContext, int? parallelism, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
-    var response = await repository.BuildCommunitiesAsync(includeTrace: true, cancellationToken, maxParallelism: Math.Clamp(parallelism ?? 1, 1, 8));
+    var request = await ReadCommunityBuildRequestAsync(httpContext, parallelism, cancellationToken);
+    var response = await repository.BuildCommunitiesAsync(
+        includeTrace: true,
+        cancellationToken,
+        maxParallelism: Math.Clamp(request.Parallelism, 1, 8),
+        communityDetection: request.CommunityDetection);
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
 app.MapPost("/api/communities/build/stream", async (HttpContext httpContext, int? parallelism, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
+    var request = await ReadCommunityBuildRequestAsync(httpContext, parallelism, cancellationToken);
     httpContext.Response.ContentType = "application/x-ndjson";
     httpContext.Response.Headers.CacheControl = "no-cache";
     var writeLock = new SemaphoreSlim(1, 1);
@@ -695,7 +716,8 @@ app.MapPost("/api/communities/build/stream", async (HttpContext httpContext, int
         cancellationToken,
         async (step, token) => await WriteEventAsync("step", step, token),
         async (name, summary, token) => await WriteEventAsync("step-start", new { name, summary }, token),
-        Math.Clamp(parallelism ?? 1, 1, 8));
+        Math.Clamp(request.Parallelism, 1, 8),
+        request.CommunityDetection);
 
     await WriteEventAsync("complete", response, cancellationToken);
 });

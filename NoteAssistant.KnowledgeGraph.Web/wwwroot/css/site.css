@@ -147,6 +147,30 @@ body {
   max-height: 340px;
 }
 
+.community-tuning-panel {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+}
+
+.community-tuning-panel > summary {
+  cursor: pointer;
+}
+
+.community-config-output {
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  min-height: 180px;
+}
+
+.community-prompt-output {
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  min-height: 320px;
+  white-space: pre;
+}
+
 .community-summary-browser {
   display: grid;
   grid-template-columns: minmax(260px, 32%) minmax(0, 1fr);

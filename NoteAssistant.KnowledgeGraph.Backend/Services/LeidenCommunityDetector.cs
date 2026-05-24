@@ -1,11 +1,23 @@
+using Libleidenalg;
+
 namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public static class LeidenCommunityDetector
 {
-    private const int DefaultMaxLocalMoveIterations = 12;
-    private const double ModularityGainTolerance = 1e-9;
+    private const double DefaultCpmResolution = 0.25d;
+    private const ulong DefaultSeed = 42UL;
 
     public static List<HashSet<long>> DetectCommunities(IReadOnlyList<long> entityIds, IReadOnlyList<(long SourceId, long TargetId)> relationships)
+        => DetectCommunities(
+            entityIds,
+            relationships.Select(relationship => (relationship.SourceId, relationship.TargetId, Weight: 1d)).ToList());
+
+    public static List<HashSet<long>> DetectCommunities(
+        IReadOnlyList<long> entityIds,
+        IReadOnlyList<(long SourceId, long TargetId, double Weight)> relationships,
+        double resolution = DefaultCpmResolution,
+        ulong seed = DefaultSeed,
+        bool directed = false)
     {
         var nodes = entityIds.OrderBy(id => id).ToList();
         if (nodes.Count != nodes.Distinct().Count())
@@ -18,129 +30,58 @@ public static class LeidenCommunityDetector
             return [];
         }
 
-        var known = nodes.ToHashSet();
-        var adjacency = nodes.ToDictionary(id => id, _ => new Dictionary<long, double>());
-        foreach (var (sourceId, targetId) in relationships)
-        {
-            if (sourceId == targetId || !known.Contains(sourceId) || !known.Contains(targetId))
-            {
-                continue;
-            }
-
-            AddWeight(adjacency[sourceId], targetId, 1d);
-            AddWeight(adjacency[targetId], sourceId, 1d);
-        }
-
-        var nodeDegree = adjacency.ToDictionary(pair => pair.Key, pair => pair.Value.Values.Sum());
-        var totalEdgeWeightTimesTwo = nodeDegree.Values.Sum();
-        if (totalEdgeWeightTimesTwo <= 0d)
+        var indexById = nodes
+            .Select((id, index) => (id, index))
+            .ToDictionary(pair => pair.id, pair => pair.index);
+        var weightedEdges = AggregateEdges(relationships, indexById, directed);
+        if (weightedEdges.Count == 0)
         {
             return nodes.Select(node => new HashSet<long> { node }).ToList();
         }
 
-        var communityByNode = nodes.ToDictionary(node => node, node => node);
-        var communityDegree = nodeDegree.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var membership = LeidenCpm.Partition(
+            vertexCount: nodes.Count,
+            edges: weightedEdges,
+            directed: directed,
+            resolution: resolution,
+            seed: seed,
+            out _);
 
-        for (var iteration = 0; iteration < DefaultMaxLocalMoveIterations; iteration++)
-        {
-            var moved = false;
-            foreach (var node in nodes)
-            {
-                var currentCommunity = communityByNode[node];
-                var currentDegree = nodeDegree[node];
-                if (currentDegree <= 0d)
-                {
-                    continue;
-                }
-
-                communityDegree[currentCommunity] -= currentDegree;
-
-                var weightToCommunity = new Dictionary<long, double>();
-                foreach (var (neighbor, weight) in adjacency[node])
-                {
-                    var neighborCommunity = communityByNode[neighbor];
-                    AddWeight(weightToCommunity, neighborCommunity, weight);
-                }
-
-                var bestCommunity = currentCommunity;
-                var bestGain = 0d;
-                foreach (var (candidateCommunity, candidateWeight) in weightToCommunity)
-                {
-                    var gain = candidateWeight - (currentDegree * communityDegree[candidateCommunity] / totalEdgeWeightTimesTwo);
-                    if (gain > bestGain + ModularityGainTolerance ||
-                        (Math.Abs(gain - bestGain) <= ModularityGainTolerance && candidateCommunity < bestCommunity))
-                    {
-                        bestGain = gain;
-                        bestCommunity = candidateCommunity;
-                    }
-                }
-
-                communityByNode[node] = bestCommunity;
-                communityDegree[bestCommunity] += currentDegree;
-                if (bestCommunity != currentCommunity)
-                {
-                    moved = true;
-                }
-            }
-
-            if (!moved)
-            {
-                break;
-            }
-        }
-
-        var communities = communityByNode
-            .GroupBy(pair => pair.Value)
-            .Select(group => group.Select(pair => pair.Key).ToHashSet())
-            .ToList();
-
-        return RefineDisconnectedCommunities(communities, adjacency);
-    }
-
-    private static List<HashSet<long>> RefineDisconnectedCommunities(IReadOnlyList<HashSet<long>> communities, IReadOnlyDictionary<long, Dictionary<long, double>> adjacency)
-    {
-        var refined = new List<HashSet<long>>();
-        foreach (var community in communities)
-        {
-            var pending = new HashSet<long>(community);
-            while (pending.Count > 0)
-            {
-                var seed = pending.First();
-                var component = new HashSet<long>();
-                var stack = new Stack<long>();
-                stack.Push(seed);
-                pending.Remove(seed);
-
-                while (stack.Count > 0)
-                {
-                    var current = stack.Pop();
-                    component.Add(current);
-                    foreach (var neighbor in adjacency[current].Keys)
-                    {
-                        if (!community.Contains(neighbor) || !pending.Remove(neighbor))
-                        {
-                            continue;
-                        }
-
-                        stack.Push(neighbor);
-                    }
-                }
-
-                refined.Add(component);
-            }
-        }
-
-        return refined
+        return membership
+            .Select((communityId, nodeIndex) => new { communityId, entityId = nodes[nodeIndex] })
+            .GroupBy(item => item.communityId)
+            .Select(group => group.Select(item => item.entityId).ToHashSet())
             .OrderByDescending(component => component.Count)
             .ThenBy(component => component.Min())
             .ToList();
     }
 
-    private static void AddWeight(IDictionary<long, double> bucket, long key, double delta)
+    private static List<(int From, int To, double Weight)> AggregateEdges(
+        IReadOnlyList<(long SourceId, long TargetId, double Weight)> relationships,
+        IReadOnlyDictionary<long, int> indexById,
+        bool directed)
     {
-        if (!bucket.TryAdd(key, delta))
+        var weights = new Dictionary<(int From, int To), double>();
+        foreach (var (sourceId, targetId, weight) in relationships)
         {
-            bucket[key] += delta;
+            if (sourceId == targetId || weight <= 0d || double.IsNaN(weight) || double.IsInfinity(weight))
+            {
+                continue;
+            }
+
+            if (!indexById.TryGetValue(sourceId, out var sourceIndex) || !indexById.TryGetValue(targetId, out var targetIndex))
+            {
+                continue;
+            }
+
+            var from = directed ? sourceIndex : Math.Min(sourceIndex, targetIndex);
+            var to = directed ? targetIndex : Math.Max(sourceIndex, targetIndex);
+            var key = (from, to);
+            weights[key] = weights.TryGetValue(key, out var existing) ? existing + weight : weight;
         }
+
+        return weights
+            .Select(pair => (pair.Key.From, pair.Key.To, pair.Value))
+            .ToList();
     }
 }

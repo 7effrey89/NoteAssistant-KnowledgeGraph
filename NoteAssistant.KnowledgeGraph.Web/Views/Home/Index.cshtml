@@ -417,10 +417,68 @@
                 </div>
                 <button class="btn btn-outline-primary" type="button" id="buildCommunitiesBtn">Build Communities</button>
             </div>
+            <details class="community-tuning-panel mb-3" open>
+                <summary class="fw-semibold">Community tuning</summary>
+                <div class="row g-3 mt-1">
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communityResolutionInput">CPM resolution</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityResolutionInput" min="0.001" max="2" step="0.01" value="0.25" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communityTypedWeightInput">Typed relationship weight</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityTypedWeightInput" min="0.01" max="20" step="0.1" value="2.0" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communityCoMentionWeightInput">Co-mention weight</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityCoMentionWeightInput" min="0.01" max="20" step="0.1" value="1.0" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communitySeedInput">Seed</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communitySeedInput" min="0" step="1" value="42" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communityMinSizeInput">Min summary size</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityMinSizeInput" min="1" max="1000" step="1" value="2" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label" for="communityMaxSummariesInput">Max summaries</label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityMaxSummariesInput" min="1" max="500" step="1" value="50" />
+                    </div>
+                    <div class="col-md-4 col-xl-3 d-flex align-items-end">
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input community-config-input" type="checkbox" role="switch" id="communityDirectedInput" />
+                            <label class="form-check-label" for="communityDirectedInput">Directed graph</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="communityConfigOutput">Agent config JSON</label>
+                        <textarea class="form-control community-config-output" id="communityConfigOutput" rows="8" readonly></textarea>
+                    </div>
+                </div>
+            </details>
             <div class="mt-2"><small id="communityStatus" class="text-muted"></small></div>
             <div id="communityError" class="text-danger mb-2"></div>
             <h6>Process map</h6>
             <div id="communityProcessMap" class="process-map"></div>
+            <details class="community-tuning-panel mt-3">
+                <summary class="fw-semibold">LLM tuning prompt</summary>
+                <div class="row g-3 mt-1">
+                    <div class="col-12 col-xl-5">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="form-label mb-0" for="communityTuningSystemPrompt">System prompt</label>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-copy-target="communityTuningSystemPrompt">Copy</button>
+                        </div>
+                        <textarea class="form-control community-prompt-output" id="communityTuningSystemPrompt" rows="14" readonly></textarea>
+                    </div>
+                    <div class="col-12 col-xl-7">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="form-label mb-0" for="communityTuningUserPrompt">User prompt</label>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-copy-target="communityTuningUserPrompt">Copy</button>
+                        </div>
+                        <textarea class="form-control community-prompt-output" id="communityTuningUserPrompt" rows="14" readonly></textarea>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -504,6 +562,7 @@
         const backendStatusText = document.getElementById('backendStatusText');
         let currentDocumentId = null;
         let currentGraphName = 'knowledge_graph';
+        let communitySummaryTabsState = null;
         let graphReady = false;
         const uploadedDocuments = new Map();
         const selectedDocumentIds = new Set();
@@ -634,6 +693,16 @@
         const runHybridBtn = document.getElementById('runHybridBtn');
         const buildCommunitiesBtn = document.getElementById('buildCommunitiesBtn');
         const llmParallelismInput = document.getElementById('llmParallelismInput');
+        const communityResolutionInput = document.getElementById('communityResolutionInput');
+        const communityTypedWeightInput = document.getElementById('communityTypedWeightInput');
+        const communityCoMentionWeightInput = document.getElementById('communityCoMentionWeightInput');
+        const communitySeedInput = document.getElementById('communitySeedInput');
+        const communityMinSizeInput = document.getElementById('communityMinSizeInput');
+        const communityMaxSummariesInput = document.getElementById('communityMaxSummariesInput');
+        const communityDirectedInput = document.getElementById('communityDirectedInput');
+        const communityConfigOutput = document.getElementById('communityConfigOutput');
+        const communityTuningSystemPrompt = document.getElementById('communityTuningSystemPrompt');
+        const communityTuningUserPrompt = document.getElementById('communityTuningUserPrompt');
         const hybridModeSelect = document.getElementById('hybridModeSelect');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
@@ -673,6 +742,14 @@
         runQueryBtn.addEventListener('click', runQuery);
         runHybridBtn.addEventListener('click', runHybridRetrieval);
         buildCommunitiesBtn.addEventListener('click', buildCommunities);
+        document.querySelectorAll('.community-config-input').forEach(input => {
+            input.addEventListener('input', updateCommunityConfigOutput);
+            input.addEventListener('change', updateCommunityConfigOutput);
+        });
+        updateCommunityConfigOutput();
+        document.querySelectorAll('[data-copy-target]').forEach(button => {
+            button.addEventListener('click', () => copyElementValue(button.dataset.copyTarget));
+        });
         graphCheckBtn.addEventListener('click', refreshGraphCheck);
         resetDbBtn.addEventListener('click', resetDatabase);
         initScriptBtn.addEventListener('click', runInitScript);
@@ -1066,6 +1143,56 @@
         function getLlmParallelism() {
             const value = Number.parseInt(llmParallelismInput?.value || '2', 10);
             return Math.max(1, Math.min(Number.isFinite(value) ? value : 2, 8));
+        }
+
+        function getNumberInputValue(input, fallback, min, max) {
+            const value = Number.parseFloat(input?.value || '');
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(value, max));
+        }
+
+        function getIntegerInputValue(input, fallback, min, max) {
+            const value = Number.parseInt(input?.value || '', 10);
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(value, max));
+        }
+
+        function getCommunityBuildRequest() {
+            return {
+                parallelism: getLlmParallelism(),
+                communityDetection: {
+                    algorithm: 'LeidenCpm',
+                    directed: Boolean(communityDirectedInput?.checked),
+                    seed: getIntegerInputValue(communitySeedInput, 42, 0, Number.MAX_SAFE_INTEGER),
+                    cpmResolution: getNumberInputValue(communityResolutionInput, 0.25, 0.001, 2),
+                    typedRelationshipWeight: getNumberInputValue(communityTypedWeightInput, 2.0, 0.01, 20),
+                    coMentionWeight: getNumberInputValue(communityCoMentionWeightInput, 1.0, 0.01, 20),
+                    minCommunitySizeToSummarize: getIntegerInputValue(communityMinSizeInput, 2, 1, 1000),
+                    maxCommunitiesToSummarize: getIntegerInputValue(communityMaxSummariesInput, 50, 1, 500)
+                }
+            };
+        }
+
+        function updateCommunityConfigOutput() {
+            if (!communityConfigOutput) {
+                return;
+            }
+            communityConfigOutput.value = JSON.stringify(getCommunityBuildRequest(), null, 2);
+            updateCommunityTuningPrompts();
+        }
+
+        function copyElementValue(elementId) {
+            const element = document.getElementById(elementId || '');
+            if (!element) {
+                return;
+            }
+            element.select();
+            element.setSelectionRange(0, element.value.length);
+            navigator.clipboard?.writeText(element.value).catch(() => document.execCommand('copy'));
         }
 
         async function uploadSingleFile(file, cacheMode) {
@@ -1871,7 +1998,11 @@
         }
 
         async function streamCommunityBuild() {
-            const response = await fetch(`${backendBaseUrl}/api/communities/build/stream?parallelism=${getLlmParallelism()}`, { method: 'POST' });
+            const response = await fetch(`${backendBaseUrl}/api/communities/build/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
             if (!response.ok) {
                 const payload = await response.json().catch(() => null);
                 throw new Error(payload?.error || 'Community build failed.');
@@ -1920,7 +2051,11 @@
         }
 
         async function buildCommunitiesLegacy() {
-            const response = await fetch(`${backendBaseUrl}/api/communities/build?parallelism=${getLlmParallelism()}`, { method: 'POST' });
+            const response = await fetch(`${backendBaseUrl}/api/communities/build`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
             const payload = await response.json();
             if (!response.ok || !payload.success) {
                 throw new Error(payload.error || 'Community build failed.');
@@ -1961,6 +2096,10 @@
         }
 
         function completeCommunityPendingStep(step) {
+            if (step.name === 'community-clustering') {
+                ensureCommunitySummaryTabsState().clusteringDetail = step.detail || '';
+                updateCommunityTuningPrompts();
+            }
             if (step.name === 'community-progress') {
                 upsertCommunitySummaryCompletedTab(step);
                 return;
@@ -1985,12 +2124,11 @@
             appendCommunityProcessMap([item]);
         }
 
-        let communitySummaryTabsState = null;
-
         function resetCommunitySummaryTabsState() {
             communitySummaryTabsState = {
                 title: 'Community summaries',
                 overview: buildCommunitySummaryProcessOverview(),
+                clusteringDetail: '',
                 sqlTemplates: '',
                 total: 0,
                 completedBlocks: [],
@@ -2023,6 +2161,7 @@
                 state.pending.sort((left, right) => left.index - right.index);
             }
             upsertCommunitySummaryBubble('Building community summaries');
+            updateCommunityTuningPrompts();
         }
 
         function upsertCommunitySummaryCompletedTab(step) {
@@ -2034,6 +2173,7 @@
             state.completedBlocks[originalIndex - 1] = step.detail || '';
             const completedCount = state.completedBlocks.filter(Boolean).length;
             upsertCommunitySummaryBubble(`Built ${completedCount}${state.total ? ` of ${state.total}` : ''} community summaries`);
+            updateCommunityTuningPrompts();
         }
 
         function finalizeCommunitySummaryTabs(step) {
@@ -2049,6 +2189,7 @@
             state.pending = [];
             state.selectedIndex = Math.max(1, Math.min(state.selectedIndex, state.completedBlocks.length || 1));
             upsertCommunitySummaryBubble(state.title, step.tokenUsage);
+            updateCommunityTuningPrompts();
         }
 
         function upsertCommunitySummaryBubble(title, tokenUsage) {
@@ -2271,6 +2412,102 @@
 
         function buildCommunityPromptText(question, context) {
             return `LLM question:\n${(question || '(none)').trim()}\n\nLLM context:\n${(context || '(none)').trim()}`;
+        }
+
+        function updateCommunityTuningPrompts() {
+            if (!communityTuningSystemPrompt || !communityTuningUserPrompt) {
+                return;
+            }
+
+            communityTuningSystemPrompt.value = buildCommunityTuningSystemPrompt();
+            communityTuningUserPrompt.value = buildCommunityTuningUserPrompt();
+        }
+
+        function buildCommunityTuningSystemPrompt() {
+            return [
+                'You are a community detection tuning agent for a GraphRAG knowledge graph.',
+                '',
+                'Your job is to assess whether Leiden CPM community settings should be tuned. Optimize for useful GraphRAG community summaries and retrieval quality, not only graph metrics.',
+                '',
+                'Evaluate for these failure modes:',
+                '- communities too broad or generic',
+                '- communities too fragmented',
+                '- hub entities polluting otherwise unrelated themes',
+                '- typed relationship weights overpowering noisy extracted facts',
+                '- co-mention weights over-binding weakly related entities',
+                '- build cost too high for low-value tiny summaries',
+                '',
+                'Use these tuning rules:',
+                '- Increase cpmResolution to create smaller/more communities when large communities are generic or mixed.',
+                '- Decrease cpmResolution to create larger/fewer communities when themes are fragmented into tiny groups.',
+                '- Increase typedRelationshipWeight when explicit relationships should dominate weak co-mentions.',
+                '- Decrease typedRelationshipWeight when extraction noise binds unrelated entities.',
+                '- Increase coMentionWeight when typed relationships are sparse and communities are fragmented.',
+                '- Decrease coMentionWeight when common co-mentions or hubs create mixed communities.',
+                '- Increase minCommunitySizeToSummarize when many pair summaries are low value.',
+                '- Increase maxCommunitiesToSummarize only when important coherent long-tail communities are omitted.',
+                '',
+                'Recommend one primary change unless the current configuration is clearly broken. Keep the seed fixed for comparisons.',
+                '',
+                'Return:',
+                '1. Diagnosis',
+                '2. Recommended change',
+                '3. Rationale',
+                '4. Risks',
+                '5. Updated config as valid JSON with all fields present',
+                '6. Validation plan'
+            ].join('\n');
+        }
+
+        function buildCommunityTuningUserPrompt() {
+            const state = ensureCommunitySummaryTabsState();
+            const completedBlocks = state.completedBlocks.filter(Boolean);
+            const summarySamples = selectCommunitySummarySamples(completedBlocks);
+            const clustering = state.clusteringDetail || '(community clustering output not available yet; run Build Communities or wait for clustering step)';
+            const completedCount = completedBlocks.length;
+            const totalText = state.total ? `${completedCount} of ${state.total}` : String(completedCount);
+
+            return [
+                'Assess the current community detection configuration and recommend whether it should be tuned.',
+                '',
+                'Current config:',
+                '```json',
+                JSON.stringify(getCommunityBuildRequest(), null, 2),
+                '```',
+                '',
+                'Detection output:',
+                '```text',
+                truncateText(clustering, 8000),
+                '```',
+                '',
+                `Community summaries available: ${totalText}`,
+                '',
+                'Representative community summary samples:',
+                '```text',
+                summarySamples.length ? summarySamples.join('\n\n---\n\n') : '(no community summaries available yet)',
+                '```',
+                '',
+                'Please decide if cpmResolution, typedRelationshipWeight, coMentionWeight, minCommunitySizeToSummarize, maxCommunitiesToSummarize, or llmParallelism should change. Prefer a small reversible change and output the updated JSON config.'
+            ].join('\n');
+        }
+
+        function selectCommunitySummarySamples(blocks) {
+            if (!blocks.length) {
+                return [];
+            }
+
+            const selected = new Map();
+            const add = (index) => {
+                if (index >= 0 && index < blocks.length && !selected.has(index)) {
+                    selected.set(index, truncateText(blocks[index], 2200));
+                }
+            };
+
+            [0, 1, 2, 3, 4].forEach(add);
+            const middle = Math.floor(blocks.length / 2);
+            [middle - 2, middle - 1, middle, middle + 1, middle + 2].forEach(add);
+            [blocks.length - 5, blocks.length - 4, blocks.length - 3, blocks.length - 2, blocks.length - 1].forEach(add);
+            return Array.from(selected.values()).slice(0, 15);
         }
 
         function buildCommunitySqlTemplateTabs(sqlTemplates, sampleCommunityBlock) {

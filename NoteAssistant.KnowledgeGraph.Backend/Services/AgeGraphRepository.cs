@@ -638,7 +638,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         CancellationToken cancellationToken,
         Func<HybridRetrievalTraceStepDto, CancellationToken, Task>? progressCallback = null,
         Func<string, string, CancellationToken, Task>? progressStartedCallback = null,
-        int maxParallelism = 1)
+        int maxParallelism = 1,
+        CommunityDetectionOptions? communityDetection = null)
     {
         if (!IsConfigured)
         {
@@ -650,6 +651,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             return new CommunityBuildResponse(false, "Foundry inference is not configured.", 0, 0, 0);
         }
 
+        var detectionOptions = NormalizeCommunityDetectionOptions(communityDetection);
         var steps = includeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
         var stepsLock = new object();
         async Task AddStepAsync(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
@@ -701,8 +703,11 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             await StartStepAsync("community-clustering", "Detecting graph communities");
             var components = LeidenCommunityDetector.DetectCommunities(
                 entities.Select(entity => entity.Id).ToList(),
-                relationships.Select(relationship => (relationship.SourceId, relationship.TargetId)).ToList());
-            await AddStepAsync("community-clustering", $"Identified {components.Count} graph communities with Leiden optimization", BuildCommunityClusteringDetail(components, entities, relationships));
+                relationships.Select(relationship => (relationship.SourceId, relationship.TargetId, Weight: CommunityRelationshipWeight(relationship, detectionOptions))).ToList(),
+                detectionOptions.CpmResolution,
+                detectionOptions.Seed,
+                detectionOptions.Directed);
+            await AddStepAsync("community-clustering", $"Identified {components.Count} graph communities with Leiden optimization", BuildCommunityClusteringDetail(components, entities, relationships, detectionOptions));
             var buildTimer = Stopwatch.StartNew();
             await StartStepAsync("community-reset", "Clearing existing community index");
             await ClearCommunityTablesAsync(connection, cancellationToken);
@@ -711,7 +716,11 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             var built = 0;
             var assigned = 0;
             var summaryDetails = new ConcurrentBag<CommunityBuildDetail>();
-            var selectedComponents = components.Where(component => component.Count > 1).OrderByDescending(component => component.Count).Take(50).ToList();
+            var selectedComponents = components
+                .Where(component => component.Count >= detectionOptions.MinCommunitySizeToSummarize)
+                .OrderByDescending(component => component.Count)
+                .Take(detectionOptions.MaxCommunitiesToSummarize)
+                .ToList();
             var workItems = selectedComponents
                 .Select((component, index) =>
                 {
@@ -996,7 +1005,35 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return $"Entities:\n{entityText}\n\nRelationships:\n{relationshipText}\n\nEvidence:\n{evidenceText}";
     }
 
-    private static string BuildCommunityClusteringDetail(IReadOnlyList<HashSet<long>> components, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    private static double CommunityRelationshipWeight(CommunityRelationshipRow relationship, CommunityDetectionOptions options)
+        => string.Equals(relationship.Relationship, "CO_MENTIONED_WITH", StringComparison.OrdinalIgnoreCase)
+            ? options.CoMentionWeight
+            : options.TypedRelationshipWeight;
+
+    private static CommunityDetectionOptions NormalizeCommunityDetectionOptions(CommunityDetectionOptions? options)
+    {
+        var value = options ?? new CommunityDetectionOptions();
+        var algorithm = string.IsNullOrWhiteSpace(value.Algorithm) ? "LeidenCpm" : value.Algorithm.Trim();
+        if (!string.Equals(algorithm, "LeidenCpm", StringComparison.OrdinalIgnoreCase))
+        {
+            algorithm = "LeidenCpm";
+        }
+
+        static double ClampFinite(double input, double fallback, double min, double max)
+            => double.IsFinite(input) ? Math.Clamp(input, min, max) : fallback;
+
+        return value with
+        {
+            Algorithm = algorithm,
+            CpmResolution = ClampFinite(value.CpmResolution, 0.25d, 0.001d, 2d),
+            TypedRelationshipWeight = ClampFinite(value.TypedRelationshipWeight, 2d, 0.01d, 20d),
+            CoMentionWeight = ClampFinite(value.CoMentionWeight, 1d, 0.01d, 20d),
+            MinCommunitySizeToSummarize = Math.Clamp(value.MinCommunitySizeToSummarize, 1, 1000),
+            MaxCommunitiesToSummarize = Math.Clamp(value.MaxCommunitiesToSummarize, 1, 500)
+        };
+    }
+
+    private static string BuildCommunityClusteringDetail(IReadOnlyList<HashSet<long>> components, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships, CommunityDetectionOptions options)
     {
         var entityLookup = entities.ToDictionary(entity => entity.Id, entity => entity);
         var displayLimit = components.Count <= 50 ? components.Count : 50;
@@ -1015,10 +1052,15 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
         return string.Join(Environment.NewLine,
         [
-            "Algorithm: Leiden community detection (local moving with connectivity refinement) over an undirected weighted entity graph.",
+            $"Algorithm: {options.Algorithm} community detection over a {(options.Directed ? "directed" : "undirected")} weighted entity graph.",
+            $"CPM resolution: {options.CpmResolution.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Seed: {options.Seed.ToString(CultureInfo.InvariantCulture)}",
+            $"Typed relationship weight: {options.TypedRelationshipWeight.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Co-mention weight: {options.CoMentionWeight.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Summary size filter: min entities={options.MinCommunitySizeToSummarize}, max communities={options.MaxCommunitiesToSummarize}",
             "Nodes: rows from kg_data.entities.",
             "Edges: typed kg_data.relationships plus chunk co-mentions (CO_MENTIONED_WITH fallback).",
-            "Rule: maximize modularity by moving nodes into strongly connected communities, then refine disconnected assignments; summaries are generated for communities with more than one entity.",
+            "Rule: optimize CPM with explicit edge weights; summaries are generated for communities that pass the configured size filter.",
             string.Empty,
             $"Total communities: {components.Count}",
             $"Singleton communities: {components.Count(component => component.Count == 1)}",

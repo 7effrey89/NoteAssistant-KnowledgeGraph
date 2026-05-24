@@ -126,6 +126,20 @@ public sealed record CommunityBuildResponse(
     int RelationshipsUsed,
     HybridRetrievalTraceDto? Trace = null);
 
+public sealed record CommunityBuildRequest(
+    int Parallelism = 1,
+    CommunityDetectionOptions? CommunityDetection = null);
+
+public sealed record CommunityDetectionOptions(
+    string Algorithm = "LeidenCpm",
+    bool Directed = false,
+    ulong Seed = 42,
+    double CpmResolution = 0.25,
+    double TypedRelationshipWeight = 2.0,
+    double CoMentionWeight = 1.0,
+    int MinCommunitySizeToSummarize = 2,
+    int MaxCommunitiesToSummarize = 50);
+
 public sealed record GlobalGraphRagRequest(
     string Query,
     int Limit = 6,

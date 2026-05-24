@@ -43,4 +43,22 @@ public sealed class LeidenCommunityDetectorTests
 
         Assert.Contains("unique", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void DetectCommunities_UsesWeightedEdges()
+    {
+        var entities = Enumerable.Range(1, 6).Select(id => (long)id).ToList();
+        var relationships = new List<(long SourceId, long TargetId, double Weight)>
+        {
+            (1, 2, 5), (2, 3, 5), (1, 3, 5),
+            (4, 5, 5), (5, 6, 5), (4, 6, 5),
+            (3, 4, 0.1)
+        };
+
+        var communities = LeidenCommunityDetector.DetectCommunities(entities, relationships);
+
+        Assert.Equal(2, communities.Count);
+        Assert.Contains(communities, c => c.SetEquals([1L, 2L, 3L]));
+        Assert.Contains(communities, c => c.SetEquals([4L, 5L, 6L]));
+    }
 }
