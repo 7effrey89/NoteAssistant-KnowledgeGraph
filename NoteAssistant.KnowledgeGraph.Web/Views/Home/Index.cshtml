@@ -421,45 +421,106 @@
                 <summary class="fw-semibold">Community tuning</summary>
                 <div class="row g-3 mt-1">
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communityResolutionInput">CPM resolution</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityResolutionInput">
+                            <span>CPM resolution</span>
+                            <span class="community-config-info" title="Leiden CPM granularity. Higher values usually create more/smaller communities; lower values create fewer/larger communities.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communityResolutionInput" min="0.001" max="2" step="0.01" value="0.25" />
                     </div>
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communityTypedWeightInput">Typed relationship weight</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityTypedWeightInput">
+                            <span>Typed relationship weight</span>
+                            <span class="community-config-info" title="Strength multiplier for explicit extracted relationships between entities. Higher values make typed edges influence clustering more.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communityTypedWeightInput" min="0.01" max="20" step="0.1" value="2.0" />
                     </div>
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communityCoMentionWeightInput">Co-mention weight</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityCoMentionWeightInput">
+                            <span>Co-mention weight</span>
+                            <span class="community-config-info" title="Strength multiplier for co-mention links inferred from chunk/document co-occurrence. Higher values make co-mentions influence clustering more.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communityCoMentionWeightInput" min="0.01" max="20" step="0.1" value="1.0" />
                     </div>
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communitySeedInput">Seed</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communitySeedInput">
+                            <span>Seed</span>
+                            <span class="community-config-info" title="Random seed used by community detection. Keep fixed for reproducible comparisons across tuning runs.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communitySeedInput" min="0" step="1" value="42" />
                     </div>
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communityMinSizeInput">Min summary size</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityMinSizeInput">
+                            <span>Min summary size</span>
+                            <span class="community-config-info" title="Minimum entity count required for a community to be summarized. Higher values skip smaller communities.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communityMinSizeInput" min="1" max="1000" step="1" value="2" />
                     </div>
                     <div class="col-md-4 col-xl-3">
-                        <label class="form-label" for="communityMaxSummariesInput">Max summaries</label>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityMaxSummariesInput">
+                            <span>Max summaries</span>
+                            <span class="community-config-info" title="Upper bound on how many communities to summarize in one build. Lower values limit cost; higher values increase coverage.">i</span>
+                        </label>
                         <input class="form-control form-control-sm community-config-input" type="number" id="communityMaxSummariesInput" min="1" max="500" step="1" value="50" />
                     </div>
                     <div class="col-md-4 col-xl-3 d-flex align-items-end">
                         <div class="form-check form-switch mb-1">
                             <input class="form-check-input community-config-input" type="checkbox" role="switch" id="communityDirectedInput" />
-                            <label class="form-check-label" for="communityDirectedInput">Directed graph</label>
+                            <label class="form-check-label d-flex align-items-center gap-2" for="communityDirectedInput">
+                                <span>Directed graph</span>
+                                <span class="community-config-info" title="When enabled, edge direction is preserved in clustering. Keep off unless direction is semantically important for your relationships.">i</span>
+                            </label>
                         </div>
                     </div>
                     <div class="col-12">
-                        <label class="form-label" for="communityConfigOutput">Agent config JSON</label>
+                        <div class="community-fields-divider" role="separator" aria-hidden="true"></div>
+                    </div>
+                    <div class="col-12 col-xl-6 community-profile-column">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <label class="form-label mb-1" for="communityProfileList">Persisted tuning profiles</label>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" id="communityLoadProfilesBtn">Reload</button>
+                        </div>
+                        <div id="communityProfileList" class="community-profile-list" role="listbox" aria-label="Persisted tuning profiles"></div>
+                    </div>
+                    <div class="col-12 col-xl-6 community-config-column">
+                        <div class="form-text community-config-description" id="communityProfileMeta">Loading community profiles...</div>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityConfigOutput">
+                            <span>Agent config JSON</span>
+                            <span class="community-config-info" title="Effective community tuning profile used for build/tune requests. It controls Leiden clustering behavior and summary scope (CPM resolution, relation weights, seed, min size, and max summaries).">i</span>
+                        </label>
                         <textarea class="form-control community-config-output" id="communityConfigOutput" rows="8" readonly></textarea>
                     </div>
                 </div>
             </details>
-            <div class="mt-2"><small id="communityStatus" class="text-muted"></small></div>
             <div id="communityError" class="text-danger mb-2"></div>
             <h6>Process map</h6>
             <div id="communityProcessMap" class="process-map"></div>
+            <div id="communityPreBuildGate" class="alert alert-warning py-2 px-3 mt-3 d-none">
+                <div class="fw-semibold small">Build paused after Leiden review.</div>
+                <div class="small mb-2" id="communityPreBuildMessage">Review detected communities, then choose whether to clear/rebuild the index or tune first.</div>
+                <div id="communityPreBuildAssessment" class="small mb-2"></div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-success" type="button" id="communityProceedBuildBtn">Proceed to clear index and summarize</button>
+                    <button class="btn btn-sm btn-primary" type="button" id="communityTuneBeforeBuildBtn">Tune profile first</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="communityCancelBuildBtn">Cancel</button>
+                </div>
+            </div>
+            <div id="communityPostBuildActions" class="alert alert-secondary py-2 px-3 mt-3 d-none">
+                <div class="fw-semibold small">Community optimization finished.</div>
+                <div class="small mb-2" id="communityPostBuildMessage">Build the community with the current profile, continue with further tuning, or cancel.</div>
+                <div class="small mb-2"><small id="communityStatus" class="text-muted"></small></div>
+                <div id="communityQuickAssessment" class="small mb-2"></div>
+                <details id="communityFinalProfileDetails" class="mb-2 d-none">
+                    <summary class="small fw-semibold">Final profile JSON (analysis output)</summary>
+                    <pre id="communityFinalProfileJson" class="mb-0 mt-2"></pre>
+                </details>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-success" type="button" id="communityContinueBtn">Build Community</button>
+                    <span id="communityPostTuneBtnWrapper" title="">
+                        <button class="btn btn-sm btn-primary" type="button" id="communityPostTuneBtn">Further Tuning</button>
+                    </span>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="communityRevertProfileBtn">Cancel</button>
+                </div>
+            </div>
             <details class="community-tuning-panel mt-3">
                 <summary class="fw-semibold">LLM tuning prompt</summary>
                 <div class="row g-3 mt-1">
@@ -563,6 +624,16 @@
         let currentDocumentId = null;
         let currentGraphName = 'knowledge_graph';
         let communitySummaryTabsState = null;
+        let communityProfilesState = {
+            activeProfileId: null,
+            selectedProfileId: null,
+            previousProfileId: null,
+            profiles: [],
+            defaults: null,
+            previousConfigSnapshot: null
+        };
+        let communityFurtherTuningDisabledReason = '';
+        let communityBuildGatePending = false;
         let graphReady = false;
         const uploadedDocuments = new Map();
         const selectedDocumentIds = new Set();
@@ -703,6 +774,24 @@
         const communityConfigOutput = document.getElementById('communityConfigOutput');
         const communityTuningSystemPrompt = document.getElementById('communityTuningSystemPrompt');
         const communityTuningUserPrompt = document.getElementById('communityTuningUserPrompt');
+        const communityProfileList = document.getElementById('communityProfileList');
+        const communityLoadProfilesBtn = document.getElementById('communityLoadProfilesBtn');
+        const communityProfileMeta = document.getElementById('communityProfileMeta');
+        const communityContinueBtn = document.getElementById('communityContinueBtn');
+        const communityPostTuneBtn = document.getElementById('communityPostTuneBtn');
+        const communityPostTuneBtnWrapper = document.getElementById('communityPostTuneBtnWrapper');
+        const communityRevertProfileBtn = document.getElementById('communityRevertProfileBtn');
+        const communityPreBuildGate = document.getElementById('communityPreBuildGate');
+        const communityPreBuildMessage = document.getElementById('communityPreBuildMessage');
+        const communityPreBuildAssessment = document.getElementById('communityPreBuildAssessment');
+        const communityProceedBuildBtn = document.getElementById('communityProceedBuildBtn');
+        const communityTuneBeforeBuildBtn = document.getElementById('communityTuneBeforeBuildBtn');
+        const communityCancelBuildBtn = document.getElementById('communityCancelBuildBtn');
+        const communityPostBuildActions = document.getElementById('communityPostBuildActions');
+        const communityPostBuildMessage = document.getElementById('communityPostBuildMessage');
+        const communityQuickAssessment = document.getElementById('communityQuickAssessment');
+        const communityFinalProfileDetails = document.getElementById('communityFinalProfileDetails');
+        const communityFinalProfileJson = document.getElementById('communityFinalProfileJson');
         const hybridModeSelect = document.getElementById('hybridModeSelect');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
@@ -747,6 +836,14 @@
             input.addEventListener('change', updateCommunityConfigOutput);
         });
         updateCommunityConfigOutput();
+        setCommunityFurtherTuningAvailability(false);
+        communityLoadProfilesBtn.addEventListener('click', () => loadCommunityProfiles(true));
+        communityContinueBtn.addEventListener('click', onCommunityContinueClicked);
+        communityPostTuneBtn.addEventListener('click', (event) => tuneCommunityProfile('post-build', event.currentTarget));
+        communityRevertProfileBtn.addEventListener('click', cancelCommunityPostBuildActions);
+        communityProceedBuildBtn.addEventListener('click', (event) => proceedCommunityBuild(event.currentTarget));
+        communityTuneBeforeBuildBtn.addEventListener('click', (event) => tuneCommunityProfile('pre-build', event.currentTarget));
+        communityCancelBuildBtn.addEventListener('click', cancelCommunityBuildGate);
         document.querySelectorAll('[data-copy-target]').forEach(button => {
             button.addEventListener('click', () => copyElementValue(button.dataset.copyTarget));
         });
@@ -780,6 +877,7 @@
         window.addEventListener('load', () => {
             checkBackendStatus();
             loadGraphMakerAgentPrompt();
+            loadCommunityProfiles(true);
             setInterval(checkBackendStatus, 15000);
             loadGraphOnStartup();
         });
@@ -1182,7 +1280,914 @@
                 return;
             }
             communityConfigOutput.value = JSON.stringify(getCommunityBuildRequest(), null, 2);
+            resizeCommunityConfigOutput();
             updateCommunityTuningPrompts();
+        }
+
+        function resizeCommunityConfigOutput() {
+            if (!communityConfigOutput) {
+                return;
+            }
+
+            communityConfigOutput.style.height = 'auto';
+            communityConfigOutput.style.height = `${communityConfigOutput.scrollHeight}px`;
+        }
+
+        function applyCommunityBuildRequestToInputs(request) {
+            if (!request || !request.communityDetection) {
+                return;
+            }
+
+            const detection = request.communityDetection;
+            if (llmParallelismInput) llmParallelismInput.value = String(request.parallelism ?? 1);
+            if (communityResolutionInput) communityResolutionInput.value = String(detection.cpmResolution ?? 0.25);
+            if (communityTypedWeightInput) communityTypedWeightInput.value = String(detection.typedRelationshipWeight ?? 2.0);
+            if (communityCoMentionWeightInput) communityCoMentionWeightInput.value = String(detection.coMentionWeight ?? 1.0);
+            if (communitySeedInput) communitySeedInput.value = String(detection.seed ?? 42);
+            if (communityMinSizeInput) communityMinSizeInput.value = String(detection.minCommunitySizeToSummarize ?? 2);
+            if (communityMaxSummariesInput) communityMaxSummariesInput.value = String(detection.maxCommunitiesToSummarize ?? 50);
+            if (communityDirectedInput) communityDirectedInput.checked = Boolean(detection.directed);
+            updateCommunityConfigOutput();
+        }
+
+        function getDefaultCommunityBuildRequest() {
+            return {
+                parallelism: 1,
+                communityDetection: {
+                    algorithm: 'LeidenCpm',
+                    directed: false,
+                    seed: 42,
+                    cpmResolution: 0.25,
+                    typedRelationshipWeight: 2.0,
+                    coMentionWeight: 1.0,
+                    minCommunitySizeToSummarize: 2,
+                    maxCommunitiesToSummarize: 50
+                }
+            };
+        }
+
+        function normalizePercentValue(value) {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return null;
+            }
+
+            return Math.max(0, Math.min(100, numeric));
+        }
+
+        function describeCommunityProfile(profile) {
+            const createdAt = profile?.createdAt ? new Date(profile.createdAt).toLocaleString() : 'n/a';
+            const score = normalizePercentValue(profile?.scorePercent);
+            const confidence = normalizePercentValue(profile?.confidencePercent);
+            const scoreText = score === null ? 'score: n/a' : `score: ${score.toFixed(1)}%`;
+            const confidenceText = confidence === null ? 'confidence: n/a' : `confidence: ${confidence.toFixed(1)}%`;
+            const source = profile?.source || 'manual';
+            return `${createdAt} | ${scoreText} | ${confidenceText} | source: ${source}`;
+        }
+
+        function getCommunityProfileDisplayParts(profile) {
+            const score = normalizePercentValue(profile?.scorePercent);
+            const confidence = normalizePercentValue(profile?.confidencePercent);
+            const scoreLabel = score === null ? 'score n/a' : `score ${score.toFixed(1)}%`;
+            const confidenceLabel = confidence === null ? 'conf n/a' : `conf ${confidence.toFixed(1)}%`;
+            const createdAt = profile?.createdAt ? new Date(profile.createdAt).toLocaleString() : 'n/a';
+            const detection = profile?.config?.communityDetection || {};
+            const parallelism = Number.isFinite(Number(profile?.config?.parallelism)) ? Number(profile.config.parallelism) : 'n/a';
+            const cpm = Number.isFinite(Number(detection.cpmResolution)) ? Number(detection.cpmResolution).toFixed(2) : 'n/a';
+            const minSize = Number.isFinite(Number(detection.minCommunitySizeToSummarize)) ? Number(detection.minCommunitySizeToSummarize) : 'n/a';
+            const maxSummaries = Number.isFinite(Number(detection.maxCommunitiesToSummarize)) ? Number(detection.maxCommunitiesToSummarize) : 'n/a';
+            return {
+                createdAt,
+                details: `${scoreLabel} | ${confidenceLabel} | p ${parallelism} | cpm ${cpm} | min ${minSize} | max ${maxSummaries}`
+            };
+        }
+
+        async function loadCommunityProfiles(selectActive) {
+            if (!communityProfileList) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Failed to load profiles (status ${response.status}).`);
+                }
+
+                const profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+                communityProfilesState.profiles = profiles;
+                communityProfilesState.activeProfileId = payload?.activeProfileId || null;
+                communityProfilesState.defaults = payload?.defaultConfig || getDefaultCommunityBuildRequest();
+
+                renderCommunityProfileOptions(selectActive);
+            } catch (err) {
+                communityProfileList.innerHTML = '';
+                communityProfilesState.profiles = [];
+                communityProfilesState.activeProfileId = null;
+                communityProfilesState.selectedProfileId = '__defaults';
+                communityProfilesState.defaults = getDefaultCommunityBuildRequest();
+                communityProfileMeta.innerText = `Unable to load profiles: ${err.message}. Using defaults.`;
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults);
+            }
+        }
+
+        function renderCommunityProfileOptions(selectActive) {
+            const previousSelected = communityProfilesState.selectedProfileId;
+            if (selectActive && communityProfilesState.activeProfileId) {
+                communityProfilesState.selectedProfileId = communityProfilesState.activeProfileId;
+            } else if (previousSelected && (previousSelected === '__defaults' || communityProfilesState.profiles.some(profile => profile.id === previousSelected))) {
+                communityProfilesState.selectedProfileId = previousSelected;
+            } else {
+                communityProfilesState.selectedProfileId = '__defaults';
+            }
+
+            renderCommunityProfileList();
+
+            updateCommunityProfileMeta();
+
+            const selectedProfile = getSelectedCommunityProfile();
+            if (selectedProfile) {
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+            } else if (selectActive) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+            }
+        }
+
+        function getSelectedCommunityProfile() {
+            const selectedId = communityProfilesState.selectedProfileId;
+            if (!selectedId || selectedId === '__defaults') {
+                return null;
+            }
+
+            return communityProfilesState.profiles.find(profile => profile.id === selectedId) || null;
+        }
+
+        function updateCommunityProfileMeta() {
+            const selectedProfile = getSelectedCommunityProfile();
+            if (!selectedProfile) {
+                communityProfileMeta.innerText = 'No persisted profile selected. Current build uses defaults or your unsaved edits.';
+                return;
+            }
+
+            const isActive = selectedProfile.id === communityProfilesState.activeProfileId;
+            const activeText = isActive ? 'ACTIVE' : 'not active';
+            const improvement = selectedProfile.improvement ? ` | ${truncateText(selectedProfile.improvement, 180)}` : '';
+            communityProfileMeta.innerText = `${activeText}: ${describeCommunityProfile(selectedProfile)}${improvement}`;
+        }
+
+        function onCommunityProfileSelectionChanged(profileId) {
+            communityProfilesState.selectedProfileId = profileId || '__defaults';
+            renderCommunityProfileList();
+            updateCommunityProfileMeta();
+
+            const selectedProfile = getSelectedCommunityProfile();
+            if (selectedProfile?.config) {
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+                return;
+            }
+
+            if (communityProfilesState.defaults) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults);
+            }
+        }
+
+        function getCommunityProfileTuneButton(profileId) {
+            if (!communityProfileList) {
+                return null;
+            }
+
+            const targetProfileId = profileId || '__defaults';
+            const rows = communityProfileList.querySelectorAll('.community-profile-row');
+            for (const row of rows) {
+                if ((row.getAttribute('data-profile-id') || '') === targetProfileId) {
+                    return row.querySelector('[data-role="tune"]');
+                }
+            }
+
+            return null;
+        }
+
+        function renderCommunityProfileList() {
+            if (!communityProfileList) {
+                return;
+            }
+
+            const selectedId = communityProfilesState.selectedProfileId || '__defaults';
+            const activeId = communityProfilesState.activeProfileId;
+            communityProfileList.innerHTML = '';
+
+            const defaultsRow = document.createElement('div');
+            defaultsRow.className = `community-profile-row${selectedId === '__defaults' ? ' selected' : ''}`;
+            defaultsRow.setAttribute('role', 'option');
+            defaultsRow.setAttribute('aria-selected', selectedId === '__defaults' ? 'true' : 'false');
+            defaultsRow.setAttribute('data-profile-id', '__defaults');
+            defaultsRow.innerHTML = `
+                <div class="community-profile-row-main">
+                    <div class="community-profile-row-title">Defaults (unsaved)</div>
+                </div>
+                <div class="community-profile-row-actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-role="tune" title="Use this profile as baseline for a new optimized profile.">Tune</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary">Use</button>
+                </div>`;
+            defaultsRow.addEventListener('click', () => onCommunityProfileSelectionChanged('__defaults'));
+            defaultsRow.querySelector('[data-role="tune"]')?.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                onCommunityProfileSelectionChanged('__defaults');
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                const visibleTuneButton = getCommunityProfileTuneButton('__defaults');
+                await tuneCommunityProfile('manual', visibleTuneButton || event.currentTarget);
+            });
+            defaultsRow.querySelector('.btn-outline-primary')?.addEventListener('click', (event) => {
+                event.stopPropagation();
+                onCommunityProfileSelectionChanged('__defaults');
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                hideCommunityPostBuildActions();
+            });
+            communityProfileList.appendChild(defaultsRow);
+
+            communityProfilesState.profiles.forEach((profile) => {
+                const isSelected = selectedId === profile.id;
+                const isActive = activeId === profile.id;
+                const row = document.createElement('div');
+                row.className = `community-profile-row${isSelected ? ' selected' : ''}${isActive ? ' active' : ''}`;
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+                row.setAttribute('data-profile-id', profile.id);
+
+                const displayParts = getCommunityProfileDisplayParts(profile);
+                row.innerHTML = `
+                    <div class="community-profile-row-main">
+                        <div class="community-profile-row-title">${escapeHtml(displayParts.createdAt)}${isActive ? ' (active)' : ''}</div>
+                        <div class="community-profile-row-meta">${escapeHtml(displayParts.details)}</div>
+                    </div>
+                    <div class="community-profile-row-actions">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-role="tune" title="Use this profile as baseline for a new optimized profile.">Tune</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" data-role="use">Use</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" data-role="delete">Delete</button>
+                    </div>`;
+
+                row.addEventListener('click', () => onCommunityProfileSelectionChanged(profile.id));
+                row.querySelector('[data-role="tune"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    onCommunityProfileSelectionChanged(profile.id);
+                    applyCommunityBuildRequestToInputs(profile.config);
+                    const visibleTuneButton = getCommunityProfileTuneButton(profile.id);
+                    await tuneCommunityProfile('manual', visibleTuneButton || event.currentTarget);
+                });
+                row.querySelector('[data-role="use"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    onCommunityProfileSelectionChanged(profile.id);
+                    await applySelectedCommunityProfile();
+                });
+                row.querySelector('[data-role="delete"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    await deleteCommunityProfile(profile.id);
+                });
+
+                communityProfileList.appendChild(row);
+            });
+        }
+
+        async function applySelectedCommunityProfile() {
+            const selectedProfile = getSelectedCommunityProfile();
+            if (!selectedProfile) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                hideCommunityPostBuildActions();
+                return;
+            }
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles/active`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profileId: selectedProfile.id })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Unable to activate profile (status ${response.status}).`);
+                }
+
+                communityProfilesState.previousProfileId = communityProfilesState.activeProfileId;
+                communityProfilesState.activeProfileId = payload?.activeProfileId || selectedProfile.id;
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+                setInlineStatus(document.getElementById('communityStatus'), 'Selected community profile loaded.', 'text-success');
+                updateCommunityProfileMeta();
+                renderCommunityProfileList();
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+            }
+        }
+
+        async function deleteCommunityProfile(profileId) {
+            if (!profileId) {
+                return;
+            }
+
+            if (!window.confirm('Delete this persisted profile?')) {
+                return;
+            }
+
+            document.getElementById('communityError').innerText = '';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles/${encodeURIComponent(profileId)}`, {
+                    method: 'DELETE'
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Unable to delete profile (status ${response.status}).`);
+                }
+
+                communityProfilesState.profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+                communityProfilesState.activeProfileId = payload?.activeProfileId || null;
+                if (communityProfilesState.selectedProfileId === profileId) {
+                    communityProfilesState.selectedProfileId = communityProfilesState.activeProfileId || '__defaults';
+                }
+
+                renderCommunityProfileOptions(false);
+                setInlineStatus(document.getElementById('communityStatus'), 'Profile deleted.', 'text-success');
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+            }
+        }
+
+        function showCommunityPostBuildActions(message) {
+            if (!communityPostBuildActions) {
+                return;
+            }
+
+            communityPostBuildActions.classList.remove('d-none');
+            if (communityPostBuildMessage) {
+                communityPostBuildMessage.innerText = message || 'Build the community with the current profile, continue tuning, or cancel.';
+            }
+        }
+
+        function setCommunityFurtherTuningAvailability(disabled, reason) {
+            communityFurtherTuningDisabledReason = disabled ? (reason || 'Further tuning is not available right now.') : '';
+
+            if (communityPostTuneBtn) {
+                communityPostTuneBtn.disabled = disabled;
+                if (disabled) {
+                    communityPostTuneBtn.setAttribute('title', communityFurtherTuningDisabledReason);
+                    communityPostTuneBtn.setAttribute('aria-disabled', 'true');
+                } else {
+                    communityPostTuneBtn.setAttribute('title', 'Run another tuning pass for this profile.');
+                    communityPostTuneBtn.removeAttribute('aria-disabled');
+                }
+            }
+
+            if (communityPostTuneBtnWrapper) {
+                communityPostTuneBtnWrapper.setAttribute('title', disabled ? communityFurtherTuningDisabledReason : '');
+            }
+        }
+
+        function cancelCommunityPostBuildActions() {
+            hideCommunityPostBuildActions();
+            setInlineStatus(document.getElementById('communityStatus'), 'Community build canceled. Current profile remains selected.', 'text-muted');
+        }
+
+        async function onCommunityContinueClicked() {
+            const communityError = document.getElementById('communityError');
+            if (communityError) {
+                communityError.className = 'text-danger mb-2';
+                communityError.innerText = '';
+            }
+
+            setButtonLoading(communityContinueBtn, true, 'Continuing...');
+            try {
+                const selectedProfile = getSelectedCommunityProfile();
+                if (selectedProfile) {
+                    await applySelectedCommunityProfile();
+                } else {
+                    applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                }
+
+                if (communityError && communityError.innerText) {
+                    return;
+                }
+
+                await runCommunityBuildExecution();
+            } finally {
+                setButtonLoading(communityContinueBtn, false);
+            }
+        }
+
+        function hideCommunityPostBuildActions() {
+            if (!communityPostBuildActions) {
+                return;
+            }
+
+            communityPostBuildActions.classList.add('d-none');
+            if (communityQuickAssessment) {
+                communityQuickAssessment.innerHTML = '';
+            }
+            setCommunityFinalProfileOutput(null);
+        }
+
+        function setCommunityFinalProfileOutput(config) {
+            if (!communityFinalProfileDetails || !communityFinalProfileJson) {
+                return;
+            }
+
+            if (!config || typeof config !== 'object') {
+                communityFinalProfileJson.textContent = '';
+                communityFinalProfileDetails.classList.add('d-none');
+                communityFinalProfileDetails.open = false;
+                return;
+            }
+
+            communityFinalProfileJson.textContent = JSON.stringify(config, null, 2);
+            communityFinalProfileDetails.classList.remove('d-none');
+        }
+
+        function parseCommunityClusteringMetrics(detail) {
+            const text = String(detail || '');
+            const readInt = (pattern) => {
+                const match = text.match(pattern);
+                return match ? Number.parseInt(match[1], 10) : null;
+            };
+
+            return {
+                totalCommunities: readInt(/Total communities:\s*(\d+)/i),
+                singletonCommunities: readInt(/Singleton communities:\s*(\d+)/i),
+                multiEntityCommunities: readInt(/Multi-entity communities:\s*(\d+)/i)
+            };
+        }
+
+        function assessCommunityTuningPotential(configOverride) {
+            const state = ensureCommunitySummaryTabsState();
+            const config = configOverride || getCommunityBuildRequest();
+            const metrics = parseCommunityClusteringMetrics(state.clusteringDetail);
+            const completedSummaryCount = state.completedBlocks.filter(Boolean).length;
+            const hasRunMetrics = Boolean(metrics.totalCommunities || metrics.multiEntityCommunities || metrics.singletonCommunities || state.clusteringDetail);
+
+            if (!hasRunMetrics) {
+                const reasons = [];
+                if (config.communityDetection.cpmResolution < 0.08 || config.communityDetection.cpmResolution > 0.8) {
+                    reasons.push('resolution is in an extreme range');
+                }
+                if (config.communityDetection.minCommunitySizeToSummarize >= 4) {
+                    reasons.push('minimum summary size may filter aggressively');
+                }
+                if (config.communityDetection.maxCommunitiesToSummarize < 25) {
+                    reasons.push('summary cap is relatively low');
+                }
+
+                return {
+                    potential: null,
+                    confidence: reasons.length ? 35 : 25,
+                    band: 'Unknown',
+                    total: null,
+                    singleton: null,
+                    multiEntity: null,
+                    summaryCount: 0,
+                    reasons,
+                    recommendation: reasons.length
+                        ? 'only config-level risks are visible before detection; proceed with build to measure real community quality, or tune conservatively first'
+                        : 'no detected communities/entities are available yet; proceed with build to collect real metrics before judging tuning upside',
+                    source: 'config-only'
+                };
+            }
+
+            const multiEntity = metrics.multiEntityCommunities ?? completedSummaryCount;
+            const singleton = metrics.singletonCommunities ?? 0;
+            const total = metrics.totalCommunities ?? (multiEntity + singleton);
+            const singletonRatio = total > 0 ? singleton / total : 0;
+            const candidateSummaryCount = completedSummaryCount > 0
+                ? completedSummaryCount
+                : Math.min(multiEntity, config.communityDetection.maxCommunitiesToSummarize);
+            const summarizedCoverage = multiEntity > 0 ? candidateSummaryCount / multiEntity : 0;
+
+            let potential = 5;
+            const reasons = [];
+
+            if (singletonRatio >= 0.35) {
+                potential += 22;
+                reasons.push(`high singleton ratio (${(singletonRatio * 100).toFixed(1)}%) suggests fragmentation`);
+            } else if (singletonRatio >= 0.22) {
+                potential += 10;
+                reasons.push(`moderate singleton ratio (${(singletonRatio * 100).toFixed(1)}%)`);
+            }
+
+            if (multiEntity > config.communityDetection.maxCommunitiesToSummarize) {
+                potential += 20;
+                reasons.push(`summary cap hit (${config.communityDetection.maxCommunitiesToSummarize}/${multiEntity})`);
+            }
+
+            if (summarizedCoverage > 0 && summarizedCoverage < 0.7) {
+                potential += 10;
+                reasons.push(`low summarized coverage (${(summarizedCoverage * 100).toFixed(1)}%)`);
+            }
+
+            if (config.communityDetection.cpmResolution < 0.08 || config.communityDetection.cpmResolution > 0.8) {
+                potential += 8;
+                reasons.push('resolution is in an extreme range');
+            }
+
+            if (config.communityDetection.minCommunitySizeToSummarize >= 4) {
+                potential += 6;
+                reasons.push('minimum summary size may filter too aggressively');
+            }
+
+            potential = Math.max(0, Math.min(95, Math.round(potential)));
+
+            const confidence = Math.max(45, Math.min(90,
+                45
+                + (metrics.totalCommunities ? 15 : 0)
+                + (metrics.multiEntityCommunities ? 10 : 0)
+                + (completedSummaryCount > 0 ? 10 : 0)
+            ));
+
+            let band = 'Low';
+            if (potential >= 60) {
+                band = 'High';
+            } else if (potential >= 30) {
+                band = 'Medium';
+            }
+
+            const recommendation = [];
+            if (singletonRatio >= 0.3) {
+                recommendation.push('try slightly lower CPM resolution or slightly higher co-mention weight');
+            }
+            if (multiEntity > config.communityDetection.maxCommunitiesToSummarize) {
+                recommendation.push('raise max summaries or tighten resolution to focus high-value communities');
+            }
+            if (recommendation.length === 0) {
+                recommendation.push('current profile looks stable; tune only if retrieval quality is weak');
+            }
+
+            return {
+                potential,
+                confidence,
+                band,
+                total,
+                singleton,
+                multiEntity,
+                summaryCount: candidateSummaryCount,
+                reasons,
+                recommendation: recommendation.join('; '),
+                source: 'run-metrics'
+            };
+        }
+
+        function formatAssessmentPotential(assessment) {
+            return assessment.potential === null || assessment.potential === undefined
+                ? `${assessment.band} (needs detected community metrics)`
+                : `${assessment.band} (${assessment.potential}%)`;
+        }
+
+        function buildCommunityReviewRubricPrompt() {
+            return [
+                'This review is generated by a deterministic rule-based rubric (no LLM call).',
+                '',
+                'Scoring logic summary:',
+                '- Start potential at 5%.',
+                '- Add +22 when singleton ratio >= 35%, or +10 when >= 22%.',
+                '- Add +20 when multi-entity communities exceed max summaries.',
+                '- Add +10 when summarized coverage is between 0% and 70%.',
+                '- Add +8 when CPM resolution is in extreme range (<0.08 or >0.8).',
+                '- Add +6 when minimum summary size >= 4.',
+                '- Clamp potential to 0-95%.',
+                '- Confidence is derived from detected run metrics and completed summaries (45-90%).',
+                '',
+                'Output fields:',
+                '- Improvement potential band and percentage',
+                '- Confidence',
+                '- Candidate coverage',
+                '- Recommendation text'
+            ].join('\n');
+        }
+
+        function buildCommunityReviewInputPayload(assessment) {
+            const state = ensureCommunitySummaryTabsState();
+            const metrics = parseCommunityClusteringMetrics(state.clusteringDetail);
+            const completedSummaryCount = state.completedBlocks.filter(Boolean).length;
+
+            return [
+                'Source: local deterministic assessment (no LLM system prompt/user prompt sent).',
+                '',
+                'Current config:',
+                JSON.stringify(getCommunityBuildRequest(), null, 2),
+                '',
+                'Detected clustering output:',
+                truncateText(state.clusteringDetail || '(not available)', 12000),
+                '',
+                'Derived metrics:',
+                JSON.stringify({
+                    totalCommunities: metrics.totalCommunities,
+                    singletonCommunities: metrics.singletonCommunities,
+                    multiEntityCommunities: metrics.multiEntityCommunities,
+                    completedSummaryCount,
+                    assessmentPotential: assessment?.potential ?? null,
+                    assessmentBand: assessment?.band ?? null,
+                    assessmentConfidence: assessment?.confidence ?? null
+                }, null, 2)
+            ].join('\n');
+        }
+
+        function renderCommunityQuickAssessment(assessment) {
+            if (!communityQuickAssessment) {
+                return;
+            }
+
+            const reasonText = assessment.reasons.length
+                ? `Signals: ${assessment.reasons.join(' | ')}`
+                : 'Signals: no major risk indicators detected from this run.';
+            communityQuickAssessment.innerHTML = `
+                <div><strong>Quick assessment before tuning:</strong> ${formatAssessmentPotential(assessment)} | confidence ${assessment.confidence}%.</div>
+                <div>Coverage: summarized ${assessment.summaryCount} multi-entity communities out of ${assessment.multiEntity} (${assessment.total} total communities, ${assessment.singleton} singleton).</div>
+                <div>${escapeHtml(reasonText)}</div>
+                <div><strong>Recommendation:</strong> ${escapeHtml(assessment.recommendation)}</div>`;
+        }
+
+        function renderCommunityPreBuildAssessment(assessment) {
+            if (!communityPreBuildAssessment) {
+                return;
+            }
+
+            const scopeText = assessment.source === 'run-metrics'
+                ? 'Based on the detected communities from this Leiden run.'
+                : 'Config-only preflight: no detected communities/entities exist yet for this build.';
+            const coverageText = assessment.source === 'run-metrics'
+                ? `<div>Candidate coverage: ${assessment.summaryCount} of ${assessment.multiEntity} multi-entity communities would be summarized (${assessment.total} total, ${assessment.singleton} singleton).</div>`
+                : '<div>Community/entity counts are not known until the backend detection step runs.</div>';
+            communityPreBuildAssessment.innerHTML = `
+                <div><strong>Estimated improvement potential:</strong> ${formatAssessmentPotential(assessment)} | confidence ${assessment.confidence}%.</div>
+                <div>${escapeHtml(scopeText)}</div>
+                ${coverageText}
+                <div><strong>Recommendation:</strong> ${escapeHtml(assessment.recommendation)}</div>
+                <div class="text-muted">No reset or LLM summary call has started yet. Proceed to continue with \"Existing community index cleared\".</div>`;
+        }
+
+        function showCommunityPreBuildGate(assessment) {
+            if (!communityPreBuildGate) {
+                return;
+            }
+
+            communityPreBuildGate.classList.remove('d-none');
+            if (communityPreBuildMessage) {
+                communityPreBuildMessage.innerText = 'Build is paused before execution. Choose proceed or tune first.';
+            }
+            renderCommunityPreBuildAssessment(assessment);
+        }
+
+        function formatCommunityConfigValue(value) {
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+            }
+            if (typeof value === 'boolean') {
+                return value ? 'true' : 'false';
+            }
+            return String(value ?? 'n/a');
+        }
+
+        function summarizeCommunityConfigChanges(beforeConfig, afterConfig) {
+            const changes = [];
+            const beforeDetection = beforeConfig?.communityDetection || {};
+            const afterDetection = afterConfig?.communityDetection || {};
+
+            const addChange = (label, beforeValue, afterValue) => {
+                if (beforeValue === afterValue) {
+                    return;
+                }
+                changes.push(`${label}: ${formatCommunityConfigValue(beforeValue)} -> ${formatCommunityConfigValue(afterValue)}`);
+            };
+
+            addChange('LLM parallelism', beforeConfig?.parallelism, afterConfig?.parallelism);
+            addChange('CPM resolution', beforeDetection.cpmResolution, afterDetection.cpmResolution);
+            addChange('Typed relationship weight', beforeDetection.typedRelationshipWeight, afterDetection.typedRelationshipWeight);
+            addChange('Co-mention weight', beforeDetection.coMentionWeight, afterDetection.coMentionWeight);
+            addChange('Min summary size', beforeDetection.minCommunitySizeToSummarize, afterDetection.minCommunitySizeToSummarize);
+            addChange('Max summaries', beforeDetection.maxCommunitiesToSummarize, afterDetection.maxCommunitiesToSummarize);
+            addChange('Directed graph', beforeDetection.directed, afterDetection.directed);
+            addChange('Seed', beforeDetection.seed, afterDetection.seed);
+
+            return changes;
+        }
+
+        function estimateCommunityTuningGain(beforeAssessment, scorePercent) {
+            const score = normalizePercentValue(scorePercent);
+            if (score === null || beforeAssessment?.potential === null || beforeAssessment?.potential === undefined) {
+                return null;
+            }
+
+            const baselineQuality = Math.max(0, Math.min(100, 100 - beforeAssessment.potential));
+            const delta = Number((score - baselineQuality).toFixed(1));
+            return {
+                baselineQuality,
+                projectedQuality: score,
+                delta
+            };
+        }
+
+        function appendCommunityTuningAgentReview(reason, payload, previousConfig, nextConfig, beforeAssessment) {
+            const configChanges = summarizeCommunityConfigChanges(previousConfig, nextConfig);
+            const expectedGain = estimateCommunityTuningGain(beforeAssessment, payload?.scorePercent);
+            const score = normalizePercentValue(payload?.scorePercent);
+            const confidence = normalizePercentValue(payload?.confidencePercent);
+            const scoreBreakdown = payload?.scoreBreakdown || null;
+            const scoreText = score === null ? 'n/a' : `${score.toFixed(1)}%`;
+            const confidenceText = confidence === null ? 'n/a' : `${confidence.toFixed(1)}%`;
+            const expectedGainText = expectedGain
+                ? `Projected quality after applying profile: ${expectedGain.projectedQuality.toFixed(1)}% (baseline ${expectedGain.baselineQuality.toFixed(1)}%, expected gain ${expectedGain.delta >= 0 ? '+' : ''}${expectedGain.delta.toFixed(1)}%).`
+                : 'Projected gain unavailable: score and run metrics are required.';
+
+            const scoreComponentText = Array.isArray(scoreBreakdown?.scoreComponents) && scoreBreakdown.scoreComponents.length
+                ? scoreBreakdown.scoreComponents
+                    .map(component => `${component.name}: ${component.value} (${component.detail || ''})`)
+                    .join('\n')
+                : '(no score components returned)';
+            const confidenceComponentText = Array.isArray(scoreBreakdown?.confidenceComponents) && scoreBreakdown.confidenceComponents.length
+                ? scoreBreakdown.confidenceComponents
+                    .map(component => `${component.name}: ${component.value} (${component.detail || ''})`)
+                    .join('\n')
+                : '(no confidence components returned)';
+            const scoringMethodLine = scoreBreakdown?.method
+                ? `Scoring method: ${scoreBreakdown.method} (deterministic backend)`
+                : 'Scoring method: not provided';
+
+            const reviewLines = [
+                `Trigger: ${reason || 'manual'}`,
+                `Agent score: ${scoreText} | confidence: ${confidenceText}`,
+                scoringMethodLine,
+                `Estimated improvement potential before tuning: ${formatAssessmentPotential(beforeAssessment)} | confidence ${beforeAssessment?.confidence ?? 'n/a'}%`,
+                expectedGainText,
+                `Recommendation: ${payload?.improvement || 'No recommendation text returned.'}`,
+                configChanges.length
+                    ? `Suggested config changes: ${configChanges.join(' | ')}`
+                    : 'Suggested config changes: none (agent kept current profile).'
+            ];
+
+            appendCommunityProcessMap([
+                {
+                    title: 'Community Tuning Agent review',
+                    variant: 'agent',
+                    role: 'GraphRag Community Tuning Agent',
+                    purpose: 'Evaluate Leiden run quality and recommend a reversible profile optimization.',
+                    body: reviewLines.join('\n'),
+                    systemPrompt: communityTuningSystemPrompt?.value || '(system prompt unavailable)',
+                    systemPromptTitle: 'Community Tuning Agent system prompt',
+                    inputPayload: communityTuningUserPrompt?.value || '(agent input unavailable)',
+                    inputPayloadTitle: 'Community Tuning Agent input (config + detected entities/relationships + summary samples)',
+                    configPayload: JSON.stringify(nextConfig || payload?.config || {}, null, 2),
+                    configPayloadTitle: 'Suggested community profile JSON',
+                    outputPayload: [
+                        `scorePercent: ${scoreText}`,
+                        `confidencePercent: ${confidenceText}`,
+                        scoringMethodLine,
+                        '',
+                        'Score components:',
+                        scoreComponentText,
+                        '',
+                        'Confidence components:',
+                        confidenceComponentText
+                    ].join('\n'),
+                    outputPayloadTitle: 'Deterministic score breakdown',
+                    tokenUsage: payload?.tokenUsage || null
+                }
+            ]);
+        }
+
+        function hideCommunityPreBuildGate() {
+            if (!communityPreBuildGate) {
+                return;
+            }
+
+            communityPreBuildGate.classList.add('d-none');
+            if (communityPreBuildAssessment) {
+                communityPreBuildAssessment.innerHTML = '';
+            }
+        }
+
+        function cancelCommunityBuildGate() {
+            communityBuildGatePending = false;
+            hideCommunityPreBuildGate();
+            setInlineStatus(document.getElementById('communityStatus'), 'Community build paused. Click Build Communities when ready.', 'text-muted');
+        }
+
+        async function proceedCommunityBuild(triggerButton = null) {
+            communityBuildGatePending = false;
+            if (triggerButton) {
+                setButtonLoading(triggerButton, true, 'Proceeding...');
+            }
+
+            try {
+                return await runCommunityBuildExecution();
+            } finally {
+                if (triggerButton) {
+                    setButtonLoading(triggerButton, false);
+                }
+            }
+        }
+
+        async function tuneCommunityProfile(reason, triggerButton = null) {
+            const communityStatus = document.getElementById('communityStatus');
+            document.getElementById('communityError').innerText = '';
+            updateCommunityTuningPrompts();
+            const previousConfig = getCommunityBuildRequest();
+            const existingProfileIds = new Set((communityProfilesState.profiles || []).map(profile => profile.id));
+            const beforeAssessment = assessCommunityTuningPotential(previousConfig);
+            setInlineStatus(communityStatus, 'Running GraphRag Community Tuning Agent...', 'text-muted');
+
+            const tuningButtons = new Set();
+            if (triggerButton) {
+                tuningButtons.add(triggerButton);
+            }
+            if (reason === 'post-build' && communityPostTuneBtn) {
+                tuningButtons.add(communityPostTuneBtn);
+            }
+            if (reason === 'pre-build' && communityTuneBeforeBuildBtn) {
+                tuningButtons.add(communityTuneBeforeBuildBtn);
+            }
+            tuningButtons.forEach((button) => setButtonLoading(button, true, 'Tuning...'));
+
+            try {
+                communityProfilesState.previousConfigSnapshot = getCommunityBuildRequest();
+                communityProfilesState.previousProfileId = communityProfilesState.activeProfileId;
+
+                const response = await fetch(`${backendBaseUrl}/api/communities/tune-profile`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        systemPrompt: communityTuningSystemPrompt?.value || '',
+                        userPrompt: communityTuningUserPrompt?.value || '',
+                        currentConfig: getCommunityBuildRequest(),
+                        persistProfile: true,
+                        assessmentContext: {
+                            totalCommunities: beforeAssessment?.total ?? null,
+                            singletonCommunities: beforeAssessment?.singleton ?? null,
+                            multiEntityCommunities: beforeAssessment?.multiEntity ?? null,
+                            candidateSummaryCount: beforeAssessment?.summaryCount ?? null,
+                            source: beforeAssessment?.source || null
+                        }
+                    })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok || !payload?.success) {
+                    throw new Error((payload && (payload.error || payload.detail)) || 'Tuning request failed.');
+                }
+
+                if (payload.config) {
+                    applyCommunityBuildRequestToInputs(payload.config);
+                }
+
+                const appliedConfig = payload.config || getCommunityBuildRequest();
+                setCommunityFinalProfileOutput(appliedConfig);
+                const configChanges = summarizeCommunityConfigChanges(previousConfig, appliedConfig);
+
+                await loadCommunityProfiles(true);
+                if (payload?.savedProfile?.id) {
+                    communityProfilesState.selectedProfileId = payload.savedProfile.id;
+                    renderCommunityProfileList();
+                    updateCommunityProfileMeta();
+                }
+
+                appendCommunityTuningAgentReview(reason, payload, previousConfig, appliedConfig, beforeAssessment);
+
+                const score = normalizePercentValue(payload.scorePercent);
+                const confidence = normalizePercentValue(payload.confidencePercent);
+                const scoreText = score === null ? 'n/a' : `${score.toFixed(1)}%`;
+                const confidenceText = confidence === null ? 'n/a' : `${confidence.toFixed(1)}%`;
+                const improvement = payload.improvement ? ` ${payload.improvement}` : '';
+                const reusedExistingProfile = !!(payload?.savedProfile?.id && existingProfileIds.has(payload.savedProfile.id));
+                const reuseNote = reusedExistingProfile ? ' Reused existing matching profile (no new profile created).' : '';
+                setInlineStatus(communityStatus, `Tuning complete (score ${scoreText}, confidence ${confidenceText}).${reuseNote}`, 'text-success');
+                if (configChanges.length === 0) {
+                    setCommunityFurtherTuningAvailability(
+                        true,
+                        'Further tuning disabled: no additional optimization was suggested because the agent kept the current profile (Suggested config changes: none).'
+                    );
+                } else {
+                    setCommunityFurtherTuningAvailability(false);
+                }
+                showCommunityPostBuildActions(`Tuning complete (${reason || 'manual'}). Review the Community Tuning Agent step, then build the community, continue with further tuning, or cancel.${improvement}`);
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                setInlineStatus(communityStatus, 'Community profile tuning failed.', 'text-danger');
+            } finally {
+                tuningButtons.forEach((button) => setButtonLoading(button, false));
+            }
+        }
+
+        async function revertToPreviousCommunityProfile() {
+            if (communityProfilesState.previousProfileId) {
+                communityProfilesState.selectedProfileId = communityProfilesState.previousProfileId;
+                renderCommunityProfileList();
+                await applySelectedCommunityProfile();
+                showCommunityPostBuildActions('Previous persisted profile restored.');
+                return;
+            }
+
+            if (communityProfilesState.previousConfigSnapshot) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.previousConfigSnapshot);
+                showCommunityPostBuildActions('Previous unsaved config restored.');
+                return;
+            }
+
+            setInlineStatus(document.getElementById('communityStatus'), 'No previous profile/config available to restore.', 'text-warning');
         }
 
         function copyElementValue(elementId) {
@@ -1979,20 +2984,84 @@
 
         async function buildCommunities() {
             const communityStatus = document.getElementById('communityStatus');
+            document.getElementById('communityError').innerText = '';
+            hideCommunityPostBuildActions();
+            hideCommunityPreBuildGate();
             resetCommunitySummaryTabsState();
+            document.getElementById('communityProcessMap').innerHTML = '';
+            setButtonLoading(buildCommunitiesBtn, true, 'Detecting...');
+            setInlineStatus(communityStatus, 'Detecting communities with Leiden...', 'text-muted');
+
+            try {
+                await streamCommunityDetection();
+                communityBuildGatePending = true;
+                const assessment = assessCommunityTuningPotential();
+                appendCommunityProcessMap([
+                    {
+                        title: 'Review Leiden detection before reset/LLM summaries',
+                        body: [
+                            `Improvement potential: ${formatAssessmentPotential(assessment)}`,
+                            `Confidence: ${assessment.confidence}%`,
+                            'Basis: detected communities from this run',
+                            `Candidate coverage: ${assessment.summaryCount}/${assessment.multiEntity} multi-entity communities would be summarized`,
+                            `Recommendation: ${assessment.recommendation}`,
+                            'User action required: proceed to clear the existing community index and summarize, or tune the profile first.'
+                        ].join('\n'),
+                        systemPrompt: buildCommunityReviewRubricPrompt(),
+                        systemPromptTitle: 'Review rubric (deterministic, no LLM call)',
+                        inputPayload: buildCommunityReviewInputPayload(assessment),
+                        inputPayloadTitle: 'Input used for this review',
+                        actions: [
+                            { label: 'Proceed to clear index and summarize', className: 'btn-primary', communityAction: 'proceed' },
+                            { label: 'Tune profile first', className: 'btn-outline-primary', communityAction: 'tune-before-build' },
+                            { label: 'Cancel', className: 'btn-outline-secondary', communityAction: 'cancel-build' }
+                        ]
+                    }
+                ]);
+                setInlineStatus(communityStatus, 'Leiden detection complete. Build paused for user action.', 'text-warning');
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                appendCommunityProcessMap([{ title: 'Community detection failed', body: err.message }]);
+                setInlineStatus(communityStatus, 'Community detection failed.', 'text-danger');
+            } finally {
+                setButtonLoading(buildCommunitiesBtn, false);
+            }
+        }
+
+        async function runCommunityBuildExecution() {
+            const communityStatus = document.getElementById('communityStatus');
+            resetCommunitySummaryTabsState();
+            hideCommunityPostBuildActions();
+            hideCommunityPreBuildGate();
             document.getElementById('communityError').innerText = '';
             setButtonLoading(buildCommunitiesBtn, true, 'Building...');
             setInlineStatus(communityStatus, 'Building communities...', 'text-muted');
-            document.getElementById('communityProcessMap').innerHTML = '';
+            setCommunityFurtherTuningAvailability(false);
 
             try {
-                const payload = await streamCommunityBuild();
+                await streamCommunityBuild();
+                const assessment = assessCommunityTuningPotential();
+                appendCommunityProcessMap([
+                    {
+                        title: 'Pre-tuning assessment',
+                        body: [
+                            `Improvement potential: ${assessment.band} (${assessment.potential}%)`,
+                            `Confidence: ${assessment.confidence}%`,
+                            `Coverage: ${assessment.summaryCount}/${assessment.multiEntity} summarized multi-entity communities`,
+                            `Recommendation: ${assessment.recommendation}`,
+                            'User action required: choose Build Community or continue with Further Tuning.'
+                        ].join('\n')
+                    }
+                ]);
+                renderCommunityQuickAssessment(assessment);
                 setInlineStatus(communityStatus, 'Communities built.', 'text-success');
+                showCommunityPostBuildActions('Leiden community optimization finished. Review quick assessment, then build the community, continue with further tuning, or cancel.');
             } catch (err) {
                 document.getElementById('communityError').innerText = err.message;
                 appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
                 setInlineStatus(communityStatus, 'Community build failed.', 'text-danger');
             } finally {
+                communityBuildGatePending = false;
                 setButtonLoading(buildCommunitiesBtn, false);
             }
         }
@@ -2045,6 +3114,59 @@
 
             if (!finalPayload?.success) {
                 throw new Error(finalPayload?.error || 'Community build failed.');
+            }
+
+            return finalPayload;
+        }
+
+        async function streamCommunityDetection() {
+            const response = await fetch(`${backendBaseUrl}/api/communities/detect/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.error || 'Community detection failed.');
+            }
+
+            if (!response.body) {
+                throw new Error('Community detection stream is not available.');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalPayload = null;
+
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    if (!line.trim()) {
+                        continue;
+                    }
+
+                    const event = JSON.parse(line);
+                    if (event.type === 'step-start') {
+                        upsertCommunityPendingStep(event.payload);
+                    } else if (event.type === 'step') {
+                        completeCommunityPendingStep(event.payload);
+                    } else if (event.type === 'complete') {
+                        finalPayload = event.payload;
+                    }
+                }
+
+                if (done) {
+                    break;
+                }
+            }
+
+            if (!finalPayload?.success) {
+                throw new Error(finalPayload?.error || 'Community detection failed.');
             }
 
             return finalPayload;
@@ -2487,7 +3609,7 @@
                 summarySamples.length ? summarySamples.join('\n\n---\n\n') : '(no community summaries available yet)',
                 '```',
                 '',
-                'Please decide if cpmResolution, typedRelationshipWeight, coMentionWeight, minCommunitySizeToSummarize, maxCommunitiesToSummarize, or llmParallelism should change. Prefer a small reversible change and output the updated JSON config.'
+                'Please decide if cpmResolution, typedRelationshipWeight, coMentionWeight, minCommunitySizeToSummarize, maxCommunitiesToSummarize, or parallelism should change. Prefer a small reversible change and output the updated JSON config.'
             ].join('\n');
         }
 
@@ -2841,6 +3963,34 @@
                 bubble.appendChild(body);
             }
 
+            if (Array.isArray(item.actions) && item.actions.length) {
+                const actionGroup = document.createElement('div');
+                actionGroup.className = 'process-bubble-actions';
+
+                item.actions.forEach(action => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = `btn btn-sm ${action.className || 'btn-outline-secondary'}`;
+                    button.innerText = action.label || 'Action';
+                    button.addEventListener('click', () => {
+                        actionGroup.querySelectorAll('button').forEach(actionButton => {
+                            actionButton.disabled = true;
+                        });
+
+                        if (action.communityAction === 'proceed') {
+                            proceedCommunityBuild();
+                        } else if (action.communityAction === 'tune-before-build') {
+                            tuneCommunityProfile('pre-build');
+                        } else if (action.communityAction === 'cancel-build') {
+                            cancelCommunityBuildGate();
+                        }
+                    });
+                    actionGroup.appendChild(button);
+                });
+
+                bubble.appendChild(actionGroup);
+            }
+
             if (item.systemPrompt) {
                 const details = document.createElement('details');
                 details.className = 'process-bubble-systemprompt';
@@ -2849,6 +3999,42 @@
                 details.appendChild(summary);
                 const pre = document.createElement('pre');
                 pre.innerText = item.systemPrompt;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.inputPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.inputPayloadTitle || 'Agent Input';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.inputPayload;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.outputPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.outputPayloadTitle || 'Agent Output';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.outputPayload;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.configPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.configPayloadTitle || 'Suggested Config JSON';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.configPayload;
                 details.appendChild(pre);
                 bubble.appendChild(details);
             }

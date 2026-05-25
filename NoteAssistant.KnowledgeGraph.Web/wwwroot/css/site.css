@@ -80,6 +80,13 @@ body {
   white-space: normal;
 }
 
+.process-bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .process-connector {
   width: 2px;
   height: 12px;
@@ -162,6 +169,24 @@ body {
   font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.85rem;
   min-height: 180px;
+  overflow: hidden;
+  resize: none;
+}
+
+.community-config-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.2rem;
+  border: 1px solid #adb5bd;
+  border-radius: 999px;
+  color: #495057;
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
 }
 
 .community-prompt-output {
@@ -169,6 +194,113 @@ body {
   font-size: 0.85rem;
   min-height: 320px;
   white-space: pre;
+}
+
+#communityProfileMeta {
+  min-height: 0.9rem;
+  margin-top: 2px;
+}
+
+.community-profile-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.community-profile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid #d8dee7;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.community-profile-row.selected {
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.community-profile-row.active {
+  background: #f0f7ff;
+}
+
+.community-profile-row-main {
+  min-width: 0;
+}
+
+.community-profile-row-title {
+  font-weight: 600;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.community-profile-row-meta {
+  color: #6c757d;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.community-profile-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.community-profile-row-actions .btn {
+  --bs-btn-padding-y: 0.14rem;
+  --bs-btn-padding-x: 0.42rem;
+  --bs-btn-font-size: 0.78rem;
+}
+
+.community-fields-divider {
+  height: 0;
+  border-top: 2px solid #cfd7e1;
+  margin: 4px 0 2px;
+}
+
+.community-config-description {
+  margin-bottom: 8px;
+  min-height: 0.9rem;
+}
+
+#communityPostBuildActions {
+  border-color: #cfd7e1;
+  background: #f6f8fb;
+}
+
+#communityQuickAssessment {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #344054;
+}
+
+#communityPreBuildAssessment {
+  border: 1px solid #f2d7a5;
+  border-radius: 8px;
+  background: #fffdf7;
+  padding: 8px 10px;
+  color: #4a3f2d;
 }
 
 .community-summary-browser {

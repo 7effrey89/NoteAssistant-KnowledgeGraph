@@ -298,7 +298,7 @@ Likely changes:
 {
   "maxCommunitiesToSummarize": "decrease",
   "minCommunitySizeToSummarize": "increase",
-  "llmParallelism": "increase cautiously if model quota allows"
+  "parallelism": "increase cautiously if model quota allows"
 }
 ```
 
@@ -346,6 +346,7 @@ The config must be valid JSON and should include all fields, even unchanged fiel
 
 ```json
 {
+  "parallelism": 2,
   "communityDetection": {
     "algorithm": "LeidenCpm",
     "directed": false,
@@ -354,8 +355,7 @@ The config must be valid JSON and should include all fields, even unchanged fiel
     "typedRelationshipWeight": 2.0,
     "coMentionWeight": 1.0,
     "minCommunitySizeToSummarize": 2,
-    "maxCommunitiesToSummarize": 50,
-    "llmParallelism": 2
+    "maxCommunitiesToSummarize": 50
   },
   "rationale": {
     "diagnosis": "communities-too-broad",

@@ -140,6 +140,67 @@ public sealed record CommunityDetectionOptions(
     int MinCommunitySizeToSummarize = 2,
     int MaxCommunitiesToSummarize = 50);
 
+public sealed record CommunityTuningProfile(
+    string Id,
+    DateTimeOffset CreatedAt,
+    CommunityBuildRequest Config,
+    double? ScorePercent = null,
+    double? ConfidencePercent = null,
+    string? Improvement = null,
+    string Source = "manual");
+
+public sealed record CommunityProfileSnapshot(
+    string? ActiveProfileId,
+    IReadOnlyList<CommunityTuningProfile> Profiles);
+
+public sealed record SaveCommunityProfileRequest(
+    CommunityBuildRequest Config,
+    double? ScorePercent = null,
+    double? ConfidencePercent = null,
+    string? Improvement = null,
+    string Source = "manual",
+    bool MakeActive = true);
+
+public sealed record SetActiveCommunityProfileRequest(string ProfileId);
+
+public sealed record TuneCommunityProfileRequest(
+    string? SystemPrompt,
+    string? UserPrompt,
+    CommunityBuildRequest CurrentConfig,
+    bool PersistProfile = true,
+    CommunityTuningAssessmentContext? AssessmentContext = null);
+
+public sealed record CommunityTuningAssessmentContext(
+    int? TotalCommunities = null,
+    int? SingletonCommunities = null,
+    int? MultiEntityCommunities = null,
+    int? CandidateSummaryCount = null,
+    string? Source = null);
+
+public sealed record CommunityTuningScoreComponent(
+    string Name,
+    double Value,
+    string Detail);
+
+public sealed record CommunityTuningScoreBreakdown(
+    string Method,
+    double ScorePercent,
+    double ConfidencePercent,
+    IReadOnlyList<CommunityTuningScoreComponent> ScoreComponents,
+    IReadOnlyList<CommunityTuningScoreComponent> ConfidenceComponents);
+
+public sealed record CommunityTuningAgentResponse(
+    bool Success,
+    string? Error,
+    CommunityBuildRequest? Config,
+    double? ScorePercent = null,
+    double? ConfidencePercent = null,
+    string? Improvement = null,
+    string? AgentResponse = null,
+    HybridTokenUsageDto? TokenUsage = null,
+    CommunityTuningProfile? SavedProfile = null,
+    CommunityTuningScoreBreakdown? ScoreBreakdown = null);
+
 public sealed record GlobalGraphRagRequest(
     string Query,
     int Limit = 6,

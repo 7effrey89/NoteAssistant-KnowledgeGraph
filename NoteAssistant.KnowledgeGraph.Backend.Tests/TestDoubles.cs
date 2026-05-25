@@ -55,6 +55,9 @@ public sealed class FakeFoundryInferenceClient : IFoundryInferenceClient
             question,
             AnalysisSystemPrompt,
             $"Question: {question}"));
+
+    public Task<PromptCompletionResult> CompletePromptAsync(string systemPrompt, string userPrompt, string agentName, string operation, CancellationToken cancellationToken)
+        => Task.FromResult(new PromptCompletionResult("{}", systemPrompt, userPrompt));
 }
 
 public sealed class StubAgeDatabaseConnectionFactory : IAgeDatabaseConnectionFactory

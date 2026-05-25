@@ -639,14 +639,15 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         Func<HybridRetrievalTraceStepDto, CancellationToken, Task>? progressCallback = null,
         Func<string, string, CancellationToken, Task>? progressStartedCallback = null,
         int maxParallelism = 1,
-        CommunityDetectionOptions? communityDetection = null)
+        CommunityDetectionOptions? communityDetection = null,
+        bool stopAfterClustering = false)
     {
         if (!IsConfigured)
         {
             return new CommunityBuildResponse(false, "Database settings are not configured.", 0, 0, 0);
         }
 
-        if (!_foundry.IsConfigured)
+        if (!_foundry.IsConfigured && !stopAfterClustering)
         {
             return new CommunityBuildResponse(false, "Foundry inference is not configured.", 0, 0, 0);
         }
@@ -708,6 +709,12 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 detectionOptions.Seed,
                 detectionOptions.Directed);
             await AddStepAsync("community-clustering", $"Identified {components.Count} graph communities with Leiden optimization", BuildCommunityClusteringDetail(components, entities, relationships, detectionOptions));
+            if (stopAfterClustering)
+            {
+                var detectionTrace = steps is null ? null : new HybridRetrievalTraceDto("Detect communities", steps);
+                return new CommunityBuildResponse(true, null, 0, entities.Count, relationships.Count, detectionTrace);
+            }
+
             var buildTimer = Stopwatch.StartNew();
             await StartStepAsync("community-reset", "Clearing existing community index");
             await ClearCommunityTablesAsync(connection, cancellationToken);
