@@ -1307,8 +1307,8 @@ app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory 
     var since = DateTimeOffset.UtcNow.AddDays(-lookbackDays);
     const string summarySql = """
                               SELECT COUNT(*)::bigint AS calls,
-                                     COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
-                                     COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                                                   COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                                                   COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
                                      COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
                               FROM "global".llm_token_usage
                               WHERE occurred_at >= @since;
@@ -1359,15 +1359,17 @@ app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory 
         }
     }
 
-    const string dailySql = """
-                            SELECT date_trunc('day', occurred_at) AS day,
-                                   COUNT(*)::bigint AS calls,
-                                   COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
-                            FROM "global".llm_token_usage
-                            WHERE occurred_at >= @since
-                            GROUP BY day
-                            ORDER BY day;
-                            """;
+        const string dailySql = @"
+                    SELECT date_trunc('day', occurred_at) AS day,
+                        COUNT(*)::bigint AS calls,
+                        COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                        COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+                        COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens
+                    FROM ""global"".llm_token_usage
+                    WHERE occurred_at >= @since
+                    GROUP BY day
+                    ORDER BY day;
+                    ";
     var daily = new List<object>();
     await using (var command = new NpgsqlCommand(dailySql, connection))
     {
@@ -1379,7 +1381,9 @@ app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory 
             {
                 day = reader.GetDateTime(0),
                 calls = reader.GetInt64(1),
-                totalTokens = reader.GetInt64(2)
+                promptTokens = reader.GetInt64(2),
+                completionTokens = reader.GetInt64(3),
+                totalTokens = reader.GetInt64(4)
             });
         }
     }
@@ -1412,6 +1416,29 @@ app.MapGet("/api/tokens/stats", async (int? days, IAgeDatabaseConnectionFactory 
     }
 
     return Results.Ok(new { days = lookbackDays, summary, byAgent, daily, recent });
+});
+
+app.MapGet("/api/tokens/pricing", async (CancellationToken cancellationToken) =>
+{
+    var rows = await LoadTokenPricingRowsAsync(cancellationToken);
+    return Results.Ok(new { rows });
+});
+
+app.MapPost("/api/tokens/pricing", async (TokenPricingUpdateRequest? request, CancellationToken cancellationToken) =>
+{
+    var candidateRows = request?.Rows ?? Array.Empty<TokenPricingRow>();
+    var normalized = candidateRows
+        .Select(NormalizeTokenPricingRow)
+        .Where(row => !string.IsNullOrWhiteSpace(row.Region) && !string.IsNullOrWhiteSpace(row.Model) && !string.IsNullOrWhiteSpace(row.Currency))
+        .ToList();
+
+    if (normalized.Count == 0)
+    {
+        normalized = GetDefaultTokenPricingRows().ToList();
+    }
+
+    await SaveTokenPricingRowsAsync(normalized, cancellationToken);
+    return Results.Ok(new { rows = normalized });
 });
 
 app.MapGet("/api/health/foundry", async (IFoundryInferenceClient foundry, CancellationToken cancellationToken) =>
@@ -1761,7 +1788,114 @@ static async Task EnsureTokenUsageTableAsync(NpgsqlConnection connection, Cancel
     await command.ExecuteNonQueryAsync(cancellationToken);
 }
 
+static string GetTokenPricingFilePath()
+{
+    var baseDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "NoteAssistant.KnowledgeGraph");
+    return Path.Combine(baseDir, "token-pricing.json");
+}
+
+static IReadOnlyList<TokenPricingRow> GetDefaultTokenPricingRows()
+{
+    return
+    [
+        new TokenPricingRow(
+            Id: "sweden-central-gpt-5-4",
+            Region: "Sweden Central",
+            Model: "GPT-5.4 (<272k context) Global",
+            Currency: "DKK",
+            InputPerMillion: 15.97m,
+            CachedInputPerMillion: 1.60m,
+            OutputPerMillion: 59.79m)
+    ];
+}
+
+static TokenPricingRow NormalizeTokenPricingRow(TokenPricingRow row)
+{
+    var id = string.IsNullOrWhiteSpace(row.Id) ? Guid.NewGuid().ToString("N") : row.Id.Trim();
+    var region = row.Region?.Trim() ?? string.Empty;
+    var model = row.Model?.Trim() ?? string.Empty;
+    var currency = row.Currency?.Trim().ToUpperInvariant() ?? string.Empty;
+
+    return row with
+    {
+        Id = id,
+        Region = region,
+        Model = model,
+        Currency = currency,
+        InputPerMillion = Math.Max(0, row.InputPerMillion),
+        CachedInputPerMillion = Math.Max(0, row.CachedInputPerMillion),
+        OutputPerMillion = Math.Max(0, row.OutputPerMillion)
+    };
+}
+
+static async Task<IReadOnlyList<TokenPricingRow>> LoadTokenPricingRowsAsync(CancellationToken cancellationToken)
+{
+    var path = GetTokenPricingFilePath();
+    if (!File.Exists(path))
+    {
+        var defaults = GetDefaultTokenPricingRows();
+        await SaveTokenPricingRowsAsync(defaults, cancellationToken);
+        return defaults;
+    }
+
+    try
+    {
+        await using var stream = File.OpenRead(path);
+        var payload = await JsonSerializer.DeserializeAsync<TokenPricingFilePayload>(stream, cancellationToken: cancellationToken);
+        var rows = payload?.Rows?
+            .Select(NormalizeTokenPricingRow)
+            .Where(row => !string.IsNullOrWhiteSpace(row.Region) && !string.IsNullOrWhiteSpace(row.Model) && !string.IsNullOrWhiteSpace(row.Currency))
+            .ToList();
+
+        if (rows is { Count: > 0 })
+        {
+            return rows;
+        }
+    }
+    catch
+    {
+    }
+
+    var fallback = GetDefaultTokenPricingRows();
+    await SaveTokenPricingRowsAsync(fallback, cancellationToken);
+    return fallback;
+}
+
+static async Task SaveTokenPricingRowsAsync(IEnumerable<TokenPricingRow> rows, CancellationToken cancellationToken)
+{
+    var path = GetTokenPricingFilePath();
+    var directory = Path.GetDirectoryName(path);
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var payload = new TokenPricingFilePayload(rows.ToList());
+    var options = new JsonSerializerOptions
+    {
+        WriteIndented = true
+    };
+
+    await using var stream = File.Create(path);
+    await JsonSerializer.SerializeAsync(stream, payload, options, cancellationToken);
+}
+
 app.Run();
+
+public sealed record TokenPricingRow(
+    string Id,
+    string Region,
+    string Model,
+    string Currency,
+    decimal InputPerMillion,
+    decimal CachedInputPerMillion,
+    decimal OutputPerMillion);
+
+public sealed record TokenPricingUpdateRequest(IReadOnlyList<TokenPricingRow>? Rows);
+
+public sealed record TokenPricingFilePayload(IReadOnlyList<TokenPricingRow> Rows);
 
 public partial class Program
 {

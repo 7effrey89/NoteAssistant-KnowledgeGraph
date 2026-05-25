@@ -2680,8 +2680,27 @@
             }
 
             const selectedMode = hybridModeSelect.value;
-            if (!isClarification && (selectedMode === 'global' || (selectedMode === 'auto' && shouldUseGlobalMode(question)))) {
-                await runGlobalGraphRag(question);
+            const isAutoMode = selectedMode === 'auto';
+            const autoModeReason = isAutoMode ? describeAutoModeDecision(question) : '';
+            const autoRoutesToGlobal = isAutoMode && shouldUseGlobalMode(question);
+            if (!isClarification && (selectedMode === 'global' || autoRoutesToGlobal)) {
+                const initialSteps = [];
+                if (isAutoMode) {
+                    initialSteps.push({
+                        title: 'Intent router (Auto mode)',
+                        variant: 'purpose',
+                        purpose: 'Use deterministic keyword intent routing to choose Local / Hybrid or Global / Temporal before retrieval starts.',
+                        inputPayloadTitle: 'Intent router rules (deterministic)',
+                        inputPayload: buildAutoRouterExplanation(question)
+                    });
+                    initialSteps.push({
+                        title: 'Mode selected (Auto)',
+                        indent: true,
+                        body: `Auto mode chose: Global / Temporal GraphRAG.\nReason: ${autoModeReason}`
+                    });
+                }
+
+                await runGlobalGraphRag(question, initialSteps);
                 return;
             }
 
@@ -2770,11 +2789,26 @@
                 mapItems.push({ title: 'User question received', body: question });
             }
 
+            if (isAutoMode) {
+                mapItems.push({
+                    title: 'Intent router (Auto mode)',
+                    variant: 'purpose',
+                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs Local / Hybrid before retrieval starts.',
+                    inputPayloadTitle: 'Intent router rules (deterministic)',
+                    inputPayload: buildAutoRouterExplanation(question)
+                });
+                mapItems.push({
+                    title: 'Mode selected (Auto)',
+                    indent: true,
+                    body: `Auto mode chose: Local / Hybrid GraphRAG.\nReason: ${autoModeReason}`
+                });
+            }
+
             // Phase 1: Clarification required path -------------------------
             if (payload.clarificationQuestion) {
                 mapItems.push(buildAgentBubble(
-                    'Clarification Agent',
-                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    'Question Analysis Agent (LLM)',
+                    'Extract entities, detect ambiguity, and decide whether clarification is required.',
                     analysisSystemPrompt,
                     entityLlmStep));
                 mapItems.push({
@@ -2793,8 +2827,8 @@
             // Phase 2: Clarification received + question rewrite ----------
             if (isClarification && window.lastClarificationResponse) {
                 mapItems.push(buildAgentBubble(
-                    'Clarification Agent',
-                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    'Question Analysis Agent (LLM)',
+                    'Extract entities, detect ambiguity, and decide whether clarification is required.',
                     analysisSystemPrompt,
                     entityLlmStep));
                 mapItems.push({
@@ -2959,8 +2993,36 @@
             setButtonLoading(runHybridBtn, false);
         }
 
+        function getGlobalModeIntentMatch(question) {
+            return question.match(/\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i);
+        }
+
         function shouldUseGlobalMode(question) {
-            return /\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i.test(question);
+            return !!getGlobalModeIntentMatch(question);
+        }
+
+        function describeAutoModeDecision(question) {
+            const match = getGlobalModeIntentMatch(question);
+            if (match && match[0]) {
+                return `Matched global/temporal intent keyword "${match[0]}".`;
+            }
+
+            return 'No global or temporal intent keyword matched, so entity-focused Local/Hybrid retrieval was selected.';
+        }
+
+        function buildAutoRouterExplanation(question) {
+            const match = getGlobalModeIntentMatch(question);
+            const matchedKeyword = match && match[0] ? match[0] : '(none)';
+
+            return [
+                `Question: ${question}`,
+                'Rule set:',
+                '- If any global/temporal keyword is present -> Global / Temporal GraphRAG',
+                '- Otherwise -> Local / Hybrid GraphRAG',
+                'Keywords checked:',
+                'theme, themes, pattern, patterns, trend, trends, across, overall, summary, summarize, top <number>, changed, timeline, over time, before, after, recent, chronolog*',
+                `Matched keyword: ${matchedKeyword}`
+            ].join('\n');
         }
 
         async function buildCommunities() {
@@ -3755,12 +3817,17 @@
             return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
         }
 
-        async function runGlobalGraphRag(question) {
+        async function runGlobalGraphRag(question, initialSteps = null) {
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
             document.getElementById('hybridError').innerText = '';
-            renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            if (Array.isArray(initialSteps) && initialSteps.length > 0) {
+                renderProcessMap(initialSteps, false);
+                appendProcessMap([{ title: 'Global / Temporal question received', body: question }]);
+            } else {
+                renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            }
             setButtonLoading(runHybridBtn, true, 'Running...');
             setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
 
