@@ -33,6 +33,11 @@ public sealed record BulkMetadataUpdateRequest(
     string? DocumentDate,
     string? Tags);
 
+public sealed record DocumentDecomposeRequest(
+    string? DocumentType,
+    string? DocumentDate,
+    string? Tags);
+
 public sealed record NoteAssistantMetadataFileDto(
     string FileName,
     string? NoteSession,
@@ -57,6 +62,7 @@ public sealed record GraphIngestionPlan(
     string ContentHash = "",
     bool Cached = false,
     string DecompositionSystemPrompt = "",
+    string DecompositionInputPrompt = "",
     IReadOnlyList<ChunkRelationshipDto>? Relationships = null);
 
 public sealed record GraphQueryRequest(string Cypher, string GraphName = "knowledge_graph");

@@ -53,9 +53,9 @@
                     <div class="tab-pane fade show active" id="upload-markdown-pane" role="tabpanel" aria-labelledby="upload-markdown-tab">
                         <div class="input-group">
                             <input class="form-control" type="file" id="markdownFile" accept=".md" multiple />
-                            <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+                            <button class="btn btn-primary" id="uploadBtn">Upload</button>
                         </div>
-                        <div class="form-text">Select one or more markdown files. Use the file list in Section 2 to view each document and manage metadata.</div>
+                        <div class="form-text">Select one or more markdown files. Use the file list below to view each document and manage metadata.</div>
                     </div>
                     <div class="tab-pane fade" id="upload-cache-pane" role="tabpanel" aria-labelledby="upload-cache-tab">
                         <div class="input-group">
@@ -68,24 +68,12 @@
             </div>
             <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
             <ul class="upload-batch-results mt-2 mb-0" id="uploadBatchResults"></ul>
-            <details class="mt-3 decomposition-prompt-details" open>
-                <summary>Graph Maker Agent</summary>
-                <pre id="graphMakerAgentPrompt" class="decomposition-prompt mb-0">Upload a document to see the system prompt used to generate chunks, entities, and links.</pre>
-            </details>
-        </div>
-    </div>
 
-    <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span>2) Documents, decomposition & metadata</span>
-            <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
-        </div>
-        <div class="card-body">
-            <div class="row g-3 document-workbench-layout">
+            <div class="row g-3 document-workbench-layout mt-1">
                 <div class="col-lg-3">
                     <div class="uploaded-documents-panel h-100">
                         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                            <strong>Uploaded files</strong>
+                            <strong>Selected files</strong>
                             <div class="d-flex flex-wrap gap-2">
                                 <button class="btn btn-sm btn-outline-secondary" type="button" id="selectAllDocsBtn">Select all</button>
                                 <button class="btn btn-sm btn-outline-secondary" type="button" id="clearSelectedDocsBtn">Clear</button>
@@ -95,24 +83,34 @@
                     </div>
                 </div>
                 <div class="col-lg-9">
-                    <div id="statusOutput" class="mb-3"></div>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <div id="statusOutput" class="mb-0 flex-grow-1"></div>
+                        <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
+                    </div>
 
-                    <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
+                    <ul class="nav nav-tabs" id="documentWorkflowTabs" role="tablist">
                         <li class="nav-item" role="presentation">
                             <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Decomposition</button>
+                            <button class="nav-link disabled text-muted" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab" aria-controls="tab-decomp" aria-selected="false" aria-disabled="true" title="Run Decompose documents to enable this tab." disabled>
+                                <span id="tab-decomp-status-icon" class="decomp-tab-status-icon decomp-tab-status-warning" aria-hidden="true">&#9888;</span>
+                                <span>Decomposition</span>
+                            </button>
                         </li>
                     </ul>
                     <div class="tab-content border border-top-0 p-3">
                         <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
                             <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
                         </div>
-                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel">
-                            <details class="mb-3 decomposition-prompt-details">
+                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel" aria-labelledby="tab-decomp-btn">
+                            <details class="mb-3 decomposition-prompt-details" open>
                                 <summary>Graph Maker Agent (System Prompt)</summary>
-                                <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
+                                <pre id="graphMakerSystemPrompt" class="decomposition-prompt mb-0">Decompose a document to see the system prompt used for Graph Maker Agent.</pre>
+                            </details>
+                            <details class="mb-3 decomposition-prompt-details" open>
+                                <summary>Graph Maker Agent (Input Prompt)</summary>
+                                <pre id="graphMakerInputPrompt" class="decomposition-prompt mb-0">Decompose a document to see the full input prompt sent to Graph Maker Agent.</pre>
                             </details>
                             <ul class="nav nav-pills decomposition-subtabs" id="decompositionSubtabs" role="tablist">
                                 <li class="nav-item" role="presentation">
@@ -147,6 +145,7 @@
 
                     <div class="metadata-panel mt-3">
                         <div class="fw-semibold mb-2">Metadata for viewed document</div>
+                        <input class="d-none" id="noteAssistantMetadataFolderInput" type="file" webkitdirectory directory multiple accept=".json,application/json" />
                         <div class="row g-3">
                             <div class="col-md-4">
                                 <label class="form-label" for="metadataDocumentType">Document type</label>
@@ -169,9 +168,17 @@
                         </div>
                         <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
                             <button class="btn btn-primary btn-sm" type="button" id="applyMetadataBtn" disabled>Apply metadata to selected documents</button>
+                            <button class="btn btn-outline-primary btn-sm" type="button" id="noteAssistantDbImportBtn">noteassistant db import</button>
                             <small id="metadataMessage" class="text-muted">Select uploaded documents, define metadata, then apply it to that subset.</small>
                         </div>
                         <div class="mt-2 text-muted small">Metadata drafts are remembered as you switch viewed documents. Applying metadata updates the selected checked documents.</div>
+                    </div>
+
+                    <div class="d-flex justify-content-center mt-3">
+                        <button class="btn btn-success" type="button" id="runDecompositionBtn" disabled>Decompose documents</button>
+                    </div>
+                    <div class="mt-2 text-center">
+                        <small id="decompositionStepMessage" class="text-muted">Complete decomposition to continue to Section 3.</small>
                     </div>
                 </div>
             </div>
@@ -619,6 +626,7 @@
         const uploadedDocuments = new Map();
         const selectedDocumentIds = new Set();
         const metadataDrafts = new Map();
+        let decompositionStepCompleted = false;
         let hybridClarificationAttempts = 0;
         let graphCy = null;
         let graphNetwork = null;
@@ -735,6 +743,13 @@
         const metadataDocumentType = document.getElementById('metadataDocumentType');
         const metadataDocumentDate = document.getElementById('metadataDocumentDate');
         const metadataTags = document.getElementById('metadataTags');
+        const noteAssistantDbImportBtn = document.getElementById('noteAssistantDbImportBtn');
+        const noteAssistantMetadataFolderInput = document.getElementById('noteAssistantMetadataFolderInput');
+        const runDecompositionBtn = document.getElementById('runDecompositionBtn');
+        const decompositionStepMessage = document.getElementById('decompositionStepMessage');
+        const tabOriginalBtn = document.getElementById('tab-original-btn');
+        const tabDecompBtn = document.getElementById('tab-decomp-btn');
+        const tabDecompStatusIcon = document.getElementById('tab-decomp-status-icon');
         const ingestBtn = document.getElementById('ingestBtn');
         const ingestSqlBtn = document.getElementById('ingestSqlBtn');
         const ingestLogBtn = document.getElementById('ingestLogBtn');
@@ -804,6 +819,9 @@
             input.addEventListener('input', onMetadataFieldChanged);
             input.addEventListener('change', onMetadataFieldChanged);
         });
+        noteAssistantDbImportBtn?.addEventListener('click', onNoteAssistantDbImportClicked);
+        noteAssistantMetadataFolderInput?.addEventListener('change', onNoteAssistantMetadataFolderSelected);
+        runDecompositionBtn?.addEventListener('click', onRunDecompositionClicked);
         ingestBtn.addEventListener('click', ingestToDatabase);
         ingestSqlBtn.addEventListener('click', loadIngestSql);
         ingestLogBtn.addEventListener('click', refreshIngestLog);
@@ -824,6 +842,7 @@
         communityRevertProfileBtn.addEventListener('click', cancelCommunityPostBuildActions);
         communityProceedBuildBtn.addEventListener('click', (event) => proceedCommunityBuild(event.currentTarget));
         communityTuneBeforeBuildBtn.addEventListener('click', (event) => tuneCommunityProfile('pre-build', event.currentTarget));
+        updateDecompositionWorkflowState();
         communityCancelBuildBtn.addEventListener('click', cancelCommunityBuildGate);
         document.querySelectorAll('[data-copy-target]').forEach(button => {
             button.addEventListener('click', () => copyElementValue(button.dataset.copyTarget));
@@ -857,7 +876,6 @@
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
         window.addEventListener('load', () => {
             checkBackendStatus();
-            loadGraphMakerAgentPrompt();
             loadCommunityProfiles(true);
             setInterval(checkBackendStatus, 15000);
             loadGraphOnStartup();
@@ -893,6 +911,152 @@
                 documentDate: metadata?.documentDate || '',
                 tags: Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '')
             };
+        }
+
+        function getMetadataImportAdapter() {
+            const customAdapter = window.noteAssistantMetadataImportAdapter;
+            if (customAdapter && typeof customAdapter === 'object') {
+                return customAdapter;
+            }
+
+            return {
+                toFieldValues: defaultNoteAssistantMetadataToFields,
+                applyToUi: defaultApplyMetadataFieldsToUi
+            };
+        }
+
+        function defaultNoteAssistantMetadataToFields(files) {
+            const parsedDates = files
+                .map(file => normalizeNoteAssistantDate(file.folderCreationDate))
+                .filter(Boolean);
+            const uniqueDates = Array.from(new Set(parsedDates));
+            const customers = Array.from(new Set(files.flatMap(file => Array.isArray(file.customers) ? file.customers : []).filter(Boolean)));
+            const services = Array.from(new Set(files.flatMap(file => Array.isArray(file.services) ? file.services : []).filter(Boolean)));
+            const tags = [];
+            customers.forEach(customer => tags.push(`customer:${customer}`));
+            services.forEach(service => tags.push(`service:${service}`));
+
+            return {
+                documentType: 'meeting_summary',
+                documentDate: uniqueDates.length === 1 ? uniqueDates[0] : '',
+                tags: tags.join(', '),
+                summary: {
+                    fileCount: files.length,
+                    customerCount: customers.length,
+                    serviceCount: services.length,
+                    dateCount: uniqueDates.length
+                }
+            };
+        }
+
+        function defaultApplyMetadataFieldsToUi(fieldValues) {
+            setMetadataForm({
+                documentType: fieldValues?.documentType || '',
+                documentDate: fieldValues?.documentDate || '',
+                tags: fieldValues?.tags || ''
+            });
+            onMetadataFieldChanged();
+        }
+
+        function normalizeNoteAssistantDate(value) {
+            if (!value) {
+                return '';
+            }
+
+            const input = String(value).trim();
+            const fromIsoMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (fromIsoMatch) {
+                return `${fromIsoMatch[1]}-${fromIsoMatch[2]}-${fromIsoMatch[3]}`;
+            }
+
+            const fromDotMatch = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+            if (fromDotMatch) {
+                const day = fromDotMatch[1].padStart(2, '0');
+                const month = fromDotMatch[2].padStart(2, '0');
+                return `${fromDotMatch[3]}-${month}-${day}`;
+            }
+
+            const parsed = new Date(input);
+            if (!Number.isNaN(parsed.getTime())) {
+                const year = parsed.getFullYear();
+                const month = String(parsed.getMonth() + 1).padStart(2, '0');
+                const day = String(parsed.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+
+            return '';
+        }
+
+        async function onNoteAssistantDbImportClicked() {
+            if (!noteAssistantMetadataFolderInput) {
+                return;
+            }
+
+            noteAssistantMetadataFolderInput.value = '';
+            noteAssistantMetadataFolderInput.click();
+        }
+
+        async function onNoteAssistantMetadataFolderSelected() {
+            const files = Array.from(noteAssistantMetadataFolderInput?.files || []);
+            if (files.length === 0) {
+                return;
+            }
+
+            setMessage('metadataMessage', `Reading ${files.length} selected file(s)...`, 'text-muted');
+
+            const metadataFiles = [];
+            for (const file of files) {
+                if (!file.name.toLowerCase().endsWith('_metadata.json')) {
+                    continue;
+                }
+
+                try {
+                    const text = await file.text();
+                    const json = JSON.parse(text);
+                    metadataFiles.push({
+                        fileName: file.webkitRelativePath || file.name,
+                        noteSession: typeof json.NoteSession === 'string' ? json.NoteSession.trim() : '',
+                        folderCreationDate: typeof json.FolderCreationDate === 'string' ? json.FolderCreationDate : '',
+                        customers: Array.isArray(json.Customers) ? json.Customers.filter(Boolean) : [],
+                        services: Array.isArray(json.Services) ? json.Services.filter(Boolean) : []
+                    });
+                } catch {
+                    // Skip invalid metadata JSON files.
+                }
+            }
+
+            if (metadataFiles.length === 0) {
+                setMessage('metadataMessage', 'No *_metadata.json files were found in the selected folder.', 'text-warning');
+                return;
+            }
+
+            const adapter = getMetadataImportAdapter();
+            const fieldValues = typeof adapter.toFieldValues === 'function'
+                ? adapter.toFieldValues(metadataFiles)
+                : defaultNoteAssistantMetadataToFields(metadataFiles);
+
+            if (typeof adapter.applyToUi === 'function') {
+                adapter.applyToUi(fieldValues, {
+                    setMetadataForm,
+                    onMetadataFieldChanged,
+                    controls: {
+                        metadataDocumentType,
+                        metadataDocumentDate,
+                        metadataTags
+                    }
+                });
+            } else {
+                defaultApplyMetadataFieldsToUi(fieldValues);
+            }
+
+            const summary = fieldValues?.summary || {};
+            const dateNote = Number(summary.dateCount) > 1
+                ? ' Multiple dates detected; document date left blank for manual choice.'
+                : '';
+            setMessage(
+                'metadataMessage',
+                `Imported metadata from ${summary.fileCount || metadataFiles.length} file(s) (customers: ${summary.customerCount || 0}, services: ${summary.serviceCount || 0}).${dateNote}`,
+                'text-success');
         }
 
         function saveCurrentMetadataDraft() {
@@ -994,6 +1158,12 @@
             renderUploadedDocuments();
         }
 
+        function normalizeDocumentPreviewText(value) {
+            return String(value || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
+        }
+
         function showDocumentPlan(documentId, options = {}) {
             if (currentDocumentId && currentDocumentId !== Number(documentId)) {
                 saveCurrentMetadataDraft();
@@ -1005,18 +1175,144 @@
             currentDocumentId = plan.documentId;
             if (plan.graphName) currentGraphName = plan.graphName;
             document.getElementById('cachedBadge').style.display = plan.cached ? 'inline-block' : 'none';
-            ingestBtn.disabled = false;
-            ingestSqlBtn.disabled = false;
-            ingestLogBtn.disabled = false;
-            initGraphBtn.disabled = false;
-            setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
-            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
-            renderDecomposition(plan);
+            const previewText = normalizeDocumentPreviewText(plan.originalContent);
+            document.getElementById('originalContent').textContent = previewText || '(no original content returned)';
+            if (decompositionStepCompleted) {
+                setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
+                renderDecomposition(plan);
+            } else {
+                setMessage('ingestMessage', 'Run "Decompose documents" in Section 1 to unlock ingestion in Section 3.', 'text-muted');
+            }
+            if (decompositionStepCompleted) {
+                setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
+            } else {
+                setMessage('initGraphMessage', 'Run "Decompose documents" in Section 1 to unlock graph initialization.', 'text-muted');
+            }
             renderStatus(plan.status);
             if (options.loadMetadata !== false) {
                 setMetadataForm(metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata));
             }
             renderUploadedDocuments();
+            updateDecompositionWorkflowState();
+        }
+
+        function updateDecompositionWorkflowState() {
+            const hasUploadedDocuments = uploadedDocuments.size > 0;
+            const canProceedToIngestion = hasUploadedDocuments && decompositionStepCompleted;
+
+            if (runDecompositionBtn) {
+                runDecompositionBtn.disabled = !hasUploadedDocuments;
+            }
+            if (tabDecompBtn) {
+                tabDecompBtn.disabled = !decompositionStepCompleted;
+                tabDecompBtn.classList.toggle('disabled', !decompositionStepCompleted);
+                tabDecompBtn.classList.toggle('text-muted', !decompositionStepCompleted);
+                if (decompositionStepCompleted) {
+                    tabDecompBtn.removeAttribute('aria-disabled');
+                    tabDecompBtn.title = 'Decomposition completed.';
+                } else {
+                    tabDecompBtn.setAttribute('aria-disabled', 'true');
+                    tabDecompBtn.title = 'Run Decompose documents to enable this tab.';
+                }
+            }
+            if (tabDecompStatusIcon) {
+                if (decompositionStepCompleted) {
+                    tabDecompStatusIcon.innerHTML = '&#10003;';
+                    tabDecompStatusIcon.classList.remove('decomp-tab-status-warning');
+                    tabDecompStatusIcon.classList.add('decomp-tab-status-ready');
+                } else {
+                    tabDecompStatusIcon.innerHTML = '&#9888;';
+                    tabDecompStatusIcon.classList.remove('decomp-tab-status-ready');
+                    tabDecompStatusIcon.classList.add('decomp-tab-status-warning');
+                }
+            }
+            if (!decompositionStepCompleted && tabOriginalBtn && window.bootstrap?.Tab) {
+                window.bootstrap.Tab.getOrCreateInstance(tabOriginalBtn).show();
+            }
+
+            ingestBtn.disabled = !canProceedToIngestion;
+            ingestSqlBtn.disabled = !canProceedToIngestion;
+            ingestLogBtn.disabled = !canProceedToIngestion;
+            initGraphBtn.disabled = !canProceedToIngestion;
+
+            if (!hasUploadedDocuments) {
+                decompositionStepMessage.textContent = 'Upload documents first, then run decomposition to continue to Section 3.';
+            } else if (!decompositionStepCompleted) {
+                decompositionStepMessage.textContent = 'Click "Decompose documents" to unlock the Decomposition tab and Section 3.';
+            } else {
+                decompositionStepMessage.textContent = 'Decomposition completed. You can review the Decomposition tab and continue to Section 3.';
+            }
+        }
+
+        async function onRunDecompositionClicked() {
+            if (uploadedDocuments.size === 0) {
+                setMessage('uploadMessage', 'Upload one or more documents before running decomposition.', 'text-danger');
+                updateDecompositionWorkflowState();
+                return;
+            }
+
+            saveCurrentMetadataDraft();
+            setButtonLoading(runDecompositionBtn, true, 'Decomposing...');
+            setMessage('uploadMessage', `Decomposing ${uploadedDocuments.size} document${uploadedDocuments.size === 1 ? '' : 's'} with current metadata...`, 'text-muted');
+
+            const plans = Array.from(uploadedDocuments.values());
+            let succeeded = 0;
+            let failed = 0;
+            let lastError = '';
+
+            for (let index = 0; index < plans.length; index++) {
+                const plan = plans[index];
+                const metadataDraft = metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata);
+                setMessage('uploadMessage', `Decomposing ${index + 1}/${plans.length}: ${plan.status.fileName || plan.title || `Document ${plan.documentId}`}`, 'text-muted');
+
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/${plan.documentId}/decompose`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(metadataDraft)
+                    });
+                } catch (err) {
+                    failed++;
+                    lastError = `Network error for document ${plan.documentId}: ${err.message}`;
+                    continue;
+                }
+
+                const payload = await response.json().catch(() => null);
+                if (!response.ok || !payload) {
+                    failed++;
+                    lastError = (payload && (payload.error || payload.detail)) || `Decomposition failed for document ${plan.documentId} (status ${response.status}).`;
+                    continue;
+                }
+
+                succeeded++;
+                uploadedDocuments.set(payload.documentId, payload);
+                metadataDrafts.set(payload.documentId, normalizeMetadataDraft(payload.metadata));
+            }
+
+            decompositionStepCompleted = succeeded > 0;
+            const activePlan = currentDocumentId ? uploadedDocuments.get(currentDocumentId) : null;
+            const fallbackPlan = activePlan || uploadedDocuments.values().next().value;
+            if (fallbackPlan && decompositionStepCompleted) {
+                renderDecomposition(fallbackPlan);
+                setMessage('ingestMessage', `Ready to ingest document ${fallbackPlan.documentId} (${fallbackPlan.chunks.length} chunks, ${fallbackPlan.entities.length} entities).`, 'text-muted');
+            }
+
+            renderUploadedDocuments();
+            updateDecompositionWorkflowState();
+            if (decompositionStepCompleted && tabDecompBtn && window.bootstrap?.Tab) {
+                window.bootstrap.Tab.getOrCreateInstance(tabDecompBtn).show();
+            }
+
+            if (failed > 0) {
+                const summaryClass = succeeded > 0 ? 'text-warning' : 'text-danger';
+                const suffix = lastError ? ` Last error: ${lastError}` : '';
+                setMessage('uploadMessage', `Decompose complete: ${succeeded} succeeded, ${failed} failed.${suffix}`, summaryClass);
+            } else {
+                setMessage('uploadMessage', `Decompose complete: ${succeeded} document${succeeded === 1 ? '' : 's'} updated with current metadata.`, 'text-success');
+            }
+
+            setButtonLoading(runDecompositionBtn, false);
         }
 
         function renderUploadedDocuments() {
@@ -1097,11 +1393,13 @@
             uploadedDocuments.clear();
             selectedDocumentIds.clear();
             metadataDrafts.clear();
+            decompositionStepCompleted = false;
 
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('cachedBadge').style.display = 'none';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
-            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
+            document.getElementById('graphMakerSystemPrompt').textContent = 'Decompose a document to see the system prompt used for Graph Maker Agent.';
+            document.getElementById('graphMakerInputPrompt').textContent = 'Decompose a document to see the full input prompt sent to Graph Maker Agent.';
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
@@ -1109,16 +1407,13 @@
             setMetadataForm(null);
             renderUploadedDocuments();
 
-            ingestBtn.disabled = true;
-            ingestSqlBtn.disabled = true;
-            ingestLogBtn.disabled = true;
-            initGraphBtn.disabled = true;
             setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
             setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
             document.getElementById('ingestSqlOutput').innerText = '';
             document.getElementById('ingestLogOutput').innerText = '';
             ingestBatchResults.innerHTML = '';
+            updateDecompositionWorkflowState();
         }
 
         async function checkBackendStatus() {
@@ -1135,23 +1430,6 @@
                 setBackendStatus('warning', detail ? `Backend online: ${detail}` : `Backend online (status ${response.status}).`);
             } catch (err) {
                 setBackendStatus('offline', `Backend offline: ${err.message}`);
-            }
-        }
-
-        async function loadGraphMakerAgentPrompt() {
-            const promptElement = document.getElementById('graphMakerAgentPrompt');
-            promptElement.textContent = 'Loading Graph Maker Agent system prompt...';
-            try {
-                const response = await fetch(`${backendBaseUrl}/api/graph-maker-agent`);
-                const payload = await response.json().catch(() => null);
-                if (!response.ok) {
-                    promptElement.textContent = (payload && (payload.error || payload.detail)) || `Graph Maker Agent prompt unavailable (status ${response.status}).`;
-                    return;
-                }
-
-                promptElement.textContent = payload?.systemPrompt || '(no system prompt returned)';
-            } catch (err) {
-                promptElement.textContent = `Graph Maker Agent prompt unavailable: ${err.message}`;
             }
         }
 
@@ -1179,7 +1457,7 @@
             const parallelism = getLlmParallelism();
             setMessage('uploadMessage', cacheMode
                 ? `Uploading ${files.length} cache file${files.length === 1 ? '' : 's'} without LLM processing...`
-                : `Uploading and analyzing ${files.length} file${files.length === 1 ? '' : 's'} with parallelism ${parallelism}...`, 'text-muted');
+                : `Uploading ${files.length} file${files.length === 1 ? '' : 's'} with parallelism ${parallelism}...`, 'text-muted');
 
             let succeeded = 0;
             let failed = 0;
@@ -1193,8 +1471,8 @@
             async function runUploadWorker() {
                 while (nextJobIndex < jobs.length) {
                     const job = jobs[nextJobIndex++];
-                    updateUploadBatchResult(job.resultItem, `${cacheMode ? 'Loading cache' : 'Analyzing'} ${job.index + 1}/${files.length}...`, 'text-muted');
-                    setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Analyzing'} ${job.index + 1}/${files.length}: ${job.file.name}`, 'text-muted');
+                    updateUploadBatchResult(job.resultItem, `${cacheMode ? 'Loading cache' : 'Uploading'} ${job.index + 1}/${files.length}...`, 'text-muted');
+                    setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Uploading'} ${job.index + 1}/${files.length}: ${job.file.name}`, 'text-muted');
 
                     const result = await uploadSingleFile(job.file, cacheMode);
                     if (result.ok) {
@@ -1202,7 +1480,7 @@
                         handleUploadSuccess(result.payload);
                         const statusMessage = result.payload.cached
                             ? `Document ${result.payload.documentId} loaded from cache (${result.payload.status.state}). Analysis step skipped by duplicate/content-hash handling.`
-                            : `Document ${result.payload.documentId} analyzed (${result.payload.status.state}).`;
+                            : `Document ${result.payload.documentId} uploaded (${result.payload.status.state}).`;
                         updateUploadBatchResult(job.resultItem, statusMessage, result.payload.cached ? 'text-warning' : 'text-success');
                     } else {
                         failed++;
@@ -2606,6 +2884,7 @@
             uploadedDocuments.clear();
             selectedDocumentIds.clear();
             metadataDrafts.clear();
+            decompositionStepCompleted = false;
             setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
             setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
@@ -2614,14 +2893,15 @@
             initScriptOutput.innerText = '';
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
-            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
-            await loadGraphMakerAgentPrompt();
+            document.getElementById('graphMakerSystemPrompt').textContent = 'Decompose a document to see the system prompt used for Graph Maker Agent.';
+            document.getElementById('graphMakerInputPrompt').textContent = 'Decompose a document to see the full input prompt sent to Graph Maker Agent.';
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
             renderList('relationshipsOutput', []);
             setMetadataForm(null);
             renderUploadedDocuments();
+            updateDecompositionWorkflowState();
             renderResults([]);
             renderGraph([], []);
             document.getElementById('graphCheckStatus').innerText = 'Graph counts not loaded.';
@@ -3869,10 +4149,10 @@
         }
 
         function renderDecomposition(payload) {
-            const systemPrompt = payload.decompositionSystemPrompt || '(no system prompt returned)';
-            document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
-            document.getElementById('graphMakerAgentPrompt').textContent = systemPrompt;
-            document.getElementById('decompositionSystemPrompt').textContent = systemPrompt;
+            const previewText = normalizeDocumentPreviewText(payload.originalContent);
+            document.getElementById('originalContent').textContent = previewText || '(no original content returned)';
+            document.getElementById('graphMakerSystemPrompt').textContent = payload.decompositionSystemPrompt || '(no system prompt returned)';
+            document.getElementById('graphMakerInputPrompt').textContent = payload.decompositionInputPrompt || '(no input prompt returned)';
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));

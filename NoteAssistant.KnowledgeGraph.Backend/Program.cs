@@ -759,6 +759,51 @@ app.MapPost("/api/documents/metadata", (BulkMetadataUpdateRequest request, IMark
     return Results.Ok(new { updated, missing });
 });
 
+app.MapPost("/api/documents/{documentId:long}/decompose", async (long documentId, DocumentDecomposeRequest? request, IMarkdownGraphIngestionService ingestionService, IAnalysisCache cache, IngestionStore store, CancellationToken cancellationToken) =>
+{
+    var existing = store.GetPlan(documentId);
+    if (existing is null)
+    {
+        return Results.NotFound(new { error = "Document not found. Upload it first." });
+    }
+
+    if (string.IsNullOrWhiteSpace(existing.OriginalContent))
+    {
+        return Results.BadRequest(new { error = "Original markdown content is missing for this document. Re-upload the markdown file and try again." });
+    }
+
+    var requestedMetadata = request is null
+        ? new DocumentMetadata(null, null, Array.Empty<string>())
+        : new DocumentMetadata(NormalizeOptional(request.DocumentType), ParseDateOnly(request.DocumentDate), ParseTags(request.Tags));
+    var metadataToUse = HasMetadataValues(requestedMetadata)
+        ? requestedMetadata
+        : (existing.Metadata ?? requestedMetadata);
+
+    var fileName = string.IsNullOrWhiteSpace(existing.Status.FileName)
+        ? $"{existing.Title}.md"
+        : existing.Status.FileName;
+    var contentHash = ResolveContentHash(existing, cache);
+    var rebuilt = await ingestionService.CreateGraphPlanAsync(fileName, existing.OriginalContent, metadataToUse, contentHash, cancellationToken);
+    var status = rebuilt.Status with
+    {
+        FileName = fileName,
+        State = "Analyzed",
+        UpdatedAt = DateTimeOffset.UtcNow,
+        Message = "Document decomposed with current metadata. Click 'Ingest' to push into PostgreSQL/AGE."
+    };
+
+    var updated = rebuilt with
+    {
+        Cached = false,
+        Status = status
+    };
+
+    store.Upsert(status);
+    store.SavePlan(updated);
+    return Results.Ok(updated);
+})
+.DisableAntiforgery();
+
 app.MapPost("/api/noteassistant/import-metadata", async (NoteAssistantMetadataImportRequest request, IAgeDatabaseConnectionFactory connectionFactory, IOptions<DatabaseOptions> databaseOptions, CancellationToken cancellationToken) =>
 {
     if (request.Files is null || request.Files.Count == 0)

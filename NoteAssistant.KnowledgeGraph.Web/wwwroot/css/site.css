@@ -867,6 +867,25 @@ body {
   border: 1px solid #dee2e6;
 }
 
+.decomp-tab-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  margin-right: 0.35rem;
+  line-height: 1;
+  font-size: 0.95rem;
+}
+
+.decomp-tab-status-warning {
+  color: #fd7e14;
+}
+
+.decomp-tab-status-ready {
+  color: #198754;
+  font-weight: 700;
+}
+
 .decomposition-subtab-content {
   border: 1px solid #dee2e6;
   border-radius: 6px;
