@@ -91,8 +91,54 @@ Backend launch profile exposes Swagger and APIs like:
 - `POST /api/query`
 - `POST /api/query/assist`
 - `POST /api/retrieval/hybrid`
+- `POST /api/retrieval/global`
 - `GET /api/health/foundry`
 - `GET /api/health/db`
+
+### Hybrid retrieval API notes
+
+`POST /api/retrieval/hybrid` supports explicit retrieval mode selection via `retrievalMode` in the request body.
+
+Supported values:
+- `auto`: backend deterministic router selects mode from the question
+- `local`: local graph-guided retrieval
+- `light`: parallel light strategy (entity branch + global branch)
+- `path`: multi-hop/causal path-oriented retrieval
+
+For global graph/community retrieval, use the dedicated endpoint `POST /api/retrieval/global`.
+
+Alias compatibility:
+- legacy/alternate mode names are normalized by the backend to the closest supported mode
+- unknown mode names safely fall back to `auto`
+
+Hybrid response now includes routing and provenance metadata:
+
+```json
+{
+    "resolvedRetrievalMode": "path",
+    "retrievalModeRationale": "Auto router selected PATH mode because the query appears multi-hop/causal.",
+    "resolvedTraversalHops": 3,
+    "chunkSourceBreakdown": [
+        {
+            "source": "entity",
+            "count": 7,
+            "percentage": 58.3
+        },
+        {
+            "source": "path-evidence",
+            "count": 5,
+            "percentage": 41.7
+        }
+    ]
+}
+```
+
+Notes:
+- `resolvedRetrievalMode` is the final mode actually executed (may differ from requested value when aliases/fallback apply).
+- `retrievalModeRationale` explains why that mode was chosen.
+- `resolvedTraversalHops` reflects the traversal depth used by the mode router.
+- `chunkSourceBreakdown` summarizes chunk provenance after dedupe/merge/rerank.
+- `chunkSourceBreakdown[].percentage` is rounded to one decimal place.
 
 Use the Foundry health endpoint to validate that embedding calls can reach the configured deployment:
 
@@ -118,6 +164,30 @@ dotnet run
 ```
 
 Open the web URL, upload a markdown file, inspect chunks/entities/status, and execute graph queries.
+
+## VS Code task workflow (recommended)
+
+To avoid process-lock and manual terminal issues, use the built-in tasks:
+
+- `start-backend`: stop + build + run backend on `http://localhost:5070`
+- `start-web`: stop + build + run web on `http://localhost:5272`
+- `start-all`: run both startup flows
+- `stop-all`: stop backend and web listeners/processes
+- `build-tests`: compile backend test project
+- `test-backend-watch`: run backend tests in watch mode
+
+These tasks are defined in [.vscode/tasks.json](.vscode/tasks.json).
+
+## CI: AGE-backed graph e2e
+
+This repo includes a GitHub Actions workflow at [.github/workflows/age-e2e.yml](.github/workflows/age-e2e.yml) that:
+
+- starts PostgreSQL + AGE from `NoteAssistant.KnowledgeGraph.Backend/Deployment/docker-compose.yml`
+- waits for the database to become ready
+- installs Playwright dependencies
+- runs the AGE-backed graph explorer e2e spec (`tests/e2e/tests/graph-explorer.spec.ts`)
+
+You can trigger it manually from Actions (`workflow_dispatch`) or let it run on pull requests that touch backend/web/e2e paths.
 
 ## Database setup — step by step
 

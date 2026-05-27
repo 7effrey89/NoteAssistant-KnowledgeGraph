@@ -1,0 +1,77 @@
+name: AGE E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'NoteAssistant.KnowledgeGraph.Backend/**'
+      - 'NoteAssistant.KnowledgeGraph.Web/**'
+      - 'tests/e2e/**'
+      - '.github/workflows/age-e2e.yml'
+
+jobs:
+  graph-e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Start PostgreSQL + AGE container
+        working-directory: NoteAssistant.KnowledgeGraph.Backend/Deployment
+        run: docker compose up -d --build
+
+      - name: Wait for Postgres to accept connections
+        shell: bash
+        run: |
+          for i in {1..40}; do
+            if docker exec noteassistant-postgres-age pg_isready -U postgres -d noteassistant >/dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres... ($i/40)"
+            sleep 3
+          done
+          echo "Postgres did not become ready in time"
+          docker logs noteassistant-postgres-age || true
+          exit 1
+
+      - name: Install e2e dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run graph explorer e2e (AGE-backed)
+        working-directory: tests/e2e
+        env:
+          WEB_BASE_URL: http://localhost:5272
+          BACKEND_BASE_URL: http://localhost:5070
+        run: npx playwright test tests/graph-explorer.spec.ts
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-age-e2e
+          path: |
+            tests/e2e/test-results
+            tests/e2e/playwright-report
+          if-no-files-found: ignore
+
+      - name: Stop PostgreSQL + AGE container
+        if: always()
+        working-directory: NoteAssistant.KnowledgeGraph.Backend/Deployment
+        run: docker compose down -v

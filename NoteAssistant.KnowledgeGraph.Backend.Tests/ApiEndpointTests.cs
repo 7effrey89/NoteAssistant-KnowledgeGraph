@@ -305,6 +305,191 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
             "CORS preflight should expose Access-Control-Allow-Origin so the browser allows uploads from the web app.");
     }
 
+    [Fact]
+    public async Task HybridRetrieval_ExplicitPathMode_ReportsResolvedMode_WhenDbIsUnconfigured()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "How does Microsoft influence OpenAI through product partnerships?",
+            RetrievalMode: "path",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.False(payload!.Success);
+        Assert.Equal("path", payload.ResolvedRetrievalMode);
+        Assert.Equal(3, payload.ResolvedTraversalHops);
+        Assert.Contains("Explicit mode 'path'", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Path", payload.RetrievalOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_AutoMode_ResolvesPath_ForCausalQuestion()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "How does Azure depend on OpenAI via platform integrations?",
+            RetrievalMode: "auto",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.Equal("path", payload!.ResolvedRetrievalMode);
+        Assert.Equal(3, payload.ResolvedTraversalHops);
+        Assert.Contains("Auto router", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_AutoMode_ResolvesLight_ForSummaryQuestion()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "Give me a summary of the latest updates.",
+            RetrievalMode: "auto",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.Equal("light", payload!.ResolvedRetrievalMode);
+        Assert.Equal(2, payload.ResolvedTraversalHops);
+        Assert.Contains("LIGHT", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_LegacyHybridAlias_MapsToLocalMode()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "Tell me about Microsoft and OpenAI",
+            RetrievalMode: "hybrid",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.Equal("local", payload!.ResolvedRetrievalMode);
+        Assert.Equal(2, payload.ResolvedTraversalHops);
+        Assert.Contains("backward compatibility", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_UnknownMode_FallsBackToAutoRouting()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "Give me a summary of current status",
+            RetrievalMode: "mystery",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.Equal("light", payload!.ResolvedRetrievalMode);
+        Assert.Equal(2, payload.ResolvedTraversalHops);
+        Assert.Contains("Unrecognized requested mode", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_GlobalModeRequest_FallsBackToAutoRouting()
+    {
+        var client = _factory.CreateClient();
+        var request = new HybridRetrievalRequest(
+            Query: "Give me a summary of current status",
+            RetrievalMode: "global",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.Equal("light", payload!.ResolvedRetrievalMode);
+        Assert.Equal(2, payload.ResolvedTraversalHops);
+        Assert.Contains("Unrecognized requested mode", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("global", payload.RetrievalModeRationale ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(payload.ChunkSourceBreakdown);
+    }
+
+    [Fact]
+    public async Task HybridRetrieval_ReturnsChunkSourceBreakdown_WhenRunnerProvidesProvenance()
+    {
+        var stubResponse = new HybridRetrievalResponse(
+            Success: true,
+            Error: null,
+            DetectedEntities: [],
+            GraphEntities: [],
+            MatchedEntities: [],
+            Chunks:
+            [
+                new HybridChunkResultDto(1, 10, 0, "Entity-backed chunk", 0.12, Source: "entity"),
+                new HybridChunkResultDto(2, 10, 1, "Path evidence chunk", 0.18, Source: "path-evidence")
+            ],
+            PromptContext: "test-prompt",
+            RetrievalOrder: "Entity -> Path evidence",
+            ResolvedRetrievalMode: "path",
+            RetrievalModeRationale: "stubbed for endpoint contract test",
+            ChunkSourceBreakdown:
+            [
+                new HybridChunkSourceCountDto("entity", 1, 50.0),
+                new HybridChunkSourceCountDto("path-evidence", 1, 50.0)
+            ],
+            ResolvedTraversalHops: 3);
+
+        var client = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                var descriptors = services
+                    .Where(d => d.ServiceType == typeof(IHybridRetrievalRunner))
+                    .ToList();
+                foreach (var descriptor in descriptors)
+                {
+                    services.Remove(descriptor);
+                }
+
+                services.AddSingleton<IHybridRetrievalRunner>(new StubHybridRetrievalRunner(stubResponse));
+            });
+        }).CreateClient();
+
+        var request = new HybridRetrievalRequest(
+            Query: "show relationship evidence",
+            RetrievalMode: "path",
+            IncludeTrace: true);
+
+        using var response = await client.PostAsJsonAsync("/api/retrieval/hybrid", request);
+        var payload = await response.Content.ReadFromJsonAsync<HybridRetrievalResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.True(payload!.Success);
+        Assert.Equal("path", payload.ResolvedRetrievalMode);
+        Assert.Equal(3, payload.ResolvedTraversalHops);
+        Assert.NotNull(payload.ChunkSourceBreakdown);
+
+        var breakdown = payload.ChunkSourceBreakdown!.ToDictionary(x => x.Source, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(2, breakdown.Count);
+        Assert.Equal(50.0, breakdown["entity"].Percentage);
+        Assert.Equal(50.0, breakdown["path-evidence"].Percentage);
+    }
+
     private static MultipartFormDataContent BuildUploadContent(string uploadName)
     {
         var filePath = Path.Combine(AppContext.BaseDirectory, "asset", "summary.md");
@@ -344,6 +529,12 @@ public sealed class ApiEndpointTests : IClassFixture<WebApplicationFactory<Progr
     }
 
     private sealed record BulkMetadataUpdateResponseShape(IReadOnlyList<GraphIngestionPlan> Updated, IReadOnlyList<long> Missing);
+
+    private sealed class StubHybridRetrievalRunner(HybridRetrievalResponse response) : IHybridRetrievalRunner
+    {
+        public Task<HybridRetrievalResponse> ExecuteAsync(HybridRetrievalRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(response);
+    }
 
     [Fact]
     public async Task AssistQuery_ReturnsSuggestion()

@@ -544,7 +544,9 @@
                     <label class="form-label mb-0" for="hybridModeSelect">Mode</label>
                     <select class="form-select form-select-sm" id="hybridModeSelect" style="max-width: 220px;">
                         <option value="auto" selected>Auto</option>
-                        <option value="hybrid">Local / Hybrid</option>
+                        <option value="local">Local / Entity-first</option>
+                        <option value="light">Light / Parallel-friendly</option>
+                        <option value="path">Path / Multi-hop</option>
                         <option value="global">Global / Temporal</option>
                     </select>
                 </div>
@@ -1664,14 +1666,22 @@
             setBackendStatus('warning', 'Checking backend...');
             try {
                 const response = await fetch(`${backendBaseUrl}/api/health`);
-                if (response.ok) {
-                    setBackendStatus('online', 'Backend online');
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => null);
+                    const detail = payload?.detail || payload?.error;
+                    setBackendStatus('warning', detail ? `Backend warning: ${detail}` : `Backend warning (status ${response.status}).`);
                     return;
                 }
 
-                const payload = await response.json().catch(() => null);
-                const detail = payload?.detail || payload?.error;
-                setBackendStatus('warning', detail ? `Backend online: ${detail}` : `Backend online (status ${response.status}).`);
+                const age = await fetch(`${backendBaseUrl}/api/health/age`);
+                if (age.ok) {
+                    setBackendStatus('online', 'Backend + PostgreSQL/AGE online');
+                    return;
+                }
+
+                const agePayload = await age.json().catch(() => null);
+                const ageDetail = agePayload?.detail || agePayload?.error || `status ${age.status}`;
+                setBackendStatus('warning', `Backend online; PostgreSQL/AGE unavailable: ${ageDetail}`);
             } catch (err) {
                 setBackendStatus('offline', `Backend offline: ${err.message}`);
             }
@@ -3207,6 +3217,9 @@
             const selectedMode = hybridModeSelect.value;
             const isAutoMode = selectedMode === 'auto';
             const autoModeReason = isAutoMode ? describeAutoModeDecision(question) : '';
+            const requestedRetrievalMode = selectedMode === 'global'
+                ? 'auto'
+                : selectedMode;
             const autoRoutesToGlobal = isAutoMode && shouldUseGlobalMode(question);
             if (!isClarification && (selectedMode === 'global' || autoRoutesToGlobal)) {
                 const initialSteps = [];
@@ -3214,7 +3227,7 @@
                     initialSteps.push({
                         title: 'Intent router (Auto mode)',
                         variant: 'purpose',
-                        purpose: 'Use deterministic keyword intent routing to choose Local / Hybrid or Global / Temporal before retrieval starts.',
+                        purpose: 'Use deterministic keyword intent routing to choose Global / Temporal vs backend-routed local retrieval before retrieval starts.',
                         inputPayloadTitle: 'Intent router rules (deterministic)',
                         inputPayload: buildAutoRouterExplanation(question)
                     });
@@ -3251,6 +3264,7 @@
                     limit: 10,
                     includeTrace,
                     includeAnswer,
+                    retrievalMode: requestedRetrievalMode,
                     clarificationAttempts: hybridClarificationAttempts,
                     clarificationResponse: isClarification ? (window.lastClarificationResponse || '') : ''
                 })
@@ -3278,6 +3292,10 @@
             const matchStep = getTraceStep(trace, 'entity-match');
             const expansionStep = getTraceStep(trace, 'graph-expansion');
             const relationshipsStep = getTraceStep(trace, 'graph-relationships');
+            const modeRouterStep = getTraceStep(trace, 'mode-router');
+            const pathFocusStep = getTraceStep(trace, 'path-focus');
+            const pathEvidenceChunksStep = getTraceStep(trace, 'path-evidence-chunks');
+            const chunkProvenanceStep = getTraceStep(trace, 'chunk-provenance');
             const embeddingStep = getTraceStep(trace, 'embedding');
             const vectorStep = getTraceStep(trace, 'vector-search');
             const fallbackStep = getTraceStep(trace, 'entity-fallback');
@@ -3293,20 +3311,26 @@
                 };
             }
 
-            function buildSqlBubble(title, detail, indent = true) {
-                const sql = parseSqlSections(detail);
-                if (sql) {
-                    return {
-                        title,
-                        indent,
-                        bodyHtml: buildSqlToggleHtml(sql.parameterized, sql.executable)
-                    };
-                }
+            function buildSqlBubble(title, detail, indent = true, resultset = '') {
                 return {
                     title,
                     indent,
-                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`
+                    bodyHtml: buildSqlBodyHtml(detail, resultset)
                 };
+            }
+
+            function buildSqlBodyHtml(detail, resultset = '') {
+                const sql = parseSqlSections(detail);
+                if (sql) {
+                    return buildSqlToggleHtml(sql.parameterized, sql.executable, resultset);
+                }
+
+                return `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`;
+            }
+
+            function formatHybridChunkLines(chunks) {
+                const lines = (chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex} source:${c.source || 'n/a'}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
+                return lines.length === 0 ? '(none)' : lines.join('\n');
             }
 
             // Phase 0: User question (only on initial call, not on clarification resubmits)
@@ -3318,14 +3342,57 @@
                 mapItems.push({
                     title: 'Intent router (Auto mode)',
                     variant: 'purpose',
-                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs Local / Hybrid before retrieval starts.',
+                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs backend-routed local retrieval before retrieval starts.',
                     inputPayloadTitle: 'Intent router rules (deterministic)',
                     inputPayload: buildAutoRouterExplanation(question)
                 });
                 mapItems.push({
                     title: 'Mode selected (Auto)',
                     indent: true,
-                    body: `Auto mode chose: Local / Hybrid GraphRAG.\nReason: ${autoModeReason}`
+                    body: `Auto mode chose: backend-routed local retrieval.\nReason: ${autoModeReason}`
+                });
+            }
+
+            if (payload.resolvedRetrievalMode) {
+                mapItems.push({
+                    title: 'Backend retrieval mode',
+                    indent: true,
+                    body: `Requested: ${requestedRetrievalMode}\nResolved: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
+                });
+            }
+            if (payload.chunkSourceBreakdown && payload.chunkSourceBreakdown.length) {
+                const breakdown = [...payload.chunkSourceBreakdown].sort((a, b) => {
+                    const countDiff = (b.count || 0) - (a.count || 0);
+                    if (countDiff !== 0) return countDiff;
+                    return String(a.source || '').localeCompare(String(b.source || ''));
+                });
+                const totalChunkCount = breakdown.reduce((sum, item) => sum + (item.count || 0), 0);
+                const breakdownLines = breakdown.map(item => {
+                    const pct = Number.isFinite(item.percentage)
+                        ? Number(item.percentage).toFixed(1)
+                        : (totalChunkCount > 0 ? ((item.count / totalChunkCount) * 100).toFixed(1) : '0.0');
+                    return `${item.source}: ${item.count} (${pct}%)`;
+                });
+                mapItems.push({
+                    title: 'Chunk source breakdown',
+                    indent: true,
+                    body: breakdownLines.join('\n')
+                });
+            }
+            if (includeTrace && modeRouterStep?.detail) {
+                mapItems.push({
+                    title: 'Mode router trace',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(modeRouterStep.detail, 1000)
+                });
+            }
+            if (includeTrace && chunkProvenanceStep?.detail) {
+                mapItems.push({
+                    title: 'Chunk provenance trace',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(chunkProvenanceStep.detail, 800)
                 });
             }
 
@@ -3388,7 +3455,10 @@
 
             if (matchStep || (payload.matchedEntities && payload.matchedEntities.length)) {
                 const matchDetail = includeTrace && matchStep?.detail ? matchStep.detail : '(trace disabled)';
-                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true));
+                const matchedEntityResultset = (payload.matchedEntities || []).length
+                    ? (payload.matchedEntities || []).join('\n')
+                    : '(none)';
+                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true, matchedEntityResultset));
                 mapItems.push({
                     title: 'Entity match output',
                     indent: true,
@@ -3412,12 +3482,10 @@
                 purpose: 'Traverse the knowledge graph from matched entities to discover related entities to broaden retrieval.'
             });
             const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
-            mapItems.push({
-                title: 'Graph expansion query',
-                indent: true,
-                scroll: true,
-                body: truncateText(expansionDetail, 1200)
-            });
+            const expandedEntitiesResultset = (payload.graphEntities || []).length
+                ? (payload.graphEntities || []).join('\n')
+                : '(none)';
+            mapItems.push(buildSqlBubble('Graph expansion query', expansionDetail, true, expandedEntitiesResultset));
             mapItems.push({
                 title: 'Graph-expanded entities',
                 indent: true,
@@ -3442,12 +3510,56 @@
                 const text = r.sourceText ? `\n  evidence: ${truncateText(r.sourceText, 220)}` : '';
                 return `${r.source} -[${r.relationship}]-> ${r.target} (doc:${doc} chunk:${chunk})${text}`;
             });
+            const relationshipResultset = relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n');
             mapItems.push({
                 title: 'Graph relationship output',
                 indent: true,
                 scroll: true,
-                body: relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n')
+                body: relationshipResultset
             });
+            if (includeTrace && pathFocusStep?.detail) {
+                mapItems.push({
+                    title: 'Path relationship prioritization',
+                    variant: 'purpose',
+                    purpose: 'Narrow broad graph relationship results down to the most relevant multi-hop paths before chunk grounding.',
+                    configPayloadTitle: 'Deterministic rule (expand)',
+                    configPayload: [
+                        'Top K:',
+                        '- K = clamp(request.limit * 4, 1, 50)',
+                        '',
+                        'Sort priority (ascending/descending by key):',
+                        '1) relationship type bucket:',
+                        '   - non-CO_MENTIONED_WITH first',
+                        '   - CO_MENTIONED_WITH later',
+                        '2) has source evidence text (non-empty first)',
+                        '3) documentId descending (newer/higher id first)',
+                        '4) chunkIndex descending',
+                        '',
+                        'Notes:',
+                        '- source evidence text is defined as: COALESCE(relationships.evidence, chunks.content) AS source_text.',
+                        '- This means relationship evidence is preferred, with chunk content used as fallback.'
+                    ].join('\n')
+                });
+                mapItems.push({
+                    title: 'Prioritized path relationships',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(pathFocusStep.detail, 1200)
+                });
+            }
+            if (includeTrace && pathEvidenceChunksStep?.detail) {
+                mapItems.push({
+                    title: 'Path evidence chunk grounding',
+                    variant: 'purpose',
+                    purpose: 'Ground the selected path relationships in supporting source chunks before the final retrieval merge.'
+                });
+                mapItems.push({
+                    title: 'Path-grounded supporting chunks',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(pathEvidenceChunksStep.detail, 1200)
+                });
+            }
 
             // Phase 5: Question Embedding ---------------------------------
             mapItems.push({
@@ -3474,25 +3586,45 @@
 
             // Phase 6: Hybrid Chunk Retrieval -----------------------------
             const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
-            const vectorSql = parseSqlSections(vectorDetail);
-            const vectorBubble = {
-                title: 'Hybrid Chunk Retrieval',
-                variant: 'purpose',
-                purpose: 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
-            };
-            if (vectorSql) {
-                vectorBubble.bodyHtml = buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable);
+            const allChunkResultset = formatHybridChunkLines(payload.chunks || []);
+            const lightVectorDetail = parseLightModeChunkSearchDetail(vectorDetail);
+            if (payload.resolvedRetrievalMode === 'light' && lightVectorDetail) {
+                const entityBranchChunks = (payload.chunks || []).filter(c => String(c.source || '').startsWith('entity-'));
+                const globalBranchChunks = (payload.chunks || []).filter(c => String(c.source || '').startsWith('global-'));
+                mapItems.push({
+                    title: 'Parallel chunk retrieval',
+                    variant: 'purpose',
+                    purpose: lightVectorDetail.intro || 'Run entity-scoped and global retrieval in parallel, then merge and rerank the combined results.'
+                });
+                mapItems.push({
+                    title: 'Entity-scoped retrieval branch',
+                    indent: true,
+                    bodyHtml: buildSqlBodyHtml(lightVectorDetail.entityDetail, formatHybridChunkLines(entityBranchChunks))
+                });
+                mapItems.push({
+                    title: 'Global retrieval branch',
+                    indent: true,
+                    bodyHtml: buildSqlBodyHtml(lightVectorDetail.globalDetail, formatHybridChunkLines(globalBranchChunks))
+                });
             } else {
-                vectorBubble.bodyHtml = `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`;
+                const vectorBubble = {
+                    title: payload.resolvedRetrievalMode === 'path'
+                        ? 'Entity-scoped chunk retrieval after path grounding'
+                        : 'Entity-scoped hybrid chunk retrieval',
+                    variant: 'purpose',
+                    purpose: payload.resolvedRetrievalMode === 'path'
+                        ? 'After path-focused graph grounding, rank entity-relevant chunks with vector similarity and keyword search, then merge the rankings.'
+                        : 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
+                };
+                vectorBubble.bodyHtml = buildSqlBodyHtml(vectorDetail, allChunkResultset);
+                mapItems.push(vectorBubble);
             }
-            mapItems.push(vectorBubble);
 
-            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
             mapItems.push({
                 title: 'Hybrid Retrieval Output',
                 indent: true,
                 scroll: true,
-                body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
+                body: allChunkResultset
             });
 
             // Phase 7: Answer Agent ---------------------------------------
@@ -3532,7 +3664,7 @@
                 return `Matched global/temporal intent keyword "${match[0]}".`;
             }
 
-            return 'No global or temporal intent keyword matched, so entity-focused Local/Hybrid retrieval was selected.';
+            return 'No global or temporal intent keyword matched, so backend local routing was selected (auto resolves local/light/path).';
         }
 
         function buildAutoRouterExplanation(question) {
@@ -3543,7 +3675,7 @@
                 `Question: ${question}`,
                 'Rule set:',
                 '- If any global/temporal keyword is present -> Global / Temporal GraphRAG',
-                '- Otherwise -> Local / Hybrid GraphRAG',
+                '- Otherwise -> Backend local router (auto resolves local/light/path)',
                 'Keywords checked:',
                 'theme, themes, pattern, patterns, trend, trends, across, overall, summary, summarize, top <number>, changed, timeline, over time, before, after, recent, chronolog*',
                 `Matched keyword: ${matchedKeyword}`
@@ -4708,17 +4840,55 @@
             return { parameterized, executable };
         }
 
-        function buildSqlToggleHtml(parameterizedSql, executableSql) {
+        function parseLightModeChunkSearchDetail(value) {
+            if (!value) {
+                return null;
+            }
+
+            const entityHeader = 'Entity branch:';
+            const globalHeader = 'Global branch:';
+            const entityIndex = value.indexOf(entityHeader);
+            const globalIndex = value.indexOf(globalHeader);
+            if (entityIndex === -1 || globalIndex === -1 || globalIndex <= entityIndex) {
+                return null;
+            }
+
+            const intro = value.slice(0, entityIndex).trim();
+            const entityDetail = value
+                .slice(entityIndex + entityHeader.length, globalIndex)
+                .trim();
+            const globalDetail = value
+                .slice(globalIndex + globalHeader.length)
+                .trim();
+
+            return {
+                intro,
+                entityDetail,
+                globalDetail
+            };
+        }
+
+        function buildSqlToggleHtml(parameterizedSql, executableSql, resultsetText = '') {
             const parameterized = escapeHtml(parameterizedSql);
             const executable = escapeHtml(executableSql);
+            const hasResultset = typeof resultsetText === 'string' && resultsetText.trim().length > 0;
+            const resultset = escapeHtml(hasResultset ? resultsetText : '(none)');
+            const resultButton = hasResultset
+                ? '<button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="result">Result</button>'
+                : '';
+            const resultView = hasResultset
+                ? `<pre class="sql-toggle-view sql-toggle-view-result d-none">${resultset}</pre>`
+                : '';
             return `
                 <div class="sql-toggle" data-view="parameterized">
                     <div class="btn-group btn-group-sm sql-toggle-buttons" role="group">
                         <button type="button" class="btn btn-outline-secondary sql-toggle-btn active" data-view="parameterized">Parameterized</button>
                         <button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="executable">Executable</button>
+                        ${resultButton}
                     </div>
                     <pre class="sql-toggle-view sql-toggle-view-parameterized">${parameterized}</pre>
                     <pre class="sql-toggle-view sql-toggle-view-executable d-none">${executable}</pre>
+                    ${resultView}
                 </div>`;
         }
 

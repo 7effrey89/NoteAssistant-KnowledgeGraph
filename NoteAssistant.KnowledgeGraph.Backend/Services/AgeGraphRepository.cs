@@ -12,6 +12,10 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
 public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoundryInferenceClient foundry, IAgeDatabaseConnectionFactory connectionFactory)
 {
+    private const string RetrievalModeAuto = "auto";
+    private const string RetrievalModeLocal = "local";
+    private const string RetrievalModeLight = "light";
+    private const string RetrievalModePath = "path";
     private const int MaxTraversalHops = 3;
     private const int MaxVectorResultLimit = 50;
     private readonly IFoundryInferenceClient _foundry = foundry;
@@ -26,6 +30,60 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private sealed record CommunityBuildDetail(int Index, string Detail);
 
     public bool IsConfigured => _connectionFactory.IsConfigured;
+
+    private static (string Mode, string Rationale) ResolveRetrievalMode(string query, string? requestedMode)
+    {
+        var normalizedRequested = string.IsNullOrWhiteSpace(requestedMode)
+            ? RetrievalModeAuto
+            : requestedMode.Trim().ToLowerInvariant();
+
+        if (normalizedRequested is RetrievalModeLocal or RetrievalModeLight or RetrievalModePath)
+        {
+            return (normalizedRequested, $"Explicit mode '{normalizedRequested}' requested by client.");
+        }
+
+        if (normalizedRequested is "hybrid" or "entity" or "entity-first")
+        {
+            return (RetrievalModeLocal, $"Client mode '{normalizedRequested}' is treated as LOCAL for backward compatibility.");
+        }
+
+        if (normalizedRequested is "parallel" or "broad")
+        {
+            return (RetrievalModeLight, $"Client mode '{normalizedRequested}' is treated as LIGHT for backward compatibility.");
+        }
+
+        if (normalizedRequested is "multihop" or "multi-hop")
+        {
+            return (RetrievalModePath, $"Client mode '{normalizedRequested}' is treated as PATH for backward compatibility.");
+        }
+
+        var explicitFallbackReason = normalizedRequested != RetrievalModeAuto
+            ? $"Unrecognized requested mode '{normalizedRequested}'; falling back to AUTO routing. "
+            : string.Empty;
+
+        var normalizedQuery = (query ?? string.Empty).ToLowerInvariant();
+        var pathIndicators = new[]
+        {
+            " through ", " via ", " path ", " chain ", "multi-hop", "impact", "influence", "depends on", "depends", "root cause", "how does"
+        };
+
+        if (pathIndicators.Any(indicator => normalizedQuery.Contains(indicator, StringComparison.Ordinal)))
+        {
+            return (RetrievalModePath, explicitFallbackReason + "Auto router selected PATH mode because the query appears multi-hop/causal.");
+        }
+
+        var lightIndicators = new[]
+        {
+            "summary", "summarize", "status", "latest", "recent", "what is going on", "overview"
+        };
+
+        if (lightIndicators.Any(indicator => normalizedQuery.Contains(indicator, StringComparison.Ordinal)))
+        {
+            return (RetrievalModeLight, explicitFallbackReason + "Auto router selected LIGHT mode for broad evidence gathering with graph grounding.");
+        }
+
+        return (RetrievalModeLocal, explicitFallbackReason + "Auto router selected LOCAL mode for entity-first graph expansion.");
+    }
 
     public async Task<(bool Success, string? ErrorMessage)> TryExecuteIngestionPlanAsync(GraphIngestionPlan plan, CancellationToken cancellationToken)
     {
@@ -184,26 +242,19 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 CommandType = CommandType.Text
             };
 
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
             {
-                var row = new Dictionary<string, string?>(StringComparer.Ordinal);
-                for (var i = 0; i < reader.FieldCount; i++)
+                while (await reader.ReadAsync(cancellationToken))
                 {
-                    var key = reader.GetName(i);
-                    var value = GetFieldValueAsString(reader, i);
-                    row[key] = value;
-                    AddGraphPrimitives(value, nodes, edges);
-                }
-                rows.Add(row);
-            }
-
-            if (nodes.Count == 0)
-            {
-                var fallback = await TryBuildFallbackGraphAsync(connection, cancellationToken);
-                if (fallback.Nodes.Count > 0)
-                {
-                    return new GraphQueryResponse(true, null, rows, fallback.Nodes, fallback.Edges);
+                    var row = new Dictionary<string, string?>(StringComparer.Ordinal);
+                    for (var i = 0; i < reader.FieldCount; i++)
+                    {
+                        var key = reader.GetName(i);
+                        var value = GetFieldValueAsString(reader, i);
+                        row[key] = value;
+                        AddGraphPrimitives(value, nodes, edges);
+                    }
+                    rows.Add(row);
                 }
             }
 
@@ -226,33 +277,25 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             try
             {
                 await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
-                var retrySql = BuildCypherSql(request.GraphName, rewritten, "result agtype");
+                var retrySql = BuildCypherSql(request.GraphName, rewritten, "result ag_catalog.agtype");
                 await using var retryCommand = new NpgsqlCommand(retrySql, connection);
-                await using var retryReader = await retryCommand.ExecuteReaderAsync(cancellationToken);
-
                 var rows = new List<Dictionary<string, string?>>();
                 var nodes = new Dictionary<string, GraphNodeDto>(StringComparer.Ordinal);
                 var edges = new List<GraphEdgeDto>();
 
-                while (await retryReader.ReadAsync(cancellationToken))
+                await using (var retryReader = await retryCommand.ExecuteReaderAsync(cancellationToken))
                 {
-                    var row = new Dictionary<string, string?>(StringComparer.Ordinal);
-                    for (var i = 0; i < retryReader.FieldCount; i++)
+                    while (await retryReader.ReadAsync(cancellationToken))
                     {
-                        var key = retryReader.GetName(i);
-                        var value = GetFieldValueAsString(retryReader, i);
-                        row[key] = value;
-                        AddGraphPrimitives(value, nodes, edges);
-                    }
-                    rows.Add(row);
-                }
-
-                if (nodes.Count == 0)
-                {
-                    var fallback = await TryBuildFallbackGraphAsync(connection, cancellationToken);
-                    if (fallback.Nodes.Count > 0)
-                    {
-                        return new GraphQueryResponse(true, null, rows, fallback.Nodes, fallback.Edges);
+                        var row = new Dictionary<string, string?>(StringComparer.Ordinal);
+                        for (var i = 0; i < retryReader.FieldCount; i++)
+                        {
+                            var key = retryReader.GetName(i);
+                            var value = GetFieldValueAsString(retryReader, i);
+                            row[key] = value;
+                            AddGraphPrimitives(value, nodes, edges);
+                        }
+                        rows.Add(row);
                     }
                 }
 
@@ -313,14 +356,28 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
     public async Task<HybridRetrievalResponse> ExecuteHybridRetrievalAsync(HybridRetrievalRequest request, CancellationToken cancellationToken)
     {
+        var (resolvedMode, modeRationale) = ResolveRetrievalMode(request.Query, request.RetrievalMode);
+        var traversalHops = resolvedMode switch
+        {
+            RetrievalModePath => Math.Clamp(Math.Max(request.MaxHops, 3), 1, MaxTraversalHops),
+            RetrievalModeLight => Math.Clamp(Math.Min(request.MaxHops, 2), 1, MaxTraversalHops),
+            _ => Math.Clamp(request.MaxHops, 1, MaxTraversalHops)
+        };
+        var retrievalOrder = resolvedMode switch
+        {
+            RetrievalModePath => "Entity -> Path (multi-hop) -> Chunk grounding -> LLM",
+            RetrievalModeLight => "Vector + Entity -> Graph expansion -> Hybrid rerank -> LLM",
+            _ => "Entity -> Graph -> Vector -> LLM"
+        };
+
         if (!IsConfigured)
         {
-            return new HybridRetrievalResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", [], [], [], [], string.Empty, "Graph -> Vector -> LLM");
+            return new HybridRetrievalResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", [], [], [], [], string.Empty, retrievalOrder, ResolvedRetrievalMode: resolvedMode, RetrievalModeRationale: modeRationale, ResolvedTraversalHops: traversalHops);
         }
 
         if (string.IsNullOrWhiteSpace(request.Query))
         {
-            return new HybridRetrievalResponse(false, "Query is required.", [], [], [], [], string.Empty, "Graph -> Vector -> LLM");
+            return new HybridRetrievalResponse(false, "Query is required.", [], [], [], [], string.Empty, retrievalOrder, ResolvedRetrievalMode: resolvedMode, RetrievalModeRationale: modeRationale, ResolvedTraversalHops: traversalHops);
         }
 
         var steps = request.IncludeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
@@ -338,6 +395,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
 
         AddStep("question", "User question received", request.Query);
+        AddStep("mode-router", $"Resolved retrieval mode: {resolvedMode}", $"Mode rationale: {modeRationale}\nTraversal hops: {traversalHops}\nRetrieval order: {retrievalOrder}");
 
         var detectedEntities = new List<string>();
         var fallbackEntities = new List<string>();
@@ -455,7 +513,10 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                         clarificationQuestion,
                         rewrittenQuestion,
                         _foundry.AnswerSystemPrompt,
-                        analysisSystemPrompt);
+                        analysisSystemPrompt,
+                        ResolvedRetrievalMode: resolvedMode,
+                        RetrievalModeRationale: modeRationale,
+                        ResolvedTraversalHops: traversalHops);
                 }
 
                 AddStep(
@@ -505,14 +566,13 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             try
             {
                 var expansionTimer = Stopwatch.StartNew();
-                graphEntities = await ExpandEntitiesByGraphAsync(connection, request.GraphName, expansionSeeds, request.MaxHops, cancellationToken);
+                graphEntities = await ExpandEntitiesByGraphAsync(connection, request.GraphName, expansionSeeds, traversalHops, cancellationToken);
                 expansionTimer.Stop();
 
-                var expansionQueries = BuildGraphExpansionQueries(expansionSeeds, request.MaxHops);
                 AddStep(
                     "graph-expansion",
-                    $"Expanded to {graphEntities.Count} graph entities (maxHops={request.MaxHops})",
-                    expansionQueries.Count == 0 ? "No expansion queries generated." : string.Join(Environment.NewLine, expansionQueries),
+                    $"Expanded to {graphEntities.Count} graph entities (maxHops={traversalHops})",
+                    BuildGraphExpansionDetail(request.GraphName, expansionSeeds, traversalHops, graphEntities),
                     (int)expansionTimer.ElapsedMilliseconds);
             }
             catch (Exception ex) when (ex is PostgresException or InvalidOperationException)
@@ -530,8 +590,9 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 : (expansionSeeds.Count > 0 ? expansionSeeds : detectedEntities);
 
             var relationshipTimer = Stopwatch.StartNew();
+            var relationshipLimit = resolvedMode == RetrievalModePath ? request.Limit * 5 : request.Limit * 3;
             var graphRelationships = entityFilter.Count > 0
-                ? await QueryGraphRelationshipsAsync(connection, entityFilter, request.Limit * 3, cancellationToken)
+                ? await QueryGraphRelationshipsAsync(connection, entityFilter, relationshipLimit, cancellationToken)
                 : [];
             relationshipTimer.Stop();
             AddStep(
@@ -539,6 +600,16 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 $"Loaded {graphRelationships.Count} relationship triples with source evidence",
                 BuildGraphRelationshipDetail(entityFilter, graphRelationships),
                 (int)relationshipTimer.ElapsedMilliseconds);
+
+            if (resolvedMode == RetrievalModePath && graphRelationships.Count > 0)
+            {
+                var originalCount = graphRelationships.Count;
+                graphRelationships = SelectPathRelationships(graphRelationships, request.Limit * 4);
+                AddStep(
+                    "path-focus",
+                    $"Path mode prioritized {graphRelationships.Count} of {originalCount} relationships",
+                    BuildPathRelationshipFocusDetail(graphRelationships));
+            }
 
             var embeddingTimer = Stopwatch.StartNew();
             var usedProvidedEmbedding = request.QueryEmbedding is { Length: > 0 };
@@ -562,21 +633,72 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 (int)embeddingTimer.ElapsedMilliseconds);
 
             var vectorTimer = Stopwatch.StartNew();
-            var chunks = entityFilter.Count > 0
-                ? await QueryChunksByEntitiesHybridAsync(connection, entityFilter, rewrittenQuestion, vector, request.Limit, cancellationToken)
-                : [];
-            vectorTimer.Stop();
-            AddStep(
-                "vector-search",
-                $"Hybrid chunk retrieval returned {chunks.Count} chunks (vector + keyword RRF, limit={request.Limit})",
-                BuildHybridChunkSearchDetail(entityFilter, rewrittenQuestion, request.Limit, vector),
-                (int)vectorTimer.ElapsedMilliseconds);
+            List<HybridChunkResultDto> chunks;
+            if (resolvedMode == RetrievalModeLight)
+            {
+                List<HybridChunkResultDto> entityBranchChunks;
+                List<HybridChunkResultDto> globalBranchChunks;
+                if (entityFilter.Count > 0)
+                {
+                    await using var secondaryConnection = await _connectionFactory.OpenAsync(cancellationToken);
+                    var entityBranchTask = QueryChunksByEntitiesHybridAsync(connection, entityFilter, rewrittenQuestion, vector, request.Limit, cancellationToken);
+                    var globalBranchTask = QueryChunksHybridAsync(secondaryConnection, rewrittenQuestion, vector, request.Limit * 2, cancellationToken);
+
+                    await Task.WhenAll(entityBranchTask, globalBranchTask);
+                    entityBranchChunks = entityBranchTask.Result;
+                    globalBranchChunks = globalBranchTask.Result;
+                }
+                else
+                {
+                    entityBranchChunks = [];
+                    globalBranchChunks = await QueryChunksHybridAsync(connection, rewrittenQuestion, vector, request.Limit * 2, cancellationToken);
+                }
+
+                chunks = MergeChunkResults(entityBranchChunks, globalBranchChunks, request.Limit);
+                vectorTimer.Stop();
+                AddStep(
+                    "vector-search",
+                    $"Light mode chunk retrieval merged {chunks.Count} chunks from parallel branches (entity branch: {entityBranchChunks.Count}, global branch: {globalBranchChunks.Count})",
+                    BuildLightModeChunkSearchDetail(entityFilter, rewrittenQuestion, request.Limit, vector, globalBranchExecuted: true),
+                    (int)vectorTimer.ElapsedMilliseconds);
+            }
+            else
+            {
+                chunks = entityFilter.Count > 0
+                    ? await QueryChunksByEntitiesHybridAsync(connection, entityFilter, rewrittenQuestion, vector, request.Limit, cancellationToken)
+                    : [];
+
+                if (resolvedMode == RetrievalModePath && graphRelationships.Count > 0)
+                {
+                    var pathEvidenceChunks = await QueryChunksByRelationshipEvidenceAsync(connection, graphRelationships, request.Limit * 2, cancellationToken);
+                    chunks = MergeChunkResults(pathEvidenceChunks, chunks, request.Limit);
+                    AddStep(
+                        "path-evidence-chunks",
+                        $"Path mode grounded {pathEvidenceChunks.Count} chunks from relationship evidence",
+                        BuildPathEvidenceChunkDetail(graphRelationships, pathEvidenceChunks));
+                }
+
+                vectorTimer.Stop();
+                AddStep(
+                    "vector-search",
+                    $"Hybrid chunk retrieval returned {chunks.Count} chunks (vector + keyword RRF, limit={request.Limit})",
+                    BuildHybridChunkSearchDetail(entityFilter, rewrittenQuestion, request.Limit, vector),
+                    (int)vectorTimer.ElapsedMilliseconds);
+            }
 
             var prompt = BuildPromptContext(entityFilter, graphRelationships, chunks);
+            var chunkSourceBreakdown = BuildChunkSourceBreakdown(chunks);
             AddStep(
                 "prompt-context",
                 $"Prompt context built from {graphRelationships.Count} graph triples and {chunks.Count} chunks",
                 prompt);
+            if (chunkSourceBreakdown.Count > 0)
+            {
+                AddStep(
+                    "chunk-provenance",
+                    "Chunk provenance breakdown",
+                    string.Join(Environment.NewLine, chunkSourceBreakdown.Select(item => $"- {item.Source}: {item.Count} ({item.Percentage.ToString("0.0", CultureInfo.InvariantCulture)}%)")));
+            }
 
             string? answer = null;
             if (request.IncludeAnswer)
@@ -616,21 +738,55 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 matchedEntities,
                 chunks,
                 prompt,
-                "Graph -> Vector -> LLM",
+                retrievalOrder,
                 answer,
                 traceResult,
                 null,
                 rewrittenQuestion,
                 _foundry.AnswerSystemPrompt,
                 analysisSystemPrompt,
-                graphRelationships);
+                graphRelationships,
+                resolvedMode,
+                modeRationale,
+                chunkSourceBreakdown,
+                traversalHops);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Hybrid retrieval pipeline failed.");
             var traceFailure = steps is null ? null : new HybridRetrievalTraceDto(request.Query, steps);
-            return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], [], string.Empty, "Graph -> Vector -> LLM", null, traceFailure, null, rewrittenQuestion, _foundry.AnswerSystemPrompt, analysisSystemPrompt);
+            return new HybridRetrievalResponse(false, ex.Message, detectedEntities, [], [], [], string.Empty, retrievalOrder, null, traceFailure, null, rewrittenQuestion, _foundry.AnswerSystemPrompt, analysisSystemPrompt, null, resolvedMode, modeRationale, null, traversalHops);
         }
+    }
+
+    internal static List<HybridChunkSourceCountDto> BuildChunkSourceBreakdown(IReadOnlyCollection<HybridChunkResultDto> chunks)
+    {
+        if (chunks.Count == 0)
+        {
+            return [];
+        }
+
+        var total = chunks.Count;
+
+        return chunks
+            .GroupBy(chunk => NormalizeChunkSource(chunk.Source), StringComparer.Ordinal)
+            .Select(group => new HybridChunkSourceCountDto(
+                group.Key,
+                group.Count(),
+                Math.Round((group.Count() * 100.0) / total, 1)))
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Source, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string NormalizeChunkSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return "unknown";
+        }
+
+        return source.Trim().ToLowerInvariant();
     }
 
     public async Task<CommunityBuildResponse> BuildCommunitiesAsync(
@@ -1425,11 +1581,18 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return items.Count > maxItems ? $"{text} (+{items.Count - maxItems} more)" : text;
     }
 
-    private static List<string> BuildGraphExpansionQueries(IReadOnlyCollection<string> seedEntities, int hops)
+    private static string BuildGraphExpansionDetail(string graphName, IReadOnlyCollection<string> seedEntities, int hops, IReadOnlyCollection<string> expandedEntities)
     {
         var maxHops = Math.Clamp(hops, 1, MaxTraversalHops);
-        var queries = new List<string>();
+        const string parameterizedSql = "SELECT name::text AS name\n" +
+                        "FROM ag_catalog.cypher(@graph_name, $cypher$\n" +
+                        "    MATCH (a)-[*1..@max_hops]-(b)\n" +
+                        "    WHERE a.name IS NOT NULL AND toString(a.name) = \"@seed_name\"\n" +
+                        "    RETURN DISTINCT b.name AS name\n" +
+                        "    LIMIT 50\n" +
+                                        "$cypher$) AS (name ag_catalog.agtype);";
 
+        var executableQueries = new List<string>();
         foreach (var seed in seedEntities)
         {
             if (!Regex.IsMatch(seed, @"^[a-zA-Z0-9\s._-]{1,80}$"))
@@ -1437,10 +1600,36 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 continue;
             }
 
-            queries.Add($"MATCH (a)-[*1..{maxHops}]-(b) WHERE a.name = \"{EscapeCypherLiteral(seed)}\" RETURN DISTINCT b.name AS name LIMIT 50");
+            var cypher = $"MATCH (a)-[*1..{maxHops}]-(b) WHERE a.name IS NOT NULL AND toString(a.name) = \"{EscapeCypherLiteral(seed)}\" RETURN DISTINCT b.name AS name LIMIT 50";
+            var sql = BuildCypherSql(graphName, cypher, "name ag_catalog.agtype");
+            executableQueries.Add($"-- seed: {seed}\n{sql}");
         }
 
-        return queries;
+        if (executableQueries.Count == 0)
+        {
+            return "No expansion queries generated (seed entities failed validation).";
+        }
+
+        var seedSet = new HashSet<string>(seedEntities, StringComparer.OrdinalIgnoreCase);
+        var newEntities = expandedEntities.Where(entity => !seedSet.Contains(entity)).ToList();
+        var expansionSummary = newEntities.Count == 0
+            ? "No new neighbor entities were found for these seeds within the configured hop limit."
+            : $"New neighbors discovered: {FormatEntityList(newEntities, 20)}";
+
+        return string.Join(Environment.NewLine,
+        [
+            "Purpose: expand each seed entity by traversing graph neighbors up to the selected hop count.",
+            string.Empty,
+            "Parameterized SQL:",
+            parameterizedSql,
+            string.Empty,
+            "Executable SQL:",
+            string.Join(Environment.NewLine + Environment.NewLine, executableQueries),
+            string.Empty,
+            $"Seed entities ({seedEntities.Count}): {FormatEntityList(seedEntities, 20)}",
+            $"Expanded entities ({expandedEntities.Count}): {FormatEntityList(expandedEntities, 20)}",
+            expansionSummary
+        ]);
     }
 
     private static string ReplaceAmbiguousPronouns(string question, string clarification)
@@ -1543,6 +1732,66 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             .Replace("@limit", constrainedLimit.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
         return $"Parameterized SQL:\n{parameterizedSql}\n\nExecutable SQL:\n{executableSql}";
+    }
+
+    private static string BuildGlobalHybridChunkSearchDetail(string query, int limit, float[] queryEmbedding)
+    {
+        const string parameterizedSql = "WITH semantic_search AS (\n" +
+                                        "    SELECT id, RANK() OVER (ORDER BY embedding <=> CAST(@query_vector AS vector)) AS vector_rank, embedding <=> CAST(@query_vector AS vector) AS distance\n" +
+                                        "    FROM chunks\n" +
+                                        "    WHERE embedding IS NOT NULL\n" +
+                                        "    ORDER BY embedding <=> CAST(@query_vector AS vector)\n" +
+                                        "    LIMIT 50\n" +
+                                        "),\n" +
+                                        "keyword_search AS (\n" +
+                                        "    SELECT id, RANK() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC) AS keyword_rank\n" +
+                                        "    FROM chunks\n" +
+                                        "    WHERE to_tsvector('english', content) @@ plainto_tsquery('english', @query)\n" +
+                                        "    ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC\n" +
+                                        "    LIMIT 50\n" +
+                                        "),\n" +
+                                        "ranked AS (\n" +
+                                        "    SELECT COALESCE(s.id, k.id) AS id, s.distance, s.vector_rank, k.keyword_rank,\n" +
+                                        "           COALESCE(1.0 / (@rrf_k + s.vector_rank), 0.0) + COALESCE(1.0 / (@rrf_k + k.keyword_rank), 0.0) AS score\n" +
+                                        "    FROM semantic_search s\n" +
+                                        "    FULL OUTER JOIN keyword_search k ON k.id = s.id\n" +
+                                        ")\n" +
+                                        "SELECT c.id, c.document_id, c.chunk_index, c.content, r.distance, r.vector_rank, r.keyword_rank, r.score\n" +
+                                        "FROM ranked r\n" +
+                                        "JOIN chunks c ON c.id = r.id\n" +
+                                        "ORDER BY r.score DESC\n" +
+                                        "LIMIT @limit;";
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
+        var safeQuery = EscapeSqlLiteral(query);
+        var executableSql = parameterizedSql
+            .Replace("CAST(@query_vector AS vector)", "'" + vectorLiteral + "'::vector", StringComparison.Ordinal)
+            .Replace("@query", "'" + safeQuery + "'", StringComparison.Ordinal)
+            .Replace("@rrf_k", "60", StringComparison.Ordinal)
+            .Replace("@limit", constrainedLimit.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+        return $"Parameterized SQL:\n{parameterizedSql}\n\nExecutable SQL:\n{executableSql}";
+    }
+
+    private static string BuildLightModeChunkSearchDetail(IReadOnlyCollection<string> entityFilter, string query, int limit, float[] queryEmbedding, bool globalBranchExecuted)
+    {
+        var entityBranch = entityFilter.Count == 0
+            ? "Entity-scoped branch skipped because no entity filter is available."
+            : BuildHybridChunkSearchDetail(entityFilter, query, limit, queryEmbedding);
+        var globalBranch = globalBranchExecuted
+            ? BuildGlobalHybridChunkSearchDetail(query, limit * 2, queryEmbedding)
+            : "Global branch not executed.";
+
+        return string.Join(Environment.NewLine,
+        [
+            "Light mode strategy: run entity-scoped and global retrieval in parallel, then merge and rerank.",
+            string.Empty,
+            "Entity branch:",
+            entityBranch,
+            string.Empty,
+            "Global branch:",
+            globalBranch
+        ]);
     }
 
     private static string BuildAnalysisUserPrompt(string question, string? clarification)
@@ -1931,8 +2180,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 continue;
             }
 
-            var cypher = $"MATCH (a)-[*1..{maxHops}]-(b) WHERE a.name = \"{EscapeCypherLiteral(seed)}\" RETURN DISTINCT b.name AS name LIMIT 50";
-            var sql = BuildCypherSql(graphName, cypher, "name agtype");
+            var cypher = $"MATCH (a)-[*1..{maxHops}]-(b) WHERE a.name IS NOT NULL AND toString(a.name) = \"{EscapeCypherLiteral(seed)}\" RETURN DISTINCT b.name AS name LIMIT 50";
+            var sql = BuildCypherSql(graphName, cypher, "name ag_catalog.agtype");
 
             await using var command = new NpgsqlCommand(sql, connection);
 
@@ -2004,7 +2253,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         var returnMatch = Regex.Matches(cypherQuery, @"\bRETURN\b", RegexOptions.IgnoreCase);
         if (returnMatch.Count == 0)
         {
-            return "result agtype";
+            return "result ag_catalog.agtype";
         }
 
         var lastReturn = returnMatch[^1];
@@ -2020,7 +2269,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         var items = SplitReturnItems(body);
         if (items.Count <= 1)
         {
-            return "result agtype";
+            return "result ag_catalog.agtype";
         }
 
         var columns = Enumerable.Range(1, items.Count).Select(i => $"col{i} agtype");
@@ -2088,7 +2337,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             return (cypherQuery, columnDefinition);
         }
 
-        return (rewritten, "result agtype");
+        return (rewritten, "result ag_catalog.agtype");
     }
 
     private static bool TryRewriteReturnAsMap(string cypherQuery, out string rewritten)
@@ -2695,11 +2944,277 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             int? vectorRank = reader.IsDBNull(5) ? null : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture);
             int? keywordRank = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6), CultureInfo.InvariantCulture);
             double? score = reader.IsDBNull(7) ? null : Convert.ToDouble(reader.GetValue(7), CultureInfo.InvariantCulture);
-            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance, vectorRank, keywordRank, score));
+            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance, vectorRank, keywordRank, score, "entity-hybrid"));
         }
 
         await reader.CloseAsync();
         return chunks;
+    }
+
+    private static async Task<List<HybridChunkResultDto>> QueryChunksHybridAsync(
+        NpgsqlConnection connection,
+        string query,
+        float[] queryEmbedding,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        var vectorLiteral = ToVectorLiteral(queryEmbedding, 1536);
+        const string sql = """
+                           WITH semantic_search AS (
+                               SELECT id,
+                                      RANK() OVER (ORDER BY embedding <=> CAST(@query_vector AS vector)) AS vector_rank,
+                                      embedding <=> CAST(@query_vector AS vector) AS distance
+                               FROM chunks
+                               WHERE embedding IS NOT NULL
+                               ORDER BY embedding <=> CAST(@query_vector AS vector)
+                               LIMIT 50
+                           ),
+                           keyword_search AS (
+                               SELECT id,
+                                      RANK() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC) AS keyword_rank
+                               FROM chunks
+                               WHERE to_tsvector('english', content) @@ plainto_tsquery('english', @query)
+                               ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', @query)) DESC
+                               LIMIT 50
+                           ),
+                           ranked AS (
+                               SELECT COALESCE(s.id, k.id) AS id,
+                                      s.distance,
+                                      s.vector_rank,
+                                      k.keyword_rank,
+                                      COALESCE(1.0 / (@rrf_k + s.vector_rank), 0.0) + COALESCE(1.0 / (@rrf_k + k.keyword_rank), 0.0) AS score
+                               FROM semantic_search s
+                               FULL OUTER JOIN keyword_search k ON k.id = s.id
+                           )
+                           SELECT c.id,
+                                  c.document_id,
+                                  c.chunk_index,
+                                  c.content,
+                                  r.distance,
+                                  r.vector_rank,
+                                  r.keyword_rank,
+                                  r.score
+                           FROM ranked r
+                           JOIN chunks c ON c.id = r.id
+                           ORDER BY r.score DESC
+                           LIMIT @limit;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("query_vector", vectorLiteral);
+        command.Parameters.AddWithValue("query", query);
+        command.Parameters.AddWithValue("rrf_k", 60);
+        command.Parameters.AddWithValue("limit", constrainedLimit);
+
+        var chunks = new List<HybridChunkResultDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetInt64(0);
+            var documentId = reader.GetInt64(1);
+            var chunkIndex = reader.GetInt32(2);
+            var content = reader.GetString(3);
+            double? distance = reader.IsDBNull(4) ? null : Convert.ToDouble(reader.GetValue(4), CultureInfo.InvariantCulture);
+            int? vectorRank = reader.IsDBNull(5) ? null : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture);
+            int? keywordRank = reader.IsDBNull(6) ? null : Convert.ToInt32(reader.GetValue(6), CultureInfo.InvariantCulture);
+            double? score = reader.IsDBNull(7) ? null : Convert.ToDouble(reader.GetValue(7), CultureInfo.InvariantCulture);
+            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, distance, vectorRank, keywordRank, score, "global-hybrid"));
+        }
+
+        await reader.CloseAsync();
+        return chunks;
+    }
+
+    private static List<HybridChunkResultDto> MergeChunkResults(
+        IReadOnlyCollection<HybridChunkResultDto> primary,
+        IReadOnlyCollection<HybridChunkResultDto> fallback,
+        int limit)
+    {
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        var merged = new Dictionary<long, HybridChunkResultDto>();
+
+        foreach (var chunk in primary)
+        {
+            merged[chunk.Id] = chunk;
+        }
+
+        foreach (var chunk in fallback)
+        {
+            if (!merged.TryGetValue(chunk.Id, out var existing))
+            {
+                merged[chunk.Id] = chunk;
+                continue;
+            }
+
+            var existingScore = existing.Score ?? 0d;
+            var candidateScore = chunk.Score ?? 0d;
+            if (candidateScore > existingScore)
+            {
+                merged[chunk.Id] = chunk;
+            }
+        }
+
+        return merged.Values
+            .OrderByDescending(c => c.Score ?? double.MinValue)
+            .ThenBy(c => c.DocumentId)
+            .ThenBy(c => c.ChunkIndex)
+            .Take(constrainedLimit)
+            .ToList();
+    }
+
+    private static List<HybridGraphRelationshipDto> SelectPathRelationships(
+        IReadOnlyCollection<HybridGraphRelationshipDto> relationships,
+        int limit)
+    {
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        return relationships
+            .OrderBy(r => string.Equals(r.Relationship, "CO_MENTIONED_WITH", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenByDescending(r => !string.IsNullOrWhiteSpace(r.SourceText))
+            .ThenByDescending(r => r.DocumentId ?? long.MinValue)
+            .ThenByDescending(r => r.ChunkIndex ?? int.MinValue)
+            .Take(constrainedLimit)
+            .ToList();
+    }
+
+    private static async Task<List<HybridChunkResultDto>> QueryChunksByRelationshipEvidenceAsync(
+        NpgsqlConnection connection,
+        IReadOnlyCollection<HybridGraphRelationshipDto> relationships,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (relationships.Count == 0)
+        {
+            return [];
+        }
+
+        var constrainedLimit = Math.Clamp(limit, 1, MaxVectorResultLimit);
+        var evidenceStats = relationships
+            .Where(r => r.DocumentId.HasValue && r.ChunkIndex.HasValue)
+            .GroupBy(r => (DocumentId: r.DocumentId!.Value, ChunkIndex: r.ChunkIndex!.Value))
+            .Select(group => new
+            {
+                group.Key.DocumentId,
+                group.Key.ChunkIndex,
+                TypedCount = group.Count(item => !string.Equals(item.Relationship, "CO_MENTIONED_WITH", StringComparison.OrdinalIgnoreCase)),
+                CoMentionCount = group.Count(item => string.Equals(item.Relationship, "CO_MENTIONED_WITH", StringComparison.OrdinalIgnoreCase))
+            })
+            .OrderByDescending(item => item.TypedCount)
+            .ThenByDescending(item => item.CoMentionCount)
+            .ThenByDescending(item => item.DocumentId)
+            .ThenBy(item => item.ChunkIndex)
+            .Take(constrainedLimit * 2)
+            .ToList();
+
+        if (evidenceStats.Count == 0)
+        {
+            return [];
+        }
+
+        var documentIds = evidenceStats.Select(k => k.DocumentId).Distinct().ToArray();
+        var statMap = evidenceStats.ToDictionary(
+            k => $"{k.DocumentId}:{k.ChunkIndex}",
+            k => (k.TypedCount, k.CoMentionCount),
+            StringComparer.Ordinal);
+        var recencyByDocument = documentIds
+            .OrderByDescending(id => id)
+            .Select((id, index) => (id, index))
+            .ToDictionary(item => item.id, item => item.index, EqualityComparer<long>.Default);
+
+        const string sql = """
+                           SELECT id, document_id, chunk_index, content
+                           FROM chunks
+                           WHERE document_id = ANY(@document_ids)
+                           ORDER BY document_id DESC, chunk_index ASC
+                           LIMIT @limit;
+                           """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("document_ids", documentIds);
+        command.Parameters.AddWithValue("limit", constrainedLimit * 4);
+
+        var chunks = new List<HybridChunkResultDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetInt64(0);
+            var documentId = reader.GetInt64(1);
+            var chunkIndex = reader.GetInt32(2);
+            var key = $"{documentId}:{chunkIndex}";
+            if (!statMap.TryGetValue(key, out var stats))
+            {
+                continue;
+            }
+
+            var content = reader.GetString(3);
+            var recencyRank = recencyByDocument.TryGetValue(documentId, out var rank) ? rank : recencyByDocument.Count;
+            var recencyBoost = Math.Max(0d, 0.4d - (recencyRank * 0.05d));
+            // Weight typed relationships heavily, co-mentions lightly, and apply a small recency prior.
+            var evidenceScore = 1.0d + (stats.TypedCount * 0.7d) + (stats.CoMentionCount * 0.2d) + recencyBoost;
+            chunks.Add(new HybridChunkResultDto(id, documentId, chunkIndex, content, null, null, null, evidenceScore, "path-evidence"));
+        }
+
+        await reader.CloseAsync();
+        return chunks
+            .OrderByDescending(c => c.Score ?? double.MinValue)
+            .ThenByDescending(c => c.DocumentId)
+            .ThenBy(c => c.ChunkIndex)
+            .Take(constrainedLimit)
+            .ToList();
+    }
+
+    private static string BuildPathEvidenceChunkDetail(
+        IReadOnlyCollection<HybridGraphRelationshipDto> relationships,
+        IReadOnlyCollection<HybridChunkResultDto> chunks)
+    {
+        var evidencePairs = relationships
+            .Where(r => r.DocumentId.HasValue && r.ChunkIndex.HasValue)
+            .Select(r => $"doc:{r.DocumentId!.Value} chunk:{r.ChunkIndex!.Value}")
+            .Distinct()
+            .Take(40)
+            .ToList();
+
+        var chunkLines = chunks
+            .Take(30)
+            .Select(c => $"- [doc:{c.DocumentId} chunk:{c.ChunkIndex} score:{c.Score?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a"}] {TruncateTraceText(c.Content, 180)}")
+            .ToList();
+
+        return string.Join(Environment.NewLine,
+        [
+            "Path mode grounding: seed chunk retrieval using evidence locations referenced by selected relationship triples.",
+            "Scoring: base 1.0 + (typed relationship count * 0.7) + (co-mention count * 0.2) + recency boost.",
+            string.Empty,
+            "Evidence locations:",
+            evidencePairs.Count == 0 ? "(none)" : string.Join(Environment.NewLine, evidencePairs),
+            string.Empty,
+            "Matched chunks:",
+            chunkLines.Count == 0 ? "(none)" : string.Join(Environment.NewLine, chunkLines)
+        ]);
+    }
+
+    private static string BuildPathRelationshipFocusDetail(IReadOnlyCollection<HybridGraphRelationshipDto> relationships)
+    {
+        if (relationships.Count == 0)
+        {
+            return "No relationships available after path prioritization.";
+        }
+
+        var lines = relationships
+            .Take(40)
+            .Select(r => $"- {r.Source} -[{r.Relationship}]-> {r.Target} (doc:{r.DocumentId?.ToString(CultureInfo.InvariantCulture) ?? "n/a"} chunk:{r.ChunkIndex?.ToString(CultureInfo.InvariantCulture) ?? "n/a"})")
+            .ToList();
+        if (relationships.Count > lines.Count)
+        {
+            lines.Add($"... truncated {relationships.Count - lines.Count} additional relationships");
+        }
+
+        return string.Join(Environment.NewLine,
+        [
+            "Path mode prioritization: typed relationships first, then co-mentions, with recency preference.",
+            string.Empty,
+            "Selected relationships:",
+            string.Join(Environment.NewLine, lines)
+        ]);
     }
 
     private static string BuildPromptContext(

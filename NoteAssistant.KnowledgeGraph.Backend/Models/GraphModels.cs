@@ -122,7 +122,8 @@ public sealed record HybridRetrievalRequest(
     bool IncludeTrace = false,
     bool IncludeAnswer = false,
     int ClarificationAttempts = 0,
-    string? ClarificationResponse = null);
+    string? ClarificationResponse = null,
+    string? RetrievalMode = null);
 
 public sealed record CommunityBuildResponse(
     bool Success,
@@ -249,7 +250,10 @@ public sealed record HybridChunkResultDto(
     double? Distance,
     int? VectorRank = null,
     int? KeywordRank = null,
-    double? Score = null);
+    double? Score = null,
+    string? Source = null);
+
+public sealed record HybridChunkSourceCountDto(string Source, int Count, double Percentage);
 
 public sealed record HybridGraphRelationshipDto(
     string Source,
@@ -285,4 +289,8 @@ public sealed record HybridRetrievalResponse(
     string? RewrittenQuestion = null,
     string? SystemPrompt = null,
     string? AnalysisSystemPrompt = null,
-    IReadOnlyList<HybridGraphRelationshipDto>? GraphRelationships = null);
+    IReadOnlyList<HybridGraphRelationshipDto>? GraphRelationships = null,
+    string? ResolvedRetrievalMode = null,
+    string? RetrievalModeRationale = null,
+    IReadOnlyList<HybridChunkSourceCountDto>? ChunkSourceBreakdown = null,
+    int? ResolvedTraversalHops = null);

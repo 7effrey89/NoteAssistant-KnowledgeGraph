@@ -229,7 +229,18 @@ async function refreshStatus() {
   setStatus(el.backendStatus, "checking", "Checking backend");
   try {
     const health = await fetch(`${backendBaseUrl}/api/health`);
-    setStatus(el.backendStatus, health.ok ? "online" : "warning", health.ok ? "Backend online" : `Backend ${health.status}`);
+    if (!health.ok) {
+      setStatus(el.backendStatus, "warning", `Backend warning (${health.status})`);
+    } else {
+      const ageHealth = await fetch(`${backendBaseUrl}/api/health/age`);
+      if (ageHealth.ok) {
+        setStatus(el.backendStatus, "online", "Backend + PostgreSQL/AGE online");
+      } else {
+        const payload = await ageHealth.json().catch(() => null);
+        const detail = payload?.detail || payload?.error || `status ${ageHealth.status}`;
+        setStatus(el.backendStatus, "warning", `Backend online; PostgreSQL/AGE unavailable: ${detail}`);
+      }
+    }
   } catch (error) {
     setStatus(el.backendStatus, "offline", `Backend offline: ${error.message}`);
   }
