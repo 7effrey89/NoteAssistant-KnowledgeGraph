@@ -728,12 +728,7 @@ function nodeReducer(node, data) {
   const isDeselectedRelated = isNodeDeselectedFromNeighborhood(node) && !isSelected;
   const isHighlightedNeighbor = isNeighbor && !isDeselectedRelated;
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
-  const hasSearch = Boolean(state.filters.search);
   const baseColor = data.color || palette[0];
-  if (hasSearch && !matchesSearch) {
-    reduced.color = colorWithAlpha(baseColor, 0.14);
-    reduced.label = "";
-  }
   if (state.settings.highlightNeighborhood && hasAnchors && !isHighlightedNeighbor) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
@@ -749,13 +744,13 @@ function nodeReducer(node, data) {
     reduced.forceLabel = true;
     reduced.highlighted = true;
   }
-  if (isHovered && !isDeselectedRelated && (!hasSearch || matchesSearch)) {
+  if (isHovered && !isDeselectedRelated) {
     reduced.label = data.label;
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
-  } else if (isSelected && (!hasSearch || matchesSearch)) {
+  } else if (isSelected) {
     reduced.color = baseColor;
     reduced.label = data.label;
     reduced.highlighted = true;
@@ -786,9 +781,6 @@ function edgeReducer(edge, data) {
   const anchors = getActiveAnchorNodes();
   const hasAnchors = anchors.length > 0;
   const activeLegendLabel = getActiveLegendLabel();
-  const hasSearch = Boolean(state.filters.search);
-  const sourceMatchesSearch = hasSearch && nodeMatchesSearch(source, state.graph.getNodeAttributes(source), state.filters.search);
-  const targetMatchesSearch = hasSearch && nodeMatchesSearch(target, state.graph.getNodeAttributes(target), state.filters.search);
   const touchesDeselectedRelated = isNodeDeselectedFromNeighborhood(source) || isNodeDeselectedFromNeighborhood(target);
   const touchesAnchor = hasAnchors && anchors.some(anchor => source === anchor || target === anchor);
   const matchesLegendEndpoint = activeLegendLabel
@@ -796,9 +788,6 @@ function edgeReducer(edge, data) {
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
-  } else if (hasSearch && !sourceMatchesSearch && !targetMatchesSearch) {
-    reduced.color = "#e2e8f0";
-    reduced.label = "";
   } else if (state.settings.highlightNeighborhood && hasAnchors && (!touchesAnchor || touchesDeselectedRelated)) {
     reduced.color = "#e2e8f0";
     reduced.label = "";
