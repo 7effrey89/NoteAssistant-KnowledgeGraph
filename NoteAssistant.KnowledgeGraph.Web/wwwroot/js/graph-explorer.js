@@ -22,6 +22,7 @@ const state = {
   colorByLabel: new Map(),
   selectedNode: null,
   selectedNodes: new Set(),
+  deselectedRelatedNodes: new Set(),
   selectedEdge: null,
   hoveredNode: null,
   hoveredLegendLabel: null,
@@ -350,6 +351,7 @@ function loadGraph(nodes, edges) {
   state.colorByLabel = buildColorMap(state.rawNodes);
   state.selectedNode = null;
   state.selectedNodes = new Set();
+  state.deselectedRelatedNodes = new Set();
   state.selectedEdge = null;
   state.hoveredLegendLabel = null;
   state.selectedLegendLabel = null;
@@ -618,6 +620,7 @@ function registerGraphEvents() {
     state.selectedEdge = edge;
     state.selectedNode = null;
     state.selectedNodes.clear();
+    state.deselectedRelatedNodes.clear();
     state.selectedLegendLabel = null;
     renderInspector({ type: "edge", id: edge });
     updateLegendActiveState();
@@ -627,6 +630,7 @@ function registerGraphEvents() {
   renderer.on("clickStage", () => {
     state.selectedNode = null;
     state.selectedNodes.clear();
+    state.deselectedRelatedNodes.clear();
     state.selectedEdge = null;
     state.selectedLegendLabel = null;
     renderInspector(null);
@@ -656,6 +660,7 @@ function enableNodeDragging(renderer) {
     if (getNodeSelectionMode(event) === "replace") {
       state.selectedNode = event.node;
       state.selectedNodes = new Set([event.node]);
+      state.deselectedRelatedNodes.clear();
       state.selectedEdge = null;
       renderInspector({ type: "node", id: draggedNode });
     }
@@ -716,9 +721,11 @@ function nodeReducer(node, data) {
   const anchors = getActiveAnchorNodes();
   const hasAnchors = anchors.length > 0;
   const isNeighbor = hasAnchors && anchors.some(anchor => anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
+  const isDeselectedRelated = isNodeDeselectedFromNeighborhood(node) && !isSelected;
+  const isHighlightedNeighbor = isNeighbor && !isDeselectedRelated;
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
   const baseColor = data.color || palette[0];
-  if (state.settings.highlightNeighborhood && hasAnchors && !isNeighbor) {
+  if (state.settings.highlightNeighborhood && hasAnchors && !isHighlightedNeighbor) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
@@ -732,13 +739,14 @@ function nodeReducer(node, data) {
     reduced.forceLabel = true;
     reduced.highlighted = true;
   }
-  if (isHovered) {
+  if (isHovered && !isDeselectedRelated) {
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   } else if (isSelected) {
     reduced.color = baseColor;
+    reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
@@ -765,15 +773,17 @@ function edgeReducer(edge, data) {
   const anchors = getActiveAnchorNodes();
   const hasAnchors = anchors.length > 0;
   const activeLegendLabel = getActiveLegendLabel();
+  const touchesDeselectedRelated = isNodeDeselectedFromNeighborhood(source) || isNodeDeselectedFromNeighborhood(target);
+  const touchesAnchor = hasAnchors && anchors.some(anchor => source === anchor || target === anchor);
   const matchesLegendEndpoint = activeLegendLabel
     && (state.graph.getNodeAttribute(source, "kgLabel") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgLabel") === activeLegendLabel);
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
-  } else if (state.settings.highlightNeighborhood && hasAnchors && !anchors.some(anchor => source === anchor || target === anchor)) {
+  } else if (state.settings.highlightNeighborhood && hasAnchors && (!touchesAnchor || touchesDeselectedRelated)) {
     reduced.color = "#e2e8f0";
     reduced.label = "";
-  } else if (hasAnchors && anchors.some(anchor => source === anchor || target === anchor)) {
+  } else if (touchesAnchor) {
     reduced.color = "#2563eb";
     reduced.size = 2.6;
   } else if (state.settings.highlightNeighborhood && activeLegendLabel && !matchesLegendEndpoint) {
@@ -1123,6 +1133,10 @@ function isNodeSelected(node) {
   return state.selectedNodes?.has(node) || state.selectedNode === node;
 }
 
+function isNodeDeselectedFromNeighborhood(node) {
+  return Boolean(state.deselectedRelatedNodes?.has(node));
+}
+
 function getSelectedNodeIds() {
   const selected = Array.from(state.selectedNodes || []).filter(node => state.graph?.hasNode(node));
   if (state.selectedNode && state.graph?.hasNode(state.selectedNode) && !selected.includes(state.selectedNode)) {
@@ -1132,8 +1146,11 @@ function getSelectedNodeIds() {
 }
 
 function getActiveAnchorNodes() {
-  if (state.hoveredNode && state.graph?.hasNode(state.hoveredNode)) return [state.hoveredNode];
-  return getSelectedNodeIds();
+  const selected = getSelectedNodeIds();
+  if (state.hoveredNode && state.graph?.hasNode(state.hoveredNode) && (!isNodeDeselectedFromNeighborhood(state.hoveredNode) || !selected.length)) {
+    return [state.hoveredNode];
+  }
+  return selected;
 }
 
 function selectNode(node, options = {}) {
@@ -1141,6 +1158,7 @@ function selectNode(node, options = {}) {
   clearInspectorHoverState();
   const mode = options.mode || (options.additive ? "add" : "replace");
   if (mode === "add") {
+    state.deselectedRelatedNodes.delete(node);
     if (!state.selectedNodes.size && state.selectedNode && state.graph.hasNode(state.selectedNode)) {
       state.selectedNodes.add(state.selectedNode);
     }
@@ -1153,9 +1171,13 @@ function selectNode(node, options = {}) {
       state.selectedNodes.add(state.selectedNode);
     }
     state.selectedNodes.delete(node);
+    if (getSelectedNodeIds().length || state.graph.neighbors(node).some(neighbor => isNodeSelected(neighbor))) {
+      state.deselectedRelatedNodes.add(node);
+    }
     state.selectedNode = state.selectedNode === node ? Array.from(state.selectedNodes).at(-1) || null : state.selectedNode;
   } else {
     state.selectedNodes = new Set([node]);
+    state.deselectedRelatedNodes.clear();
     state.selectedNode = node;
   }
   state.selectedEdge = null;
@@ -1236,6 +1258,7 @@ function createGraphHistorySnapshot() {
   return {
     selectedNode: state.selectedNode,
     selectedNodes: getSelectedNodeIds(),
+    deselectedRelatedNodes: Array.from(state.deselectedRelatedNodes || []).filter(node => state.graph?.hasNode(node)),
     selectedEdge: state.selectedEdge,
     selectedLegendLabel: state.selectedLegendLabel,
     camera: {
@@ -1258,6 +1281,7 @@ function restoreGraphHistory(snapshot) {
   if (!snapshot || !state.renderer) return;
   state.isRestoringHistory = true;
   state.selectedNodes = new Set((snapshot.selectedNodes || []).filter(node => state.graph?.hasNode(node)));
+  state.deselectedRelatedNodes = new Set((snapshot.deselectedRelatedNodes || []).filter(node => state.graph?.hasNode(node)));
   state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : Array.from(state.selectedNodes).at(-1) || null;
   if (state.selectedNode) state.selectedNodes.add(state.selectedNode);
   state.selectedEdge = snapshot.selectedEdge && state.graph?.hasEdge(snapshot.selectedEdge) ? snapshot.selectedEdge : null;
@@ -1285,6 +1309,7 @@ function updateHistoryButtons() {
 function sameHistorySnapshot(left, right) {
   return left.selectedNode === right.selectedNode
     && sameStringArray(left.selectedNodes || [], right.selectedNodes || [])
+    && sameStringArray(left.deselectedRelatedNodes || [], right.deselectedRelatedNodes || [])
     && left.selectedEdge === right.selectedEdge
     && (left.selectedLegendLabel || null) === (right.selectedLegendLabel || null)
     && left.camera.x === right.camera.x
@@ -1686,6 +1711,7 @@ function toggleLegendSelection(label) {
   state.selectedLegendLabel = state.selectedLegendLabel === label ? null : label;
   state.selectedNode = null;
   state.selectedNodes.clear();
+  state.deselectedRelatedNodes.clear();
   state.selectedEdge = null;
   renderInspector(null);
   updateLegendActiveState();
