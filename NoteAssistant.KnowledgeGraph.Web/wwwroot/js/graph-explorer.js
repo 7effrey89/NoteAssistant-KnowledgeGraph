@@ -21,6 +21,7 @@ const state = {
   degreeById: new Map(),
   colorByLabel: new Map(),
   selectedNode: null,
+  selectedNodes: new Set(),
   selectedEdge: null,
   hoveredNode: null,
   hoveredLegendLabel: null,
@@ -37,6 +38,8 @@ const state = {
   historyIndex: -1,
   isRestoringHistory: false,
   isQueryRunning: false,
+  isShiftKeyDown: false,
+  isCtrlKeyDown: false,
   latestQueryRequestId: 0,
   nodeDetailsCache: new Map(),
   latestNodeDetailsRequestId: 0
@@ -145,6 +148,21 @@ document.addEventListener("click", event => {
   [el.nodeTypeFilter, el.edgeTypeFilter].forEach(dropdown => {
     if (dropdown?.open && !dropdown.contains(event.target)) dropdown.open = false;
   });
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Shift") state.isShiftKeyDown = true;
+  if (event.key === "Control") state.isCtrlKeyDown = true;
+  updateSelectionCursorState();
+});
+document.addEventListener("keyup", event => {
+  if (event.key === "Shift") state.isShiftKeyDown = false;
+  if (event.key === "Control") state.isCtrlKeyDown = false;
+  updateSelectionCursorState();
+});
+window.addEventListener("blur", () => {
+  state.isShiftKeyDown = false;
+  state.isCtrlKeyDown = false;
+  updateSelectionCursorState();
 });
 initInspectorResize();
 autosizeQueryInput();
@@ -331,6 +349,7 @@ function loadGraph(nodes, edges) {
   state.degreeById = calculateDegrees(state.rawNodes, state.rawEdges);
   state.colorByLabel = buildColorMap(state.rawNodes);
   state.selectedNode = null;
+  state.selectedNodes = new Set();
   state.selectedEdge = null;
   state.hoveredLegendLabel = null;
   state.selectedLegendLabel = null;
@@ -592,12 +611,13 @@ function registerGraphEvents() {
   const renderer = state.renderer;
   if (!renderer) return;
 
-  renderer.on("clickNode", ({ node }) => {
-    selectNode(node, { center: false });
+  renderer.on("clickNode", event => {
+    selectNode(event.node, { center: false, mode: getNodeSelectionMode(event) });
   });
   renderer.on("clickEdge", ({ edge }) => {
     state.selectedEdge = edge;
     state.selectedNode = null;
+    state.selectedNodes.clear();
     state.selectedLegendLabel = null;
     renderInspector({ type: "edge", id: edge });
     updateLegendActiveState();
@@ -606,6 +626,7 @@ function registerGraphEvents() {
   });
   renderer.on("clickStage", () => {
     state.selectedNode = null;
+    state.selectedNodes.clear();
     state.selectedEdge = null;
     state.selectedLegendLabel = null;
     renderInspector(null);
@@ -632,11 +653,14 @@ function enableNodeDragging(renderer) {
   renderer.on("downNode", event => {
     isDragging = true;
     draggedNode = event.node;
-    state.selectedNode = event.node;
-    state.selectedEdge = null;
+    if (getNodeSelectionMode(event) === "replace") {
+      state.selectedNode = event.node;
+      state.selectedNodes = new Set([event.node]);
+      state.selectedEdge = null;
+      renderInspector({ type: "node", id: draggedNode });
+    }
     el.sigmaContainer.classList.add("kg-dragging");
     renderer.getGraph().setNodeAttribute(draggedNode, "highlighted", true);
-    renderInspector({ type: "node", id: draggedNode });
   });
   renderer.getMouseCaptor().on("mousemovebody", event => {
     if (!isDragging || !draggedNode) return;
@@ -685,19 +709,20 @@ function nodeReducer(node, data) {
     reduced.hidden = true;
     return reduced;
   }
-  const isSelected = state.selectedNode === node;
+  const isSelected = isNodeSelected(node);
   const isHovered = state.hoveredNode === node;
   const activeLegendLabel = getActiveLegendLabel();
   const matchesLegendHighlight = activeLegendLabel && data.kgLabel === activeLegendLabel;
-  const anchor = state.hoveredNode || state.selectedNode;
-  const isNeighbor = anchor && (anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
+  const anchors = getActiveAnchorNodes();
+  const hasAnchors = anchors.length > 0;
+  const isNeighbor = hasAnchors && anchors.some(anchor => anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
   const baseColor = data.color || palette[0];
-  if (state.settings.highlightNeighborhood && anchor && !isNeighbor) {
+  if (state.settings.highlightNeighborhood && hasAnchors && !isNeighbor) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
-  if (state.settings.highlightNeighborhood && activeLegendLabel && !anchor && !matchesLegendHighlight) {
+  if (state.settings.highlightNeighborhood && activeLegendLabel && !hasAnchors && !matchesLegendHighlight) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
@@ -737,17 +762,18 @@ function edgeReducer(edge, data) {
     reduced.hidden = true;
     return reduced;
   }
-  const anchor = state.hoveredNode || state.selectedNode;
+  const anchors = getActiveAnchorNodes();
+  const hasAnchors = anchors.length > 0;
   const activeLegendLabel = getActiveLegendLabel();
   const matchesLegendEndpoint = activeLegendLabel
     && (state.graph.getNodeAttribute(source, "kgLabel") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgLabel") === activeLegendLabel);
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
-  } else if (state.settings.highlightNeighborhood && anchor && source !== anchor && target !== anchor) {
+  } else if (state.settings.highlightNeighborhood && hasAnchors && !anchors.some(anchor => source === anchor || target === anchor)) {
     reduced.color = "#e2e8f0";
     reduced.label = "";
-  } else if (anchor && (source === anchor || target === anchor)) {
+  } else if (hasAnchors && anchors.some(anchor => source === anchor || target === anchor)) {
     reduced.color = "#2563eb";
     reduced.size = 2.6;
   } else if (state.settings.highlightNeighborhood && activeLegendLabel && !matchesLegendEndpoint) {
@@ -762,7 +788,7 @@ function edgeReducer(edge, data) {
 }
 
 function isNodeHidden(node, data) {
-  if (state.selectedNode === node || state.hoveredNode === node) return false;
+  if (isNodeSelected(node) || state.hoveredNode === node) return false;
   const activeLegendLabel = getActiveLegendLabel();
   if (activeLegendLabel && data.kgLabel === activeLegendLabel) return false;
   if (state.filters.nodeTypes.length && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
@@ -1059,16 +1085,85 @@ function renderSearchResults(results) {
   el.searchResults.appendChild(fragment);
 }
 
+function isShiftPressed(event) {
+  return Boolean(
+    state.isShiftKeyDown
+    || event?.event?.original?.shiftKey
+    || event?.event?.originalEvent?.shiftKey
+    || event?.event?.shiftKey
+    || event?.original?.shiftKey
+    || event?.originalEvent?.shiftKey
+  );
+}
+
+function isCtrlPressed(event) {
+  return Boolean(
+    state.isCtrlKeyDown
+    || event?.event?.original?.ctrlKey
+    || event?.event?.originalEvent?.ctrlKey
+    || event?.event?.ctrlKey
+    || event?.original?.ctrlKey
+    || event?.originalEvent?.ctrlKey
+  );
+}
+
+function getNodeSelectionMode(event) {
+  if (isCtrlPressed(event)) return "remove";
+  if (isShiftPressed(event)) return "add";
+  return "replace";
+}
+
+function updateSelectionCursorState() {
+  if (!el.sigmaContainer) return;
+  el.sigmaContainer.classList.toggle("kg-select-add", state.isShiftKeyDown && !state.isCtrlKeyDown);
+  el.sigmaContainer.classList.toggle("kg-select-remove", state.isCtrlKeyDown);
+}
+
+function isNodeSelected(node) {
+  return state.selectedNodes?.has(node) || state.selectedNode === node;
+}
+
+function getSelectedNodeIds() {
+  const selected = Array.from(state.selectedNodes || []).filter(node => state.graph?.hasNode(node));
+  if (state.selectedNode && state.graph?.hasNode(state.selectedNode) && !selected.includes(state.selectedNode)) {
+    selected.push(state.selectedNode);
+  }
+  return selected;
+}
+
+function getActiveAnchorNodes() {
+  if (state.hoveredNode && state.graph?.hasNode(state.hoveredNode)) return [state.hoveredNode];
+  return getSelectedNodeIds();
+}
+
 function selectNode(node, options = {}) {
   if (!state.graph?.hasNode(node)) return;
   clearInspectorHoverState();
-  state.selectedNode = node;
+  const mode = options.mode || (options.additive ? "add" : "replace");
+  if (mode === "add") {
+    if (!state.selectedNodes.size && state.selectedNode && state.graph.hasNode(state.selectedNode)) {
+      state.selectedNodes.add(state.selectedNode);
+    }
+    if (!state.selectedNodes.has(node)) {
+      state.selectedNodes.add(node);
+    }
+    state.selectedNode = node;
+  } else if (mode === "remove") {
+    if (!state.selectedNodes.size && state.selectedNode && state.graph.hasNode(state.selectedNode)) {
+      state.selectedNodes.add(state.selectedNode);
+    }
+    state.selectedNodes.delete(node);
+    state.selectedNode = state.selectedNode === node ? Array.from(state.selectedNodes).at(-1) || null : state.selectedNode;
+  } else {
+    state.selectedNodes = new Set([node]);
+    state.selectedNode = node;
+  }
   state.selectedEdge = null;
   state.selectedLegendLabel = null;
-  renderInspector({ type: "node", id: node });
+  renderInspector(state.selectedNode ? { type: "node", id: state.selectedNode } : null);
   updateLegendActiveState();
   refreshRenderer();
-  if (options.center !== false) requestAnimationFrame(() => centerNode(node));
+  if (options.center !== false && state.selectedNode) requestAnimationFrame(() => centerNode(state.selectedNode));
   setTimeout(() => recordGraphHistory(), options.center === false ? 0 : 360);
 }
 
@@ -1094,8 +1189,10 @@ function fitGraph() {
 }
 
 function centerSelectedOrFit() {
-  if (state.selectedNode && state.graph?.hasNode(state.selectedNode)) {
-    centerNode(state.selectedNode);
+  const selected = getSelectedNodeIds();
+  const nodeToCenter = state.selectedNode && state.graph?.hasNode(state.selectedNode) ? state.selectedNode : selected[0];
+  if (nodeToCenter) {
+    centerNode(nodeToCenter);
     setTimeout(() => recordGraphHistory(), 330);
     return;
   }
@@ -1138,6 +1235,7 @@ function createGraphHistorySnapshot() {
   if (!cameraState) return null;
   return {
     selectedNode: state.selectedNode,
+    selectedNodes: getSelectedNodeIds(),
     selectedEdge: state.selectedEdge,
     selectedLegendLabel: state.selectedLegendLabel,
     camera: {
@@ -1159,7 +1257,9 @@ function navigateGraphHistory(direction) {
 function restoreGraphHistory(snapshot) {
   if (!snapshot || !state.renderer) return;
   state.isRestoringHistory = true;
-  state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : null;
+  state.selectedNodes = new Set((snapshot.selectedNodes || []).filter(node => state.graph?.hasNode(node)));
+  state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : Array.from(state.selectedNodes).at(-1) || null;
+  if (state.selectedNode) state.selectedNodes.add(state.selectedNode);
   state.selectedEdge = snapshot.selectedEdge && state.graph?.hasEdge(snapshot.selectedEdge) ? snapshot.selectedEdge : null;
   state.selectedLegendLabel = snapshot.selectedLegendLabel && state.colorByLabel.has(snapshot.selectedLegendLabel) ? snapshot.selectedLegendLabel : null;
 
@@ -1184,12 +1284,18 @@ function updateHistoryButtons() {
 
 function sameHistorySnapshot(left, right) {
   return left.selectedNode === right.selectedNode
+    && sameStringArray(left.selectedNodes || [], right.selectedNodes || [])
     && left.selectedEdge === right.selectedEdge
     && (left.selectedLegendLabel || null) === (right.selectedLegendLabel || null)
     && left.camera.x === right.camera.x
     && left.camera.y === right.camera.y
     && left.camera.ratio === right.camera.ratio
     && left.camera.angle === right.camera.angle;
+}
+
+function sameStringArray(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 function roundCameraValue(value) {
@@ -1579,6 +1685,7 @@ function toggleLegendSelection(label) {
   clearInspectorHoverState();
   state.selectedLegendLabel = state.selectedLegendLabel === label ? null : label;
   state.selectedNode = null;
+  state.selectedNodes.clear();
   state.selectedEdge = null;
   renderInspector(null);
   updateLegendActiveState();

@@ -1646,12 +1646,62 @@ body.kg-inspector-resizing {
   cursor: grab;
 }
 
+.kg-sigma-container.kg-select-add {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M5 3 L20 14 L13 16 L17 25 L13 27 L9 18 L4 23 Z' fill='%23111827' stroke='white' stroke-width='2'/%3E%3Ccircle cx='20' cy='8' r='7' fill='%2316a34a' stroke='white' stroke-width='2'/%3E%3Cpath d='M20 4 V12 M16 8 H24' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, copy;
+}
+
+.kg-sigma-container.kg-select-remove {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M5 3 L20 14 L13 16 L17 25 L13 27 L9 18 L4 23 Z' fill='%23111827' stroke='white' stroke-width='2'/%3E%3Ccircle cx='20' cy='8' r='7' fill='%23dc2626' stroke='white' stroke-width='2'/%3E%3Cpath d='M16 8 H24' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, not-allowed;
+}
+
 .kg-sigma-container.kg-dragging {
   cursor: grabbing;
 }
 
 .kg-sigma-container canvas {
   outline: none;
+}
+
+.kg-selection-help {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 5;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  color: #334155;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.kg-selection-help div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.kg-selection-help kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #cbd5e1;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #0f172a;
+  font: 800 0.7rem system-ui, -apple-system, Segoe UI, sans-serif;
+  box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.04);
 }
 
 .kg-empty-state {
