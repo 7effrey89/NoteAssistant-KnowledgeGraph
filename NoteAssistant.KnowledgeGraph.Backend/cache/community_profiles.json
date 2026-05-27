@@ -1,0 +1,89 @@
+{
+  "activeProfileId": "1779738875856",
+  "profiles": [
+    {
+      "id": "1779719156768",
+      "createdAt": "2026-05-25T14:25:56.7686532+00:00",
+      "config": {
+        "parallelism": 1,
+        "communityDetection": {
+          "algorithm": "LeidenCpm",
+          "directed": false,
+          "seed": 42,
+          "cpmResolution": 0.2,
+          "typedRelationshipWeight": 2,
+          "coMentionWeight": 1,
+          "minCommunitySizeToSummarize": 2,
+          "maxCommunitiesToSummarize": 50
+        }
+      },
+      "scorePercent": 85,
+      "confidencePercent": 45,
+      "improvement": "No tuning recommended yet. The best quality improvement is to build communities first and then tune from actual clustering metrics and summary samples rather than changing resolution or weights blindly.",
+      "source": "GraphRag Community Tuning Agent"
+    },
+    {
+      "id": "1779738875856",
+      "createdAt": "2026-05-25T19:54:35.8567878+00:00",
+      "config": {
+        "parallelism": 1,
+        "communityDetection": {
+          "algorithm": "LeidenCpm",
+          "directed": false,
+          "seed": 42,
+          "cpmResolution": 0.25,
+          "typedRelationshipWeight": 2,
+          "coMentionWeight": 1,
+          "minCommunitySizeToSummarize": 2,
+          "maxCommunitiesToSummarize": 50
+        }
+      },
+      "scorePercent": 85,
+      "confidencePercent": 45,
+      "improvement": "No tuning change recommended yet. The best quality improvement now is to keep the seed-fixed baseline, run community building, inspect actual cluster sizes and summary coherence, and then make a single evidence-based adjustment.",
+      "source": "GraphRag Community Tuning Agent"
+    },
+    {
+      "id": "1779740512002",
+      "createdAt": "2026-05-25T20:21:52.0025289+00:00",
+      "config": {
+        "parallelism": 1,
+        "communityDetection": {
+          "algorithm": "LeidenCpm",
+          "directed": false,
+          "seed": 42,
+          "cpmResolution": 0.16,
+          "typedRelationshipWeight": 2,
+          "coMentionWeight": 1,
+          "minCommunitySizeToSummarize": 2,
+          "maxCommunitiesToSummarize": 50
+        }
+      },
+      "scorePercent": 74.43,
+      "confidencePercent": 95,
+      "improvement": "The graph looks mildly over-fragmented rather than overly broad: the largest community is only 37 entities, there are many 2-3 entity communities, and several adjacent themes like Azure/Fabric/AI/platform topics appear split across separate mid-sized groups. A small decrease in cpmResolution from 0.20 to 0.16 is the safest reversible change to merge nearby fragments into more coherent GraphRAG summaries without changing edge semantics. Keep seed fixed and reassess community sizes, summary coherence, and whether tiny pair communities are reduced.",
+      "source": "GraphRag Community Tuning Agent"
+    },
+    {
+      "id": "1779740636219",
+      "createdAt": "2026-05-25T20:23:56.2191264+00:00",
+      "config": {
+        "parallelism": 1,
+        "communityDetection": {
+          "algorithm": "LeidenCpm",
+          "directed": false,
+          "seed": 42,
+          "cpmResolution": 0.12,
+          "typedRelationshipWeight": 2,
+          "coMentionWeight": 1,
+          "minCommunitySizeToSummarize": 2,
+          "maxCommunitiesToSummarize": 50
+        }
+      },
+      "scorePercent": 76.53,
+      "confidencePercent": 90,
+      "improvement": "Current clustering is not clearly broken, but it shows mild fragmentation: 77 communities from a modest graph, 26 singletons, and multiple 2-3 entity communities while the largest community is only 40 entities. A small reduction in cpmResolution is the most reversible change to improve summary usefulness and retrieval coverage before touching relationship weights.",
+      "source": "GraphRag Community Tuning Agent"
+    }
+  ]
+}

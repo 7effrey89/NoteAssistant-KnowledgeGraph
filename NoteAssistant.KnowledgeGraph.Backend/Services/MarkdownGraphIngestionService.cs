@@ -29,21 +29,22 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
 
         var documentId = CreateDocumentId(contentHash);
         var title = Path.GetFileNameWithoutExtension(fileName);
+        var normalizedMetadata = NormalizeMetadata(metadata);
         var chunks = ChunkMarkdown(markdownContent, documentId).ToList();
         var chunkEmbeddings = await _foundry.CreateEmbeddingsAsync(chunks.Select(c => c.Text).ToList(), cancellationToken);
         var enrichedChunks = MergeEmbeddings(chunks, chunkEmbeddings);
 
-        var extraction = await ExtractGraphAsync(markdownContent, enrichedChunks, cancellationToken);
+        var decompositionInput = BuildDecompositionInput(markdownContent, normalizedMetadata);
+        var extraction = await ExtractGraphAsync(decompositionInput, markdownContent, enrichedChunks, cancellationToken);
         var entities = extraction.Entities;
         var mentions = BuildMentions(enrichedChunks, entities).ToList();
         var relationships = BuildChunkRelationships(enrichedChunks, extraction.Relationships).ToList();
         entities = await EnrichEntityEmbeddingsAsync(entities, mentions, relationships, enrichedChunks, cancellationToken);
 
-        var normalizedMetadata = NormalizeMetadata(metadata);
         var sql = BuildSql(documentId, fileName, title, markdownContent ?? string.Empty, contentHash, enrichedChunks, entities, mentions, relationships, normalizedMetadata);
         var status = new IngestionStatusDto(documentId, fileName, "Analyzed", DateTimeOffset.UtcNow, "Document decomposed into graph elements.");
 
-        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, contentHash, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt, Relationships: relationships);
+        return new GraphIngestionPlan(documentId, _databaseOptions.GraphName, title, normalizedMetadata, enrichedChunks, entities, mentions, sql, status, markdownContent ?? string.Empty, contentHash, DecompositionSystemPrompt: _foundry.EntityExtractionSystemPrompt, DecompositionInputPrompt: decompositionInput, Relationships: relationships);
     }
 
     public GraphIngestionPlan ApplyDocumentIdentity(GraphIngestionPlan plan, string contentHash)
@@ -79,8 +80,18 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
     public GraphIngestionPlan RefreshSql(GraphIngestionPlan plan)
     {
         var fileName = plan.Status.FileName;
-        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, plan.OriginalContent ?? string.Empty, plan.ContentHash, plan.Chunks, plan.Entities, plan.Mentions, plan.Relationships ?? Array.Empty<ChunkRelationshipDto>(), NormalizeMetadata(plan.Metadata));
-        return plan with { GraphName = _databaseOptions.GraphName, SqlStatements = sql, DecompositionSystemPrompt = string.IsNullOrWhiteSpace(plan.DecompositionSystemPrompt) ? _foundry.EntityExtractionSystemPrompt : plan.DecompositionSystemPrompt };
+        var normalizedMetadata = NormalizeMetadata(plan.Metadata);
+        var originalContent = plan.OriginalContent ?? string.Empty;
+        var sql = BuildSql(plan.DocumentId, fileName, plan.Title, originalContent, plan.ContentHash, plan.Chunks, plan.Entities, plan.Mentions, plan.Relationships ?? Array.Empty<ChunkRelationshipDto>(), normalizedMetadata);
+        // Always rebuild the decomposition input prompt so metadata changes are reflected in the LLM input shown in the UI.
+        var decompositionInputPrompt = BuildDecompositionInput(originalContent, normalizedMetadata);
+        return plan with
+        {
+            GraphName = _databaseOptions.GraphName,
+            SqlStatements = sql,
+            DecompositionSystemPrompt = string.IsNullOrWhiteSpace(plan.DecompositionSystemPrompt) ? _foundry.EntityExtractionSystemPrompt : plan.DecompositionSystemPrompt,
+            DecompositionInputPrompt = decompositionInputPrompt
+        };
     }
 
     private static IEnumerable<ChunkDto> ChunkMarkdown(string content, long documentId)
@@ -143,9 +154,9 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
     }
 
-    private async Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, IReadOnlyList<ChunkDto> chunks, CancellationToken cancellationToken)
+    private async Task<GraphExtractionDto> ExtractGraphAsync(string markdownContentForLlm, string markdownContentForHeuristics, IReadOnlyList<ChunkDto> chunks, CancellationToken cancellationToken)
     {
-        var extracted = await _foundry.ExtractGraphAsync(markdownContent, cancellationToken);
+        var extracted = await _foundry.ExtractGraphAsync(markdownContentForLlm, cancellationToken);
         var normalized = NormalizeEntities(extracted.Entities);
         var relationships = NormalizeRelationships(extracted.Relationships, normalized);
 
@@ -154,7 +165,44 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             return new GraphExtractionDto(normalized, relationships);
         }
 
-        return new GraphExtractionDto(ExtractEntitiesHeuristic(markdownContent, chunks).ToList(), Array.Empty<RelationshipDto>());
+        return new GraphExtractionDto(ExtractEntitiesHeuristic(markdownContentForHeuristics, chunks).ToList(), Array.Empty<RelationshipDto>());
+    }
+
+    private static string BuildDecompositionInput(string markdownContent, DocumentMetadata metadata)
+    {
+        var content = markdownContent ?? string.Empty;
+        var hasMetadata = !string.IsNullOrWhiteSpace(metadata.DocumentType)
+            || metadata.DocumentDate.HasValue
+            || metadata.Tags is { Count: > 0 };
+
+        if (!hasMetadata)
+        {
+            return content;
+        }
+
+        var builder = new StringBuilder(content.TrimEnd());
+        builder.AppendLine();
+        builder.AppendLine();
+        builder.AppendLine("---");
+        builder.AppendLine("METADATA CONTEXT (appendix for graph decomposition)");
+
+        if (!string.IsNullOrWhiteSpace(metadata.DocumentType))
+        {
+            builder.AppendLine($"- DocumentType: {metadata.DocumentType} (usable as a document-level filter attribute)");
+        }
+
+        if (metadata.DocumentDate.HasValue)
+        {
+            builder.AppendLine($"- DocumentDate: {metadata.DocumentDate.Value:yyyy-MM-dd} (temporal retrieval signal)");
+        }
+
+        if (metadata.Tags is { Count: > 0 })
+        {
+            builder.AppendLine($"- Tags: {string.Join(", ", metadata.Tags)} (entity hints related to this document)");
+        }
+
+        builder.AppendLine("Use this metadata context to improve entity and relationship extraction while keeping relationships grounded in the document content.");
+        return builder.ToString();
     }
 
     private static IEnumerable<EntityDto> ExtractEntitiesHeuristic(string markdownContent, IReadOnlyList<ChunkDto> chunks)
@@ -509,11 +557,11 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
         }
 
         var documentType = string.IsNullOrWhiteSpace(metadata.DocumentType) ? null : metadata.DocumentType.Trim();
-        var tags = metadata.Tags?
-            .Select(tag => tag?.Trim())
+        var tags = (metadata.Tags ?? Array.Empty<string>())
             .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray() ?? Array.Empty<string>();
+            .ToArray();
 
         return metadata with
         {

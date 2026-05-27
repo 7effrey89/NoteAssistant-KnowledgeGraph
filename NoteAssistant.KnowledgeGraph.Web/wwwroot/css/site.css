@@ -42,6 +42,10 @@ body {
   background: #ffc107;
 }
 
+.parallelism-input {
+  width: 72px;
+}
+
 .process-map {
   display: flex;
   flex-direction: column;
@@ -55,14 +59,32 @@ body {
   padding: 8px 12px;
 }
 
+.process-bubble-pending {
+  background: #f4f8ff;
+  border-color: #86b7fe;
+}
+
 .process-bubble-title {
   font-weight: 600;
+  display: flex;
+  align-items: center;
 }
 
 .process-bubble-body {
   font-size: 0.9rem;
   color: #495057;
   white-space: pre-wrap;
+}
+
+.process-bubble-body-html {
+  white-space: normal;
+}
+
+.process-bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .process-connector {
@@ -113,6 +135,291 @@ body {
 
 .community-tab-overview {
   color: #495057;
+}
+
+.community-clustering-window {
+  max-height: min(520px, 58vh);
+  overflow: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.community-clustering-window > .community-tabs {
+  border: 0;
+  margin-top: 0;
+}
+
+.community-clustering-window .sql-toggle-view {
+  max-height: 340px;
+}
+
+.community-tuning-panel {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+}
+
+.community-tuning-panel > summary {
+  cursor: pointer;
+}
+
+.community-config-output {
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  min-height: 180px;
+  overflow: hidden;
+  resize: none;
+}
+
+.community-config-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.2rem;
+  border: 1px solid #adb5bd;
+  border-radius: 999px;
+  color: #495057;
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
+.community-prompt-output {
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  min-height: 320px;
+  white-space: pre;
+}
+
+#communityProfileMeta {
+  min-height: 0.9rem;
+  margin-top: 2px;
+}
+
+.community-profile-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.community-profile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid #d8dee7;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.community-profile-row.selected {
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.community-profile-row.active {
+  background: #f0f7ff;
+}
+
+.community-profile-row-main {
+  min-width: 0;
+}
+
+.community-profile-row-title {
+  font-weight: 600;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.community-profile-row-meta {
+  color: #6c757d;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.community-profile-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.community-profile-row-actions .btn {
+  --bs-btn-padding-y: 0.14rem;
+  --bs-btn-padding-x: 0.42rem;
+  --bs-btn-font-size: 0.78rem;
+}
+
+.community-fields-divider {
+  height: 0;
+  border-top: 2px solid #cfd7e1;
+  margin: 4px 0 2px;
+}
+
+.community-config-description {
+  margin-bottom: 8px;
+  min-height: 0.9rem;
+}
+
+#communityPostBuildActions {
+  border-color: #cfd7e1;
+  background: #f6f8fb;
+}
+
+#communityQuickAssessment {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #344054;
+}
+
+#communityPreBuildAssessment {
+  border: 1px solid #f2d7a5;
+  border-radius: 8px;
+  background: #fffdf7;
+  padding: 8px 10px;
+  color: #4a3f2d;
+}
+
+.community-summary-browser {
+  display: grid;
+  grid-template-columns: minmax(260px, 32%) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-height: 420px;
+  height: clamp(420px, 62vh, 720px);
+  max-height: 720px;
+}
+
+.community-summary-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #f8f9fa;
+}
+
+.community-summary-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #212529;
+  text-align: left;
+  cursor: pointer;
+}
+
+.community-summary-item:hover {
+  border-color: #9ec5fe;
+  background: #f8fbff;
+}
+
+.community-summary-item:focus-visible {
+  outline: 2px solid #0d6efd;
+  outline-offset: 2px;
+}
+
+.community-summary-item.active {
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.community-summary-item-title {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-summary-item-meta {
+  min-width: 0;
+  color: #6c757d;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-summary-detail-pane {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.community-summary-detail {
+  height: 100%;
+  min-height: 0;
+}
+
+.community-summary-detail > .community-tabs {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.community-summary-detail > .community-tabs > .community-tab-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.community-summary-detail > .community-tabs > .community-tab-panel > .sql-toggle-view {
+  max-height: none;
+  height: 100%;
+}
+
+@media (max-width: 900px) {
+  .community-summary-browser {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .community-summary-list {
+    height: auto;
+    max-height: 260px;
+  }
+
+  .community-summary-detail-pane,
+  .community-summary-detail,
+  .community-summary-detail > .community-tabs {
+    height: auto;
+  }
 }
 
 .sql-toggle-view {
@@ -280,6 +587,42 @@ body {
   border: 1px solid #dee2e6;
   border-radius: 8px;
   background: #f8f9fa;
+}
+
+.noteassistant-page .table-responsive {
+  overflow-x: auto;
+}
+
+.na-results-table {
+  min-width: 1320px;
+}
+
+.na-results-table th,
+.na-results-table td {
+  vertical-align: top;
+}
+
+.na-results-table th:nth-child(1),
+.na-results-table td:nth-child(1) {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.na-results-table th:nth-child(2),
+.na-results-table td:nth-child(2) {
+  min-width: 320px;
+}
+
+.na-results-table th:nth-child(3),
+.na-results-table td:nth-child(3) {
+  min-width: 260px;
+}
+
+.na-results-table th:nth-child(5),
+.na-results-table td:nth-child(5),
+.na-results-table th:nth-child(6),
+.na-results-table td:nth-child(6) {
+  min-width: 220px;
 }
 
 .query-workbench-sidebar {
@@ -522,6 +865,25 @@ body {
 
 .decomposition-subtabs .nav-link {
   border: 1px solid #dee2e6;
+}
+
+.decomp-tab-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  margin-right: 0.35rem;
+  line-height: 1;
+  font-size: 0.95rem;
+}
+
+.decomp-tab-status-warning {
+  color: #fd7e14;
+}
+
+.decomp-tab-status-ready {
+  color: #198754;
+  font-weight: 700;
 }
 
 .decomposition-subtab-content {

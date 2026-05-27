@@ -39,6 +39,49 @@
 </div>
 
 <div class="card mb-3">
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <span>Model Pricing (User Local)</span>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-secondary" id="addPricingRowBtn" type="button">Add Row</button>
+            <button class="btn btn-sm btn-primary" id="savePricingBtn" type="button">Save Pricing</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-md-5">
+                <label class="form-label" for="activePricingSelect">Active model pricing row for estimate</label>
+                <select class="form-select form-select-sm" id="activePricingSelect"></select>
+            </div>
+            <div class="col-md-7">
+                <div class="alert alert-info mb-0 py-2 px-3">
+                    <div class="small">Estimated range cost</div>
+                    <div class="fw-semibold" id="estimatedCostTotal">-</div>
+                    <div class="small text-muted" id="estimatedCostBreakdown"></div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>Region</th>
+                        <th>Model</th>
+                        <th>Currency</th>
+                        <th class="text-end">Input / 1M</th>
+                        <th class="text-end">Cached Input / 1M</th>
+                        <th class="text-end">Output / 1M</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="pricingRows"><tr><td colspan="7" class="text-muted">Loading pricing...</td></tr></tbody>
+            </table>
+        </div>
+        <div class="form-text mt-2">Pricing is stored in your local user app data folder. Cached input pricing is stored but not applied in the estimate because cached token counts are not currently tracked in usage logs.</div>
+        <div class="small text-muted mt-1" id="pricingSaveStatus"></div>
+    </div>
+</div>
+
+<div class="card mb-3">
     <div class="card-header">Usage By Agent</div>
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -55,8 +98,8 @@
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>Day</th><th class="text-end">Calls</th><th class="text-end">Total Tokens</th></tr></thead>
-                <tbody id="dailyRows"><tr><td colspan="3" class="text-muted">Loading...</td></tr></tbody>
+                <thead><tr><th>Day</th><th class="text-end">Calls</th><th class="text-end">Input Tokens</th><th class="text-end">Output Tokens</th><th class="text-end">Total Tokens</th><th class="text-end">Estimated Cost</th></tr></thead>
+                <tbody id="dailyRows"><tr><td colspan="6" class="text-muted">Loading...</td></tr></tbody>
             </table>
         </div>
     </div>
@@ -78,10 +121,29 @@
 <script>
     const backendBaseUrl = '@backendBaseUrl';
     const fmt = new Intl.NumberFormat();
+    const decimalFmt = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let pricingRows = [];
+    let summaryStats = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let dailyStats = [];
+    let activePricingId = '';
 
     document.getElementById('refreshBtn').addEventListener('click', loadStats);
     document.getElementById('daysSelect').addEventListener('change', loadStats);
-    loadStats();
+    document.getElementById('addPricingRowBtn').addEventListener('click', addPricingRow);
+    document.getElementById('savePricingBtn').addEventListener('click', savePricingRows);
+    document.getElementById('activePricingSelect').addEventListener('change', event => {
+        activePricingId = event.target.value;
+        renderCostEstimate();
+        renderDailyRows(dailyStats);
+    });
+    document.getElementById('pricingRows').addEventListener('input', onPricingTableInput);
+    document.getElementById('pricingRows').addEventListener('click', onPricingTableClick);
+    initialize();
+
+    async function initialize() {
+        await loadPricingRows();
+        await loadStats();
+    }
 
     async function loadStats() {
         const days = document.getElementById('daysSelect').value;
@@ -98,11 +160,213 @@
             document.getElementById('promptTotal').textContent = fmt.format(payload.summary.promptTokens || 0);
             document.getElementById('completionTotal').textContent = fmt.format(payload.summary.completionTokens || 0);
             document.getElementById('tokensTotal').textContent = fmt.format(payload.summary.totalTokens || 0);
+            summaryStats = {
+                promptTokens: payload.summary.promptTokens || 0,
+                completionTokens: payload.summary.completionTokens || 0,
+                totalTokens: payload.summary.totalTokens || 0
+            };
+            dailyStats = payload.daily || [];
             renderAgentRows(payload.byAgent || []);
-            renderDailyRows(payload.daily || []);
+            renderDailyRows(dailyStats);
             renderRecentRows(payload.recent || []);
+            renderCostEstimate();
         } catch (err) {
             error.textContent = err.message;
+        }
+    }
+
+    async function loadPricingRows() {
+        const status = document.getElementById('pricingSaveStatus');
+        try {
+            const response = await fetch(`${backendBaseUrl}/api/tokens/pricing`);
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.detail || payload.error || 'Failed to load token pricing.');
+            }
+
+            pricingRows = Array.isArray(payload.rows) ? payload.rows : [];
+            if (!pricingRows.length) {
+                addPricingRow();
+            }
+
+            if (!pricingRows.some(row => row.id === activePricingId)) {
+                activePricingId = pricingRows[0]?.id || '';
+            }
+
+            renderPricingRows();
+            renderPricingSelector();
+            renderCostEstimate();
+            renderDailyRows(dailyStats);
+            status.textContent = '';
+        } catch (err) {
+            status.textContent = err.message;
+        }
+    }
+
+    async function savePricingRows() {
+        const status = document.getElementById('pricingSaveStatus');
+        status.textContent = '';
+
+        try {
+            const response = await fetch(`${backendBaseUrl}/api/tokens/pricing`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rows: pricingRows })
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.detail || payload.error || 'Failed to save token pricing.');
+            }
+
+            pricingRows = Array.isArray(payload.rows) ? payload.rows : [];
+            if (!pricingRows.some(row => row.id === activePricingId)) {
+                activePricingId = pricingRows[0]?.id || '';
+            }
+            renderPricingRows();
+            renderPricingSelector();
+            renderCostEstimate();
+            renderDailyRows(dailyStats);
+            status.textContent = 'Pricing saved.';
+        } catch (err) {
+            status.textContent = err.message;
+        }
+    }
+
+    function renderPricingRows() {
+        const body = document.getElementById('pricingRows');
+        if (!pricingRows.length) {
+            body.innerHTML = '<tr><td colspan="7" class="text-muted">No pricing rows. Add one.</td></tr>';
+            return;
+        }
+
+        body.innerHTML = pricingRows.map((row, index) => `
+            <tr>
+                <td><input class="form-control form-control-sm" data-index="${index}" data-field="region" value="${esc(row.region || '')}" /></td>
+                <td><input class="form-control form-control-sm" data-index="${index}" data-field="model" value="${esc(row.model || '')}" /></td>
+                <td><input class="form-control form-control-sm" data-index="${index}" data-field="currency" value="${esc(row.currency || '')}" /></td>
+                <td><input class="form-control form-control-sm text-end" type="number" step="0.01" min="0" data-index="${index}" data-field="inputPerMillion" value="${row.inputPerMillion ?? 0}" /></td>
+                <td><input class="form-control form-control-sm text-end" type="number" step="0.01" min="0" data-index="${index}" data-field="cachedInputPerMillion" value="${row.cachedInputPerMillion ?? 0}" /></td>
+                <td><input class="form-control form-control-sm text-end" type="number" step="0.01" min="0" data-index="${index}" data-field="outputPerMillion" value="${row.outputPerMillion ?? 0}" /></td>
+                <td class="text-end"><button class="btn btn-sm btn-outline-danger" type="button" data-action="delete-pricing-row" data-index="${index}">Delete</button></td>
+            </tr>
+        `).join('');
+    }
+
+    function renderPricingSelector() {
+        const select = document.getElementById('activePricingSelect');
+        if (!pricingRows.length) {
+            select.innerHTML = '<option value="">No rows</option>';
+            return;
+        }
+
+        select.innerHTML = pricingRows
+            .map(row => `<option value="${esc(row.id)}">${esc(row.region || '')} | ${esc(row.model || '')} (${esc(row.currency || '')})</option>`)
+            .join('');
+
+        select.value = activePricingId;
+        if (select.value !== activePricingId) {
+            activePricingId = pricingRows[0].id;
+            select.value = activePricingId;
+        }
+    }
+
+    function onPricingTableInput(event) {
+        const target = event.target;
+        if (!target || !target.dataset) {
+            return;
+        }
+
+        const index = Number.parseInt(target.dataset.index, 10);
+        const field = target.dataset.field;
+        if (!Number.isInteger(index) || index < 0 || index >= pricingRows.length || !field) {
+            return;
+        }
+
+        const row = pricingRows[index];
+        if (!row) {
+            return;
+        }
+
+        if (field === 'inputPerMillion' || field === 'cachedInputPerMillion' || field === 'outputPerMillion') {
+            const parsed = Number.parseFloat(target.value);
+            row[field] = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+        } else {
+            row[field] = target.value;
+        }
+
+        renderPricingSelector();
+        renderCostEstimate();
+        renderDailyRows(dailyStats);
+    }
+
+    function onPricingTableClick(event) {
+        const button = event.target?.closest('button[data-action="delete-pricing-row"]');
+        if (!button) {
+            return;
+        }
+
+        const index = Number.parseInt(button.dataset.index, 10);
+        if (!Number.isInteger(index) || index < 0 || index >= pricingRows.length) {
+            return;
+        }
+
+        const removed = pricingRows[index];
+        pricingRows.splice(index, 1);
+        if (!pricingRows.length) {
+            addPricingRow();
+        }
+        if (removed?.id === activePricingId) {
+            activePricingId = pricingRows[0]?.id || '';
+        }
+        renderPricingRows();
+        renderPricingSelector();
+        renderCostEstimate();
+        renderDailyRows(dailyStats);
+    }
+
+    function addPricingRow() {
+        const newId = `row-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        pricingRows.push({
+            id: newId,
+            region: '',
+            model: '',
+            currency: 'DKK',
+            inputPerMillion: 0,
+            cachedInputPerMillion: 0,
+            outputPerMillion: 0
+        });
+
+        activePricingId = newId;
+        renderPricingRows();
+        renderPricingSelector();
+        renderCostEstimate();
+        renderDailyRows(dailyStats);
+    }
+
+    function renderCostEstimate() {
+        const totalEl = document.getElementById('estimatedCostTotal');
+        const breakdownEl = document.getElementById('estimatedCostBreakdown');
+        const activeRow = pricingRows.find(row => row.id === activePricingId);
+        if (!activeRow) {
+            totalEl.textContent = '-';
+            breakdownEl.textContent = 'Select a pricing row to estimate cost.';
+            return;
+        }
+
+        const inputCost = (summaryStats.promptTokens / 1_000_000) * (Number(activeRow.inputPerMillion) || 0);
+        const outputCost = (summaryStats.completionTokens / 1_000_000) * (Number(activeRow.outputPerMillion) || 0);
+        const totalCost = inputCost + outputCost;
+        const currency = (activeRow.currency || '').trim().toUpperCase() || 'DKK';
+
+        totalEl.textContent = formatCurrency(totalCost, currency);
+        breakdownEl.textContent = `Input ${formatCurrency(inputCost, currency)} + Output ${formatCurrency(outputCost, currency)} (Prompt ${fmt.format(summaryStats.promptTokens || 0)} tokens, Completion ${fmt.format(summaryStats.completionTokens || 0)} tokens)`;
+    }
+
+    function formatCurrency(value, currency) {
+        try {
+            return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).format(value || 0);
+        } catch {
+            return `${currency} ${decimalFmt.format(value || 0)}`;
         }
     }
 
@@ -113,7 +377,18 @@
 
     function renderDailyRows(rows) {
         const body = document.getElementById('dailyRows');
-        body.innerHTML = rows.length ? rows.map(row => `<tr><td>${formatDate(row.day)}</td><td class="text-end">${fmt.format(row.calls || 0)}</td><td class="text-end">${fmt.format(row.totalTokens || 0)}</td></tr>`).join('') : '<tr><td colspan="3" class="text-muted">No daily usage recorded for this range.</td></tr>';
+        const activeRow = pricingRows.find(row => row.id === activePricingId);
+        const currency = (activeRow?.currency || '').trim().toUpperCase() || 'DKK';
+        body.innerHTML = rows.length
+            ? rows.map(row => {
+                const promptTokens = row.promptTokens || 0;
+                const completionTokens = row.completionTokens || 0;
+                const dailyCost = activeRow
+                    ? ((promptTokens / 1_000_000) * (Number(activeRow.inputPerMillion) || 0)) + ((completionTokens / 1_000_000) * (Number(activeRow.outputPerMillion) || 0))
+                    : null;
+                return `<tr><td>${formatDate(row.day)}</td><td class="text-end">${fmt.format(row.calls || 0)}</td><td class="text-end">${fmt.format(promptTokens)}</td><td class="text-end">${fmt.format(completionTokens)}</td><td class="text-end">${fmt.format(row.totalTokens || 0)}</td><td class="text-end">${dailyCost === null ? '-' : formatCurrency(dailyCost, currency)}</td></tr>`;
+            }).join('')
+            : '<tr><td colspan="6" class="text-muted">No daily usage recorded for this range.</td></tr>';
     }
 
     function renderRecentRows(rows) {

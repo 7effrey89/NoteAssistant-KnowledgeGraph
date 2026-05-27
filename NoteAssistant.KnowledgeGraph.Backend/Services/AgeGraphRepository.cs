@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
 using Npgsql;
 using NoteAssistant.KnowledgeGraph.Backend.Models;
 
@@ -19,6 +20,10 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private sealed record CommunityEntityRow(long Id, string Label, string Name);
 
     private sealed record CommunityRelationshipRow(long SourceId, string SourceName, long TargetId, string TargetName, string Relationship, long? DocumentId, string? DocumentTitle, DateOnly? DocumentDate, int? ChunkIndex, string? Evidence);
+
+    private sealed record CommunityBuildWork(int Index, IReadOnlyList<CommunityEntityRow> Entities, IReadOnlyList<CommunityRelationshipRow> Relationships, string Title);
+
+    private sealed record CommunityBuildDetail(int Index, string Detail);
 
     public bool IsConfigured => _connectionFactory.IsConfigured;
 
@@ -590,7 +595,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                         (int)answerTimer.ElapsedMilliseconds,
                         answerResult.TokenUsage);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     answerTimer.Stop();
                     var answerPrompt = BuildAnswerUserPrompt(prompt, rewrittenQuestion);
@@ -628,40 +633,67 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
     }
 
-    public async Task<CommunityBuildResponse> BuildCommunitiesAsync(bool includeTrace, CancellationToken cancellationToken)
+    public async Task<CommunityBuildResponse> BuildCommunitiesAsync(
+        bool includeTrace,
+        CancellationToken cancellationToken,
+        Func<HybridRetrievalTraceStepDto, CancellationToken, Task>? progressCallback = null,
+        Func<string, string, CancellationToken, Task>? progressStartedCallback = null,
+        int maxParallelism = 1,
+        CommunityDetectionOptions? communityDetection = null,
+        bool stopAfterClustering = false)
     {
         if (!IsConfigured)
         {
             return new CommunityBuildResponse(false, "Database settings are not configured.", 0, 0, 0);
         }
 
-        if (!_foundry.IsConfigured)
+        if (!_foundry.IsConfigured && !stopAfterClustering)
         {
             return new CommunityBuildResponse(false, "Foundry inference is not configured.", 0, 0, 0);
         }
 
+        var detectionOptions = NormalizeCommunityDetectionOptions(communityDetection);
         var steps = includeTrace ? new List<HybridRetrievalTraceStepDto>() : null;
-        void AddStep(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
+        var stepsLock = new object();
+        async Task AddStepAsync(string name, string summary, string detail, int? durationMs = null, LlmTokenUsage? tokenUsage = null)
         {
             HybridTokenUsageDto? usageDto = tokenUsage is null
                 ? null
                 : new HybridTokenUsageDto(tokenUsage.PromptTokens, tokenUsage.CompletionTokens);
-            steps?.Add(new HybridRetrievalTraceStepDto(name, summary, detail, durationMs, usageDto));
+            var step = new HybridRetrievalTraceStepDto(name, summary, detail, durationMs, usageDto);
+            lock (stepsLock)
+            {
+                steps?.Add(step);
+            }
+            if (progressCallback is not null)
+            {
+                await progressCallback(step, cancellationToken);
+            }
+        }
+
+        async Task StartStepAsync(string name, string summary)
+        {
+            if (progressStartedCallback is not null)
+            {
+                await progressStartedCallback(name, summary, cancellationToken);
+            }
         }
 
         try
         {
             await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await StartStepAsync("community-schema", "Ensuring community tables");
             var setupTimer = Stopwatch.StartNew();
             await EnsureCommunityTablesAsync(connection, cancellationToken);
             setupTimer.Stop();
-            AddStep("community-schema", "Community tables ensured", BuildCommunitySchemaDetail(), (int)setupTimer.ElapsedMilliseconds);
+            await AddStepAsync("community-schema", "Community tables ensured", BuildCommunitySchemaDetail(), (int)setupTimer.ElapsedMilliseconds);
 
+            await StartStepAsync("community-load", "Loading entities and relationships");
             var loadTimer = Stopwatch.StartNew();
             var entities = await LoadCommunityEntitiesAsync(connection, cancellationToken);
             var relationships = await LoadCommunityRelationshipsAsync(connection, cancellationToken);
             loadTimer.Stop();
-            AddStep("community-load", $"Loaded {entities.Count} entities and {relationships.Count} relationships", BuildCommunityLoadDetail(entities, relationships), (int)loadTimer.ElapsedMilliseconds);
+            await AddStepAsync("community-load", $"Loaded {entities.Count} entities and {relationships.Count} relationships", BuildCommunityLoadDetail(entities, relationships), (int)loadTimer.ElapsedMilliseconds);
 
             if (entities.Count == 0 || relationships.Count == 0)
             {
@@ -669,46 +701,74 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 return new CommunityBuildResponse(true, null, 0, 0, relationships.Count, emptyTrace);
             }
 
-            var components = BuildRelationshipComponents(entities, relationships);
-            AddStep("community-clustering", $"Identified {components.Count} connected graph components", BuildCommunityClusteringDetail(components, entities, relationships));
+            await StartStepAsync("community-clustering", "Detecting graph communities");
+            var components = LeidenCommunityDetector.DetectCommunities(
+                entities.Select(entity => entity.Id).ToList(),
+                relationships.Select(relationship => (relationship.SourceId, relationship.TargetId, Weight: CommunityRelationshipWeight(relationship, detectionOptions))).ToList(),
+                detectionOptions.CpmResolution,
+                detectionOptions.Seed,
+                detectionOptions.Directed);
+            await AddStepAsync("community-clustering", $"Identified {components.Count} graph communities with Leiden optimization", BuildCommunityClusteringDetail(components, entities, relationships, detectionOptions));
+            if (stopAfterClustering)
+            {
+                var detectionTrace = steps is null ? null : new HybridRetrievalTraceDto("Detect communities", steps);
+                return new CommunityBuildResponse(true, null, 0, entities.Count, relationships.Count, detectionTrace);
+            }
+
             var buildTimer = Stopwatch.StartNew();
+            await StartStepAsync("community-reset", "Clearing existing community index");
             await ClearCommunityTablesAsync(connection, cancellationToken);
-            AddStep("community-reset", "Existing community index cleared", "SQL:\nTRUNCATE TABLE community_sources, community_members, communities RESTART IDENTITY;");
+            await AddStepAsync("community-reset", "Existing community index cleared", "SQL:\nTRUNCATE TABLE community_sources, community_members, communities RESTART IDENTITY;");
 
             var built = 0;
             var assigned = 0;
-            var summaryDetails = new List<string>();
-            foreach (var component in components.Where(component => component.Count > 1).OrderByDescending(component => component.Count).Take(50))
+            var summaryDetails = new ConcurrentBag<CommunityBuildDetail>();
+            var selectedComponents = components
+                .Where(component => component.Count >= detectionOptions.MinCommunitySizeToSummarize)
+                .OrderByDescending(component => component.Count)
+                .Take(detectionOptions.MaxCommunitiesToSummarize)
+                .ToList();
+            var workItems = selectedComponents
+                .Select((component, index) =>
+                {
+                    var componentRelationships = relationships
+                        .Where(relationship => component.Contains(relationship.SourceId) && component.Contains(relationship.TargetId))
+                        .ToList();
+                    var componentEntities = entities.Where(entity => component.Contains(entity.Id)).ToList();
+                    return new CommunityBuildWork(index + 1, componentEntities, componentRelationships, BuildCommunityTitle(componentEntities));
+                })
+                .Where(work => work.Relationships.Count > 0)
+                .ToList();
+            var communityParallelism = Math.Clamp(maxParallelism, 1, 8);
+            await Parallel.ForEachAsync(workItems, new ParallelOptions { MaxDegreeOfParallelism = communityParallelism, CancellationToken = cancellationToken }, async (work, token) =>
             {
-                var componentRelationships = relationships
-                    .Where(relationship => component.Contains(relationship.SourceId) && component.Contains(relationship.TargetId))
-                    .ToList();
-                if (componentRelationships.Count == 0)
-                {
-                    continue;
-                }
-
-                var componentEntities = entities.Where(entity => component.Contains(entity.Id)).ToList();
-                var context = BuildCommunitySummaryContext(componentEntities, componentRelationships);
+                await StartStepAsync("community-progress", $"Building community {work.Index} of {workItems.Count}: {work.Title}");
+                var context = BuildCommunitySummaryContext(work.Entities, work.Relationships);
                 const string summaryQuestion = "Summarize this graph community. Include the main topic, key entities, relationship patterns, and any temporal span.";
-                var summaryResult = await _foundry.AnswerQuestionAsync(summaryQuestion, context, cancellationToken, "Community Summary Agent");
+                var summaryResult = await _foundry.AnswerQuestionAsync(summaryQuestion, context, token, "Community Summary Agent");
                 var summary = string.IsNullOrWhiteSpace(summaryResult.Answer) ? context : summaryResult.Answer.Trim();
-                var embedding = await _foundry.CreateEmbeddingAsync(summary, cancellationToken);
-                var title = BuildCommunityTitle(componentEntities);
-                var key = ComputeCommunityKey(componentEntities);
-                var communityId = await UpsertCommunityAsync(connection, key, title, summary, embedding, componentEntities.Count, componentRelationships.Count, componentRelationships, cancellationToken);
-                await InsertCommunityMembersAsync(connection, communityId, componentEntities, cancellationToken);
-                await InsertCommunitySourcesAsync(connection, communityId, componentRelationships, cancellationToken);
-                if (summaryDetails.Count < 5)
-                {
-                    summaryDetails.Add(BuildCommunitySummaryTraceDetail(communityId, key, title, summaryQuestion, context, summary, componentEntities, componentRelationships));
-                }
-                built++;
-                assigned += componentEntities.Count;
-            }
+                var embedding = await _foundry.CreateEmbeddingAsync(summary, token);
+                var key = ComputeCommunityKey(work.Entities);
+                await using var writeConnection = await _connectionFactory.OpenAsync(token);
+                var communityId = await UpsertCommunityAsync(writeConnection, key, work.Title, summary, embedding, work.Entities.Count, work.Relationships.Count, work.Relationships, token);
+                await InsertCommunityMembersAsync(writeConnection, communityId, work.Entities, token);
+                await InsertCommunitySourcesAsync(writeConnection, communityId, work.Relationships, token);
+                var summaryDetail = BuildCommunitySummaryTraceDetail(communityId, key, work.Title, summaryQuestion, context, summary, work.Entities, work.Relationships);
+                summaryDetails.Add(new CommunityBuildDetail(work.Index, summaryDetail));
+                var completed = Interlocked.Increment(ref built);
+                Interlocked.Add(ref assigned, work.Entities.Count);
+                await AddStepAsync(
+                    "community-progress",
+                    $"Built community {work.Index} of {workItems.Count}: {work.Title}",
+                    summaryDetail,
+                    null,
+                    summaryResult.TokenUsage);
+            });
 
             buildTimer.Stop();
-            AddStep("community-summary", $"Built {built} community summaries", BuildCommunitySummaryBuildDetail(assigned, summaryDetails), (int)buildTimer.ElapsedMilliseconds);
+            await StartStepAsync("community-summary", "Finalizing community build summary");
+            var orderedSummaryDetails = summaryDetails.OrderBy(detail => detail.Index).Select(detail => detail.Detail).ToList();
+            await AddStepAsync("community-summary", $"Built {built} community summaries", BuildCommunitySummaryBuildDetail(assigned, orderedSummaryDetails), (int)buildTimer.ElapsedMilliseconds);
             var trace = steps is null ? null : new HybridRetrievalTraceDto("Build communities", steps);
             return new CommunityBuildResponse(true, null, built, assigned, relationships.Count, trace);
         }
@@ -944,52 +1004,6 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static List<HashSet<long>> BuildRelationshipComponents(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
-    {
-        var known = entities.Select(entity => entity.Id).ToHashSet();
-        var adjacency = known.ToDictionary(id => id, _ => new HashSet<long>());
-        foreach (var relationship in relationships)
-        {
-            if (!adjacency.ContainsKey(relationship.SourceId) || !adjacency.ContainsKey(relationship.TargetId))
-            {
-                continue;
-            }
-
-            adjacency[relationship.SourceId].Add(relationship.TargetId);
-            adjacency[relationship.TargetId].Add(relationship.SourceId);
-        }
-
-        var visited = new HashSet<long>();
-        var components = new List<HashSet<long>>();
-        foreach (var entityId in adjacency.Keys)
-        {
-            if (!visited.Add(entityId))
-            {
-                continue;
-            }
-
-            var component = new HashSet<long>();
-            var stack = new Stack<long>();
-            stack.Push(entityId);
-            while (stack.Count > 0)
-            {
-                var current = stack.Pop();
-                component.Add(current);
-                foreach (var next in adjacency[current])
-                {
-                    if (visited.Add(next))
-                    {
-                        stack.Push(next);
-                    }
-                }
-            }
-
-            components.Add(component);
-        }
-
-        return components;
-    }
-
     private static string BuildCommunitySummaryContext(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
     {
         var entityText = string.Join(", ", entities.Take(40).Select(entity => $"{entity.Label}:{entity.Name}"));
@@ -998,7 +1012,35 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         return $"Entities:\n{entityText}\n\nRelationships:\n{relationshipText}\n\nEvidence:\n{evidenceText}";
     }
 
-    private static string BuildCommunityClusteringDetail(IReadOnlyList<HashSet<long>> components, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
+    private static double CommunityRelationshipWeight(CommunityRelationshipRow relationship, CommunityDetectionOptions options)
+        => string.Equals(relationship.Relationship, "CO_MENTIONED_WITH", StringComparison.OrdinalIgnoreCase)
+            ? options.CoMentionWeight
+            : options.TypedRelationshipWeight;
+
+    private static CommunityDetectionOptions NormalizeCommunityDetectionOptions(CommunityDetectionOptions? options)
+    {
+        var value = options ?? new CommunityDetectionOptions();
+        var algorithm = string.IsNullOrWhiteSpace(value.Algorithm) ? "LeidenCpm" : value.Algorithm.Trim();
+        if (!string.Equals(algorithm, "LeidenCpm", StringComparison.OrdinalIgnoreCase))
+        {
+            algorithm = "LeidenCpm";
+        }
+
+        static double ClampFinite(double input, double fallback, double min, double max)
+            => double.IsFinite(input) ? Math.Clamp(input, min, max) : fallback;
+
+        return value with
+        {
+            Algorithm = algorithm,
+            CpmResolution = ClampFinite(value.CpmResolution, 0.25d, 0.001d, 2d),
+            TypedRelationshipWeight = ClampFinite(value.TypedRelationshipWeight, 2d, 0.01d, 20d),
+            CoMentionWeight = ClampFinite(value.CoMentionWeight, 1d, 0.01d, 20d),
+            MinCommunitySizeToSummarize = Math.Clamp(value.MinCommunitySizeToSummarize, 1, 1000),
+            MaxCommunitiesToSummarize = Math.Clamp(value.MaxCommunitiesToSummarize, 1, 500)
+        };
+    }
+
+    private static string BuildCommunityClusteringDetail(IReadOnlyList<HashSet<long>> components, IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships, CommunityDetectionOptions options)
     {
         var entityLookup = entities.ToDictionary(entity => entity.Id, entity => entity);
         var displayLimit = components.Count <= 50 ? components.Count : 50;
@@ -1017,18 +1059,23 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
 
         return string.Join(Environment.NewLine,
         [
-            "Algorithm: pragmatic connected components over an undirected entity graph.",
+            $"Algorithm: {options.Algorithm} community detection over a {(options.Directed ? "directed" : "undirected")} weighted entity graph.",
+            $"CPM resolution: {options.CpmResolution.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Seed: {options.Seed.ToString(CultureInfo.InvariantCulture)}",
+            $"Typed relationship weight: {options.TypedRelationshipWeight.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Co-mention weight: {options.CoMentionWeight.ToString("0.####", CultureInfo.InvariantCulture)}",
+            $"Summary size filter: min entities={options.MinCommunitySizeToSummarize}, max communities={options.MaxCommunitiesToSummarize}",
             "Nodes: rows from kg_data.entities.",
             "Edges: typed kg_data.relationships plus chunk co-mentions (CO_MENTIONED_WITH fallback).",
-            "Rule: if A is connected to B by any relationship/co-mention, they belong to the same component; summaries are generated for components with more than one entity.",
+            "Rule: optimize CPM with explicit edge weights; summaries are generated for communities that pass the configured size filter.",
             string.Empty,
-            $"Total components: {components.Count}",
-            $"Singleton components: {components.Count(component => component.Count == 1)}",
-            $"Multi-entity components: {components.Count(component => component.Count > 1)}",
+            $"Total communities: {components.Count}",
+            $"Singleton communities: {components.Count(component => component.Count == 1)}",
+            $"Multi-entity communities: {components.Count(component => component.Count > 1)}",
             string.Empty,
             components.Count <= displayLimit
-                ? $"Components (all {components.Count} shown):"
-                : $"Largest components (showing {displayLimit} of {components.Count}; {components.Count - displayLimit} smaller components omitted from this trace):",
+                ? $"Communities (all {components.Count} shown):"
+                : $"Largest communities (showing {displayLimit} of {components.Count}; {components.Count - displayLimit} smaller communities omitted from this trace):",
             string.Join(Environment.NewLine, ranked)
         ]);
     }
@@ -1062,10 +1109,12 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         ]);
 
     private static string BuildCommunitySummaryBuildDetail(int assigned, IReadOnlyList<string> summaryDetails)
-        => string.Join(Environment.NewLine + Environment.NewLine,
+        => string.Join(Environment.NewLine,
         [
             $"Entities assigned: {assigned}",
+            string.Empty,
             "For each selected multi-entity component:",
+            string.Empty,
             "1. Build LLM context from entity labels/names, relationship triples, document dates/titles, and evidence text.",
             "2. Ask Foundry to summarize the community's main topic, key entities, relationship patterns, and temporal span.",
             "3. Embed the summary and persist it to kg_data.communities.",

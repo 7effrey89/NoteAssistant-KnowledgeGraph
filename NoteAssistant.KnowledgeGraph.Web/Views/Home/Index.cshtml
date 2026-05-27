@@ -13,6 +13,10 @@
                 <span id="backendLamp" class="status-lamp"></span>
                 <small id="backendStatusText" class="text-muted">Checking backend...</small>
             </span>
+            <label class="d-flex align-items-center gap-1 ms-auto mb-0">
+                <span class="small text-muted">LLM parallelism</span>
+                <input class="form-control form-control-sm parallelism-input" type="number" id="llmParallelismInput" min="1" max="8" value="2" />
+            </label>
         </div>
     </div>
     <div id="ageStatus" class="alert alert-warning d-none"></div>
@@ -49,9 +53,9 @@
                     <div class="tab-pane fade show active" id="upload-markdown-pane" role="tabpanel" aria-labelledby="upload-markdown-tab">
                         <div class="input-group">
                             <input class="form-control" type="file" id="markdownFile" accept=".md" multiple />
-                            <button class="btn btn-primary" id="uploadBtn">Upload & Analyze</button>
+                            <button class="btn btn-primary" id="uploadBtn">Upload</button>
                         </div>
-                        <div class="form-text">Select one or more markdown files. Use the file list in Section 2 to view each document and manage metadata.</div>
+                        <div class="form-text">Select one or more markdown files. Use the file list below to view each document and manage metadata.</div>
                     </div>
                     <div class="tab-pane fade" id="upload-cache-pane" role="tabpanel" aria-labelledby="upload-cache-tab">
                         <div class="input-group">
@@ -64,24 +68,12 @@
             </div>
             <div class="mt-2"><small id="uploadMessage" class="text-muted"></small></div>
             <ul class="upload-batch-results mt-2 mb-0" id="uploadBatchResults"></ul>
-            <details class="mt-3 decomposition-prompt-details" open>
-                <summary>Graph Maker Agent</summary>
-                <pre id="graphMakerAgentPrompt" class="decomposition-prompt mb-0">Upload a document to see the system prompt used to generate chunks, entities, and links.</pre>
-            </details>
-        </div>
-    </div>
 
-    <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span>2) Documents, decomposition & metadata</span>
-            <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
-        </div>
-        <div class="card-body">
-            <div class="row g-3 document-workbench-layout">
+            <div class="row g-3 document-workbench-layout mt-1">
                 <div class="col-lg-3">
                     <div class="uploaded-documents-panel h-100">
                         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                            <strong>Uploaded files</strong>
+                            <strong>Selected files</strong>
                             <div class="d-flex flex-wrap gap-2">
                                 <button class="btn btn-sm btn-outline-secondary" type="button" id="selectAllDocsBtn">Select all</button>
                                 <button class="btn btn-sm btn-outline-secondary" type="button" id="clearSelectedDocsBtn">Clear</button>
@@ -91,24 +83,34 @@
                     </div>
                 </div>
                 <div class="col-lg-9">
-                    <div id="statusOutput" class="mb-3"></div>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <div id="statusOutput" class="mb-0 flex-grow-1"></div>
+                        <span id="cachedBadge" class="badge bg-warning text-dark" style="display:none;">cached</span>
+                    </div>
 
-                    <ul class="nav nav-tabs" id="decompositionTabs" role="tablist">
+                    <ul class="nav nav-tabs" id="documentWorkflowTabs" role="tablist">
                         <li class="nav-item" role="presentation">
                             <button class="nav-link active" id="tab-original-btn" data-bs-toggle="tab" data-bs-target="#tab-original" type="button" role="tab">Original Document</button>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab">Decomposition</button>
+                            <button class="nav-link disabled text-muted" id="tab-decomp-btn" data-bs-toggle="tab" data-bs-target="#tab-decomp" type="button" role="tab" aria-controls="tab-decomp" aria-selected="false" aria-disabled="true" title="Run Decompose documents to enable this tab." disabled>
+                                <span id="tab-decomp-status-icon" class="decomp-tab-status-icon decomp-tab-status-warning" aria-hidden="true">&#9888;</span>
+                                <span>Decomposition</span>
+                            </button>
                         </li>
                     </ul>
                     <div class="tab-content border border-top-0 p-3">
                         <div class="tab-pane fade show active" id="tab-original" role="tabpanel">
                             <pre id="originalContent" style="max-height: 480px; overflow:auto; white-space: pre-wrap;" class="mb-0">Upload a document to see its raw markdown here.</pre>
                         </div>
-                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel">
-                            <details class="mb-3 decomposition-prompt-details">
+                        <div class="tab-pane fade decomposition-scroll-panel" id="tab-decomp" role="tabpanel" aria-labelledby="tab-decomp-btn">
+                            <details class="mb-3 decomposition-prompt-details" open>
                                 <summary>Graph Maker Agent (System Prompt)</summary>
-                                <pre id="decompositionSystemPrompt" class="decomposition-prompt mb-0">Upload a document to see the prompt used for entity extraction.</pre>
+                                <pre id="graphMakerSystemPrompt" class="decomposition-prompt mb-0">Decompose a document to see the system prompt used for Graph Maker Agent.</pre>
+                            </details>
+                            <details class="mb-3 decomposition-prompt-details" open>
+                                <summary>Graph Maker Agent (Input Prompt)</summary>
+                                <pre id="graphMakerInputPrompt" class="decomposition-prompt mb-0">Decompose a document to see the full input prompt sent to Graph Maker Agent.</pre>
                             </details>
                             <ul class="nav nav-pills decomposition-subtabs" id="decompositionSubtabs" role="tablist">
                                 <li class="nav-item" role="presentation">
@@ -143,6 +145,7 @@
 
                     <div class="metadata-panel mt-3">
                         <div class="fw-semibold mb-2">Metadata for viewed document</div>
+                        <input class="d-none" id="noteAssistantMetadataFolderInput" type="file" webkitdirectory directory multiple accept=".json,application/json" />
                         <div class="row g-3">
                             <div class="col-md-4">
                                 <label class="form-label" for="metadataDocumentType">Document type</label>
@@ -165,9 +168,17 @@
                         </div>
                         <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
                             <button class="btn btn-primary btn-sm" type="button" id="applyMetadataBtn" disabled>Apply metadata to selected documents</button>
+                            <button class="btn btn-outline-primary btn-sm" type="button" id="noteAssistantDbImportBtn">noteassistant db import</button>
                             <small id="metadataMessage" class="text-muted">Select uploaded documents, define metadata, then apply it to that subset.</small>
                         </div>
                         <div class="mt-2 text-muted small">Metadata drafts are remembered as you switch viewed documents. Applying metadata updates the selected checked documents.</div>
+                    </div>
+
+                    <div class="d-flex justify-content-center mt-3">
+                        <button class="btn btn-success" type="button" id="runDecompositionBtn" disabled>Decompose documents</button>
+                    </div>
+                    <div class="mt-2 text-center">
+                        <small id="decompositionStepMessage" class="text-muted">Complete decomposition to continue to Section 3.</small>
                     </div>
                 </div>
             </div>
@@ -413,10 +424,110 @@
                 </div>
                 <button class="btn btn-outline-primary" type="button" id="buildCommunitiesBtn">Build Communities</button>
             </div>
-            <div class="mt-2"><small id="communityStatus" class="text-muted"></small></div>
+            <details class="community-tuning-panel mb-3" open>
+                <summary class="fw-semibold">Community tuning</summary>
+                <div class="row g-3 mt-1">
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communityResolutionInput">
+                            <span>CPM resolution</span>
+                            <span class="community-config-info" title="Leiden CPM granularity. Higher values usually create more/smaller communities; lower values create fewer/larger communities.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityResolutionInput" min="0.001" max="2" step="0.01" value="0.25" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communityTypedWeightInput">
+                            <span>Typed relationship weight</span>
+                            <span class="community-config-info" title="Strength multiplier for explicit extracted relationships between entities. Higher values make typed edges influence clustering more.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityTypedWeightInput" min="0.01" max="20" step="0.1" value="2.0" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communityCoMentionWeightInput">
+                            <span>Co-mention weight</span>
+                            <span class="community-config-info" title="Strength multiplier for co-mention links inferred from chunk/document co-occurrence. Higher values make co-mentions influence clustering more.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityCoMentionWeightInput" min="0.01" max="20" step="0.1" value="1.0" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communitySeedInput">
+                            <span>Seed</span>
+                            <span class="community-config-info" title="Random seed used by community detection. Keep fixed for reproducible comparisons across tuning runs.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communitySeedInput" min="0" step="1" value="42" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communityMinSizeInput">
+                            <span>Min summary size</span>
+                            <span class="community-config-info" title="Minimum entity count required for a community to be summarized. Higher values skip smaller communities.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityMinSizeInput" min="1" max="1000" step="1" value="2" />
+                    </div>
+                    <div class="col-md-4 col-xl-3">
+                        <label class="form-label d-flex align-items-center gap-2" for="communityMaxSummariesInput">
+                            <span>Max summaries</span>
+                            <span class="community-config-info" title="Upper bound on how many communities to summarize in one build. Lower values limit cost; higher values increase coverage.">i</span>
+                        </label>
+                        <input class="form-control form-control-sm community-config-input" type="number" id="communityMaxSummariesInput" min="1" max="500" step="1" value="50" />
+                    </div>
+                    <div class="col-md-4 col-xl-3 d-flex align-items-end">
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input community-config-input" type="checkbox" role="switch" id="communityDirectedInput" />
+                            <label class="form-check-label d-flex align-items-center gap-2" for="communityDirectedInput">
+                                <span>Directed graph</span>
+                                <span class="community-config-info" title="When enabled, edge direction is preserved in clustering. Keep off unless direction is semantically important for your relationships.">i</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="community-fields-divider" role="separator" aria-hidden="true"></div>
+                    </div>
+                    <div class="col-12 col-xl-6 community-profile-column">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <label class="form-label mb-1" for="communityProfileList">Persisted tuning profiles</label>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" id="communityLoadProfilesBtn">Reload</button>
+                        </div>
+                        <div id="communityProfileList" class="community-profile-list" role="listbox" aria-label="Persisted tuning profiles"></div>
+                    </div>
+                    <div class="col-12 col-xl-6 community-config-column">
+                        <div class="form-text community-config-description" id="communityProfileMeta">Loading community profiles...</div>
+                        <label class="form-label d-flex align-items-center gap-2" for="communityConfigOutput">
+                            <span>Agent config JSON</span>
+                            <span class="community-config-info" title="Effective community tuning profile used for build/tune requests. It controls Leiden clustering behavior and summary scope (CPM resolution, relation weights, seed, min size, and max summaries).">i</span>
+                        </label>
+                        <textarea class="form-control community-config-output" id="communityConfigOutput" rows="8" readonly></textarea>
+                    </div>
+                </div>
+            </details>
             <div id="communityError" class="text-danger mb-2"></div>
             <h6>Process map</h6>
             <div id="communityProcessMap" class="process-map"></div>
+            <div id="communityPreBuildGate" class="alert alert-warning py-2 px-3 mt-3 d-none">
+                <div class="fw-semibold small">Build paused after Leiden review.</div>
+                <div class="small mb-2" id="communityPreBuildMessage">Review detected communities, then choose whether to clear/rebuild the index or tune first.</div>
+                <div id="communityPreBuildAssessment" class="small mb-2"></div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-success" type="button" id="communityProceedBuildBtn">Proceed to clear index and summarize</button>
+                    <button class="btn btn-sm btn-primary" type="button" id="communityTuneBeforeBuildBtn">Tune profile first</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="communityCancelBuildBtn">Cancel</button>
+                </div>
+            </div>
+            <div id="communityPostBuildActions" class="alert alert-secondary py-2 px-3 mt-3 d-none">
+                <div class="fw-semibold small">Community optimization finished.</div>
+                <div class="small mb-2" id="communityPostBuildMessage">Build the community with the current profile, continue with further tuning, or cancel.</div>
+                <div class="small mb-2"><small id="communityStatus" class="text-muted"></small></div>
+                <div id="communityQuickAssessment" class="small mb-2"></div>
+                <details id="communityFinalProfileDetails" class="mb-2 d-none">
+                    <summary class="small fw-semibold">Final profile JSON (analysis output)</summary>
+                    <pre id="communityFinalProfileJson" class="mb-0 mt-2"></pre>
+                </details>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-success" type="button" id="communityContinueBtn">Build Community</button>
+                    <span id="communityPostTuneBtnWrapper" title="">
+                        <button class="btn btn-sm btn-primary" type="button" id="communityPostTuneBtn">Further Tuning</button>
+                    </span>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="communityRevertProfileBtn">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -500,10 +611,22 @@
         const backendStatusText = document.getElementById('backendStatusText');
         let currentDocumentId = null;
         let currentGraphName = 'knowledge_graph';
+        let communitySummaryTabsState = null;
+        let communityProfilesState = {
+            activeProfileId: null,
+            selectedProfileId: null,
+            previousProfileId: null,
+            profiles: [],
+            defaults: null,
+            previousConfigSnapshot: null
+        };
+        let communityFurtherTuningDisabledReason = '';
+        let communityBuildGatePending = false;
         let graphReady = false;
         const uploadedDocuments = new Map();
         const selectedDocumentIds = new Set();
         const metadataDrafts = new Map();
+        let decompositionStepCompleted = false;
         let hybridClarificationAttempts = 0;
         let graphCy = null;
         let graphNetwork = null;
@@ -620,6 +743,13 @@
         const metadataDocumentType = document.getElementById('metadataDocumentType');
         const metadataDocumentDate = document.getElementById('metadataDocumentDate');
         const metadataTags = document.getElementById('metadataTags');
+        const noteAssistantDbImportBtn = document.getElementById('noteAssistantDbImportBtn');
+        const noteAssistantMetadataFolderInput = document.getElementById('noteAssistantMetadataFolderInput');
+        const runDecompositionBtn = document.getElementById('runDecompositionBtn');
+        const decompositionStepMessage = document.getElementById('decompositionStepMessage');
+        const tabOriginalBtn = document.getElementById('tab-original-btn');
+        const tabDecompBtn = document.getElementById('tab-decomp-btn');
+        const tabDecompStatusIcon = document.getElementById('tab-decomp-status-icon');
         const ingestBtn = document.getElementById('ingestBtn');
         const ingestSqlBtn = document.getElementById('ingestSqlBtn');
         const ingestLogBtn = document.getElementById('ingestLogBtn');
@@ -629,6 +759,35 @@
         const runQueryBtn = document.getElementById('runQueryBtn');
         const runHybridBtn = document.getElementById('runHybridBtn');
         const buildCommunitiesBtn = document.getElementById('buildCommunitiesBtn');
+        const llmParallelismInput = document.getElementById('llmParallelismInput');
+        const communityResolutionInput = document.getElementById('communityResolutionInput');
+        const communityTypedWeightInput = document.getElementById('communityTypedWeightInput');
+        const communityCoMentionWeightInput = document.getElementById('communityCoMentionWeightInput');
+        const communitySeedInput = document.getElementById('communitySeedInput');
+        const communityMinSizeInput = document.getElementById('communityMinSizeInput');
+        const communityMaxSummariesInput = document.getElementById('communityMaxSummariesInput');
+        const communityDirectedInput = document.getElementById('communityDirectedInput');
+        const communityConfigOutput = document.getElementById('communityConfigOutput');
+        const communityTuningSystemPrompt = document.getElementById('communityTuningSystemPrompt');
+        const communityTuningUserPrompt = document.getElementById('communityTuningUserPrompt');
+        const communityProfileList = document.getElementById('communityProfileList');
+        const communityLoadProfilesBtn = document.getElementById('communityLoadProfilesBtn');
+        const communityProfileMeta = document.getElementById('communityProfileMeta');
+        const communityContinueBtn = document.getElementById('communityContinueBtn');
+        const communityPostTuneBtn = document.getElementById('communityPostTuneBtn');
+        const communityPostTuneBtnWrapper = document.getElementById('communityPostTuneBtnWrapper');
+        const communityRevertProfileBtn = document.getElementById('communityRevertProfileBtn');
+        const communityPreBuildGate = document.getElementById('communityPreBuildGate');
+        const communityPreBuildMessage = document.getElementById('communityPreBuildMessage');
+        const communityPreBuildAssessment = document.getElementById('communityPreBuildAssessment');
+        const communityProceedBuildBtn = document.getElementById('communityProceedBuildBtn');
+        const communityTuneBeforeBuildBtn = document.getElementById('communityTuneBeforeBuildBtn');
+        const communityCancelBuildBtn = document.getElementById('communityCancelBuildBtn');
+        const communityPostBuildActions = document.getElementById('communityPostBuildActions');
+        const communityPostBuildMessage = document.getElementById('communityPostBuildMessage');
+        const communityQuickAssessment = document.getElementById('communityQuickAssessment');
+        const communityFinalProfileDetails = document.getElementById('communityFinalProfileDetails');
+        const communityFinalProfileJson = document.getElementById('communityFinalProfileJson');
         const hybridModeSelect = document.getElementById('hybridModeSelect');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
@@ -660,6 +819,9 @@
             input.addEventListener('input', onMetadataFieldChanged);
             input.addEventListener('change', onMetadataFieldChanged);
         });
+        noteAssistantDbImportBtn?.addEventListener('click', onNoteAssistantDbImportClicked);
+        noteAssistantMetadataFolderInput?.addEventListener('change', onNoteAssistantMetadataFolderSelected);
+        runDecompositionBtn?.addEventListener('click', onRunDecompositionClicked);
         ingestBtn.addEventListener('click', ingestToDatabase);
         ingestSqlBtn.addEventListener('click', loadIngestSql);
         ingestLogBtn.addEventListener('click', refreshIngestLog);
@@ -668,6 +830,23 @@
         runQueryBtn.addEventListener('click', runQuery);
         runHybridBtn.addEventListener('click', runHybridRetrieval);
         buildCommunitiesBtn.addEventListener('click', buildCommunities);
+        document.querySelectorAll('.community-config-input').forEach(input => {
+            input.addEventListener('input', updateCommunityConfigOutput);
+            input.addEventListener('change', updateCommunityConfigOutput);
+        });
+        updateCommunityConfigOutput();
+        setCommunityFurtherTuningAvailability(false);
+        communityLoadProfilesBtn.addEventListener('click', () => loadCommunityProfiles(true));
+        communityContinueBtn.addEventListener('click', onCommunityContinueClicked);
+        communityPostTuneBtn.addEventListener('click', (event) => tuneCommunityProfile('post-build', event.currentTarget));
+        communityRevertProfileBtn.addEventListener('click', cancelCommunityPostBuildActions);
+        communityProceedBuildBtn.addEventListener('click', (event) => proceedCommunityBuild(event.currentTarget));
+        communityTuneBeforeBuildBtn.addEventListener('click', (event) => tuneCommunityProfile('pre-build', event.currentTarget));
+        updateDecompositionWorkflowState();
+        communityCancelBuildBtn.addEventListener('click', cancelCommunityBuildGate);
+        document.querySelectorAll('[data-copy-target]').forEach(button => {
+            button.addEventListener('click', () => copyElementValue(button.dataset.copyTarget));
+        });
         graphCheckBtn.addEventListener('click', refreshGraphCheck);
         resetDbBtn.addEventListener('click', resetDatabase);
         initScriptBtn.addEventListener('click', runInitScript);
@@ -697,7 +876,7 @@
         document.getElementById('queryInput').value = `MATCH p=(n)-[r]->(m)\nRETURN n, r, m\nLIMIT 50`;
         window.addEventListener('load', () => {
             checkBackendStatus();
-            loadGraphMakerAgentPrompt();
+            loadCommunityProfiles(true);
             setInterval(checkBackendStatus, 15000);
             loadGraphOnStartup();
         });
@@ -732,6 +911,374 @@
                 documentDate: metadata?.documentDate || '',
                 tags: Array.isArray(metadata?.tags) ? metadata.tags.join(', ') : (metadata?.tags || '')
             };
+        }
+
+        function getMetadataImportAdapter() {
+            const customAdapter = window.noteAssistantMetadataImportAdapter;
+            if (customAdapter && typeof customAdapter === 'object') {
+                return customAdapter;
+            }
+
+            return {
+                toFieldValues: defaultNoteAssistantMetadataToFields,
+                applyToUi: defaultApplyMetadataFieldsToUi
+            };
+        }
+
+        function defaultNoteAssistantMetadataToFields(files) {
+            const parsedDates = files
+                .map(file => normalizeNoteAssistantDate(file.folderCreationDate))
+                .filter(Boolean);
+            const uniqueDates = Array.from(new Set(parsedDates));
+            const sortedDates = [...uniqueDates].sort((left, right) => left.localeCompare(right));
+            const selectedDate = sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : '';
+            const customers = Array.from(new Set(files.flatMap(file => Array.isArray(file.customers) ? file.customers : []).filter(Boolean)));
+            const services = Array.from(new Set(files.flatMap(file => Array.isArray(file.services) ? file.services : []).filter(Boolean)));
+            const tags = [];
+            customers.forEach(customer => tags.push(`customer:${customer}`));
+            services.forEach(service => tags.push(`service:${service}`));
+
+            return {
+                documentType: 'meeting_summary',
+                documentDate: selectedDate,
+                tags: tags.join(', '),
+                summary: {
+                    fileCount: files.length,
+                    customerCount: customers.length,
+                    serviceCount: services.length,
+                    dateCount: uniqueDates.length
+                }
+            };
+        }
+
+        function defaultApplyMetadataFieldsToUi(fieldValues) {
+            setMetadataForm({
+                documentType: fieldValues?.documentType || '',
+                documentDate: fieldValues?.documentDate || '',
+                tags: fieldValues?.tags || ''
+            });
+            onMetadataFieldChanged();
+        }
+
+        function normalizeNoteAssistantDate(value) {
+            if (!value) {
+                return '';
+            }
+
+            const input = String(value).trim();
+            const fromIsoMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (fromIsoMatch) {
+                return `${fromIsoMatch[1]}-${fromIsoMatch[2]}-${fromIsoMatch[3]}`;
+            }
+
+            const fromDashedYearFirst = input.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+\d{1,2}[.:]\d{1,2}(?:[.:]\d{1,2})?)?$/);
+            if (fromDashedYearFirst) {
+                const month = fromDashedYearFirst[2].padStart(2, '0');
+                const day = fromDashedYearFirst[3].padStart(2, '0');
+                return `${fromDashedYearFirst[1]}-${month}-${day}`;
+            }
+
+            const fromDashedDayFirst = input.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:\s+\d{1,2}[.:]\d{1,2}(?:[.:]\d{1,2})?)?$/);
+            if (fromDashedDayFirst) {
+                const day = fromDashedDayFirst[1].padStart(2, '0');
+                const month = fromDashedDayFirst[2].padStart(2, '0');
+                const rawYear = fromDashedDayFirst[3];
+                const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+                return `${year}-${month}-${day}`;
+            }
+
+            const fromDotMatch = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+            if (fromDotMatch) {
+                const day = fromDotMatch[1].padStart(2, '0');
+                const month = fromDotMatch[2].padStart(2, '0');
+                return `${fromDotMatch[3]}-${month}-${day}`;
+            }
+
+            const fromSlashedDayFirst = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)?$/);
+            if (fromSlashedDayFirst) {
+                const day = fromSlashedDayFirst[1].padStart(2, '0');
+                const month = fromSlashedDayFirst[2].padStart(2, '0');
+                const rawYear = fromSlashedDayFirst[3];
+                const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+                return `${year}-${month}-${day}`;
+            }
+
+            const parsed = new Date(input);
+            if (!Number.isNaN(parsed.getTime())) {
+                const year = parsed.getFullYear();
+                const month = String(parsed.getMonth() + 1).padStart(2, '0');
+                const day = String(parsed.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+
+            return '';
+        }
+
+        function getJsonStringProperty(obj, keys) {
+            if (!obj || typeof obj !== 'object') {
+                return '';
+            }
+
+            for (const key of keys) {
+                const value = obj[key];
+                if (typeof value === 'string' && value.trim()) {
+                    return value.trim();
+                }
+            }
+
+            return '';
+        }
+
+        function getBaseName(path) {
+            return String(path || '')
+                .split(/[\\/]/)
+                .pop() || '';
+        }
+
+        function normalizeMetadataMatchKey(value) {
+            if (!value) {
+                return '';
+            }
+
+            let normalized = String(value).trim().toLowerCase();
+            normalized = normalized.replace(/\.(md|json)$/i, '');
+            normalized = normalized.replace(/_metadata$/i, '');
+            normalized = normalized.replace(/(_summary|_transcript|_mynotes)$/i, '');
+            normalized = normalized.replace(/\s+-\s+(summary|transcript|mynotes)$/i, '');
+            normalized = normalized.replace(/\s+/g, ' ').trim();
+            return normalized;
+        }
+
+        function getDocumentMatchKey(plan) {
+            if (!plan) {
+                return '';
+            }
+
+            return normalizeMetadataMatchKey(plan.status?.fileName || plan.title || '');
+        }
+
+        function getMetadataFileMatchKeys(file) {
+            const keys = new Set();
+            const noteSessionKey = normalizeMetadataMatchKey(file?.noteSession || '');
+            const fileNameKey = normalizeMetadataMatchKey(getBaseName(file?.fileName || ''));
+            if (noteSessionKey) {
+                keys.add(noteSessionKey);
+            }
+            if (fileNameKey) {
+                keys.add(fileNameKey);
+            }
+            return Array.from(keys);
+        }
+
+        function selectMetadataFilesForDocument(metadataFiles, plan, options = {}) {
+            const allowFallbackAll = Boolean(options.allowFallbackAll);
+            const documentKey = getDocumentMatchKey(plan);
+            if (!documentKey) {
+                return {
+                    files: allowFallbackAll ? metadataFiles : [],
+                    mode: allowFallbackAll ? 'all-no-document' : 'no-document-key',
+                    documentKey,
+                    matchedCount: allowFallbackAll ? metadataFiles.length : 0
+                };
+            }
+
+            const matched = metadataFiles.filter((file) => {
+                const keys = getMetadataFileMatchKeys(file);
+                return keys.some(key => key === documentKey || key.includes(documentKey) || documentKey.includes(key));
+            });
+
+            if (matched.length > 0) {
+                return {
+                    files: matched,
+                    mode: 'matched',
+                    documentKey,
+                    matchedCount: matched.length
+                };
+            }
+
+            return {
+                files: allowFallbackAll ? metadataFiles : [],
+                mode: allowFallbackAll ? 'fallback-all' : 'no-match',
+                documentKey,
+                matchedCount: 0
+            };
+        }
+
+        function formatUsedFileNames(files, maxCount = 3) {
+            const names = files.map(file => getBaseName(file?.fileName || '')).filter(Boolean);
+            if (names.length === 0) {
+                return '(none)';
+            }
+
+            const preview = names.slice(0, maxCount).join(', ');
+            if (names.length <= maxCount) {
+                return preview;
+            }
+
+            return `${preview} (+${names.length - maxCount} more)`;
+        }
+
+        async function onNoteAssistantDbImportClicked() {
+            if (!noteAssistantMetadataFolderInput) {
+                return;
+            }
+
+            noteAssistantMetadataFolderInput.value = '';
+            noteAssistantMetadataFolderInput.click();
+        }
+
+        async function onNoteAssistantMetadataFolderSelected() {
+            const files = Array.from(noteAssistantMetadataFolderInput?.files || []);
+            if (files.length === 0) {
+                return;
+            }
+
+            setMessage('metadataMessage', `Reading ${files.length} selected file(s)...`, 'text-muted');
+
+            const metadataFiles = [];
+            for (const file of files) {
+                if (!file.name.toLowerCase().endsWith('_metadata.json')) {
+                    continue;
+                }
+
+                try {
+                    const text = await file.text();
+                    const json = JSON.parse(text);
+                    const folderCreationDate = getJsonStringProperty(json, [
+                        'FolderCreationDate',
+                        'folderCreationDate',
+                        'FolderCreatedDate',
+                        'folderCreatedDate',
+                        'CreationDate',
+                        'creationDate'
+                    ]);
+                    metadataFiles.push({
+                        fileName: file.webkitRelativePath || file.name,
+                        noteSession: typeof json.NoteSession === 'string' ? json.NoteSession.trim() : '',
+                        folderCreationDate,
+                        customers: Array.isArray(json.Customers) ? json.Customers.filter(Boolean) : [],
+                        services: Array.isArray(json.Services) ? json.Services.filter(Boolean) : []
+                    });
+                } catch {
+                    // Skip invalid metadata JSON files.
+                }
+            }
+
+            if (metadataFiles.length === 0) {
+                setMessage('metadataMessage', 'No *_metadata.json files were found in the selected folder.', 'text-warning');
+                return;
+            }
+
+            const adapter = getMetadataImportAdapter();
+            const uploadedPlans = Array.from(uploadedDocuments.values());
+            if (uploadedPlans.length === 0) {
+                // If nothing is uploaded yet, keep legacy behavior: populate the form from all selected metadata files.
+                const fieldValues = typeof adapter.toFieldValues === 'function'
+                    ? adapter.toFieldValues(metadataFiles)
+                    : defaultNoteAssistantMetadataToFields(metadataFiles);
+
+                if (typeof adapter.applyToUi === 'function') {
+                    adapter.applyToUi(fieldValues, {
+                        setMetadataForm,
+                        onMetadataFieldChanged,
+                        controls: {
+                            metadataDocumentType,
+                            metadataDocumentDate,
+                            metadataTags
+                        }
+                    });
+                } else {
+                    defaultApplyMetadataFieldsToUi(fieldValues);
+                }
+
+                const summary = fieldValues?.summary || {};
+                const dateNote = Number(summary.dateCount) > 1
+                    ? ` Multiple dates detected; using latest FolderCreationDate (${fieldValues?.documentDate || 'n/a'}).`
+                    : '';
+                setMessage(
+                    'metadataMessage',
+                    `Imported metadata from ${summary.fileCount || metadataFiles.length} file(s) (customers: ${summary.customerCount || 0}, services: ${summary.serviceCount || 0}).${dateNote} Used file(s): ${formatUsedFileNames(metadataFiles)}.`,
+                    'text-success');
+                return;
+            }
+
+            let applied = 0;
+            let failed = 0;
+            const unmatched = [];
+            const mappingNotes = [];
+
+            for (const plan of uploadedPlans) {
+                const selection = selectMetadataFilesForDocument(metadataFiles, plan, { allowFallbackAll: false });
+                const metadataFilesForImport = selection.files;
+                if (metadataFilesForImport.length === 0) {
+                    unmatched.push(plan.status?.fileName || plan.title || `Document ${plan.documentId}`);
+                    continue;
+                }
+
+                const fieldValues = typeof adapter.toFieldValues === 'function'
+                    ? adapter.toFieldValues(metadataFilesForImport)
+                    : defaultNoteAssistantMetadataToFields(metadataFilesForImport);
+                const metadataPayload = {
+                    documentType: fieldValues?.documentType || '',
+                    documentDate: fieldValues?.documentDate || '',
+                    tags: fieldValues?.tags || ''
+                };
+
+                if (!hasMetadataPayload(metadataPayload)) {
+                    unmatched.push(plan.status?.fileName || plan.title || `Document ${plan.documentId}`);
+                    continue;
+                }
+
+                metadataDrafts.set(plan.documentId, metadataPayload);
+
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ documentIds: [plan.documentId], ...metadataPayload })
+                    });
+                } catch {
+                    failed++;
+                    continue;
+                }
+
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    failed++;
+                    continue;
+                }
+
+                const updatedPlan = (payload?.updated || [])[0];
+                if (updatedPlan) {
+                    uploadedDocuments.set(updatedPlan.documentId, updatedPlan);
+                    metadataDrafts.set(updatedPlan.documentId, normalizeMetadataDraft(updatedPlan.metadata));
+                }
+
+                applied++;
+                mappingNotes.push(`${plan.status?.fileName || plan.title || `Document ${plan.documentId}`} <= ${formatUsedFileNames(metadataFilesForImport, 2)}`);
+            }
+
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
+            } else {
+                renderUploadedDocuments();
+            }
+
+            const unmatchedNote = unmatched.length > 0
+                ? ` Unmatched documents: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? ` (+${unmatched.length - 3} more)` : ''}.`
+                : '';
+            const mappingPreview = mappingNotes.length > 0
+                ? ` Mappings: ${mappingNotes.slice(0, 3).join(' | ')}${mappingNotes.length > 3 ? ` | +${mappingNotes.length - 3} more` : ''}.`
+                : '';
+
+            const cssClass = failed > 0
+                ? (applied > 0 ? 'text-warning' : 'text-danger')
+                : (applied > 0 ? 'text-success' : 'text-warning');
+            setMessage(
+                'metadataMessage',
+                `Imported NoteAssistant metadata applied to ${applied}/${uploadedPlans.length} uploaded documents.${failed > 0 ? ` Failed: ${failed}.` : ''}${unmatchedNote}${mappingPreview}`,
+                cssClass);
         }
 
         function saveCurrentMetadataDraft() {
@@ -823,6 +1370,25 @@
             return parts.length ? parts.join(' | ') : 'metadata not set';
         }
 
+        function hasDecompositionData(plan) {
+            return Boolean(
+                plan
+                && Array.isArray(plan.chunks)
+                && plan.chunks.length > 0
+                && Array.isArray(plan.entities)
+                && Array.isArray(plan.mentions)
+            );
+        }
+
+        function syncDecompositionStateFromUploadedPlans() {
+            if (uploadedDocuments.size === 0) {
+                decompositionStepCompleted = false;
+                return;
+            }
+
+            decompositionStepCompleted = Array.from(uploadedDocuments.values()).every(hasDecompositionData);
+        }
+
         function selectAllUploadedDocuments() {
             uploadedDocuments.forEach((_, id) => selectedDocumentIds.add(Number(id)));
             renderUploadedDocuments();
@@ -833,6 +1399,12 @@
             renderUploadedDocuments();
         }
 
+        function normalizeDocumentPreviewText(value) {
+            return String(value || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
+        }
+
         function showDocumentPlan(documentId, options = {}) {
             if (currentDocumentId && currentDocumentId !== Number(documentId)) {
                 saveCurrentMetadataDraft();
@@ -841,21 +1413,150 @@
             const plan = uploadedDocuments.get(Number(documentId));
             if (!plan) return;
 
+            syncDecompositionStateFromUploadedPlans();
+
             currentDocumentId = plan.documentId;
             if (plan.graphName) currentGraphName = plan.graphName;
             document.getElementById('cachedBadge').style.display = plan.cached ? 'inline-block' : 'none';
-            ingestBtn.disabled = false;
-            ingestSqlBtn.disabled = false;
-            ingestLogBtn.disabled = false;
-            initGraphBtn.disabled = false;
-            setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
-            setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
-            renderDecomposition(plan);
+            const previewText = normalizeDocumentPreviewText(plan.originalContent);
+            document.getElementById('originalContent').textContent = previewText || '(no original content returned)';
+            if (decompositionStepCompleted) {
+                setMessage('ingestMessage', `Ready to ingest document ${plan.documentId} (${plan.chunks.length} chunks, ${plan.entities.length} entities).`, 'text-muted');
+                renderDecomposition(plan);
+            } else {
+                setMessage('ingestMessage', 'Run "Decompose documents" in Section 1 to unlock ingestion in Section 3.', 'text-muted');
+            }
+            if (decompositionStepCompleted) {
+                setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
+            } else {
+                setMessage('initGraphMessage', 'Decomposition is not available for this document yet. Click "Decompose documents" to compute it.', 'text-muted');
+            }
             renderStatus(plan.status);
             if (options.loadMetadata !== false) {
                 setMetadataForm(metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata));
             }
             renderUploadedDocuments();
+            updateDecompositionWorkflowState();
+        }
+
+        function updateDecompositionWorkflowState() {
+            syncDecompositionStateFromUploadedPlans();
+            const hasUploadedDocuments = uploadedDocuments.size > 0;
+            const canProceedToIngestion = hasUploadedDocuments && decompositionStepCompleted;
+
+            if (runDecompositionBtn) {
+                runDecompositionBtn.disabled = !hasUploadedDocuments;
+            }
+            if (tabDecompBtn) {
+                tabDecompBtn.disabled = !decompositionStepCompleted;
+                tabDecompBtn.classList.toggle('disabled', !decompositionStepCompleted);
+                tabDecompBtn.classList.toggle('text-muted', !decompositionStepCompleted);
+                if (decompositionStepCompleted) {
+                    tabDecompBtn.removeAttribute('aria-disabled');
+                    tabDecompBtn.title = 'Decomposition completed.';
+                } else {
+                    tabDecompBtn.setAttribute('aria-disabled', 'true');
+                    tabDecompBtn.title = 'Run Decompose documents to enable this tab.';
+                }
+            }
+            if (tabDecompStatusIcon) {
+                if (decompositionStepCompleted) {
+                    tabDecompStatusIcon.innerHTML = '&#10003;';
+                    tabDecompStatusIcon.classList.remove('decomp-tab-status-warning');
+                    tabDecompStatusIcon.classList.add('decomp-tab-status-ready');
+                } else {
+                    tabDecompStatusIcon.innerHTML = '&#9888;';
+                    tabDecompStatusIcon.classList.remove('decomp-tab-status-ready');
+                    tabDecompStatusIcon.classList.add('decomp-tab-status-warning');
+                }
+            }
+            if (!decompositionStepCompleted && tabOriginalBtn && window.bootstrap?.Tab) {
+                window.bootstrap.Tab.getOrCreateInstance(tabOriginalBtn).show();
+            }
+
+            ingestBtn.disabled = !canProceedToIngestion;
+            ingestSqlBtn.disabled = !canProceedToIngestion;
+            ingestLogBtn.disabled = !canProceedToIngestion;
+            initGraphBtn.disabled = !canProceedToIngestion;
+
+            if (!hasUploadedDocuments) {
+                decompositionStepMessage.textContent = 'Upload documents first, then run decomposition to continue to Section 3.';
+            } else if (!decompositionStepCompleted) {
+                decompositionStepMessage.textContent = 'Some uploaded documents are missing decomposition data. Click "Decompose documents" to compute it.';
+            } else {
+                decompositionStepMessage.textContent = 'Decomposition data is available. You can continue to Section 3 (rerun Decompose anytime to refresh).';
+            }
+        }
+
+        async function onRunDecompositionClicked() {
+            if (uploadedDocuments.size === 0) {
+                setMessage('uploadMessage', 'Upload one or more documents before running decomposition.', 'text-danger');
+                updateDecompositionWorkflowState();
+                return;
+            }
+
+            saveCurrentMetadataDraft();
+            setButtonLoading(runDecompositionBtn, true, 'Decomposing...');
+            setMessage('uploadMessage', `Decomposing ${uploadedDocuments.size} document${uploadedDocuments.size === 1 ? '' : 's'} with current metadata...`, 'text-muted');
+
+            const plans = Array.from(uploadedDocuments.values());
+            let succeeded = 0;
+            let failed = 0;
+            let lastError = '';
+
+            for (let index = 0; index < plans.length; index++) {
+                const plan = plans[index];
+                const metadataDraft = metadataDrafts.get(plan.documentId) || normalizeMetadataDraft(plan.metadata);
+                setMessage('uploadMessage', `Decomposing ${index + 1}/${plans.length}: ${plan.status.fileName || plan.title || `Document ${plan.documentId}`}`, 'text-muted');
+
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/${plan.documentId}/decompose`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(metadataDraft)
+                    });
+                } catch (err) {
+                    failed++;
+                    lastError = `Network error for document ${plan.documentId}: ${err.message}`;
+                    continue;
+                }
+
+                const payload = await response.json().catch(() => null);
+                if (!response.ok || !payload) {
+                    failed++;
+                    lastError = (payload && (payload.error || payload.detail)) || `Decomposition failed for document ${plan.documentId} (status ${response.status}).`;
+                    continue;
+                }
+
+                succeeded++;
+                uploadedDocuments.set(payload.documentId, payload);
+                metadataDrafts.set(payload.documentId, normalizeMetadataDraft(payload.metadata));
+            }
+
+            decompositionStepCompleted = succeeded > 0;
+            const activePlan = currentDocumentId ? uploadedDocuments.get(currentDocumentId) : null;
+            const fallbackPlan = activePlan || uploadedDocuments.values().next().value;
+            if (fallbackPlan && decompositionStepCompleted) {
+                renderDecomposition(fallbackPlan);
+                setMessage('ingestMessage', `Ready to ingest document ${fallbackPlan.documentId} (${fallbackPlan.chunks.length} chunks, ${fallbackPlan.entities.length} entities).`, 'text-muted');
+            }
+
+            renderUploadedDocuments();
+            updateDecompositionWorkflowState();
+            if (decompositionStepCompleted && tabDecompBtn && window.bootstrap?.Tab) {
+                window.bootstrap.Tab.getOrCreateInstance(tabDecompBtn).show();
+            }
+
+            if (failed > 0) {
+                const summaryClass = succeeded > 0 ? 'text-warning' : 'text-danger';
+                const suffix = lastError ? ` Last error: ${lastError}` : '';
+                setMessage('uploadMessage', `Decompose complete: ${succeeded} succeeded, ${failed} failed.${suffix}`, summaryClass);
+            } else {
+                setMessage('uploadMessage', `Decompose complete: ${succeeded} document${succeeded === 1 ? '' : 's'} updated with current metadata.`, 'text-success');
+            }
+
+            setButtonLoading(runDecompositionBtn, false);
         }
 
         function renderUploadedDocuments() {
@@ -936,11 +1637,13 @@
             uploadedDocuments.clear();
             selectedDocumentIds.clear();
             metadataDrafts.clear();
+            decompositionStepCompleted = false;
 
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('cachedBadge').style.display = 'none';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
-            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
+            document.getElementById('graphMakerSystemPrompt').textContent = 'Decompose a document to see the system prompt used for Graph Maker Agent.';
+            document.getElementById('graphMakerInputPrompt').textContent = 'Decompose a document to see the full input prompt sent to Graph Maker Agent.';
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
@@ -948,16 +1651,13 @@
             setMetadataForm(null);
             renderUploadedDocuments();
 
-            ingestBtn.disabled = true;
-            ingestSqlBtn.disabled = true;
-            ingestLogBtn.disabled = true;
-            initGraphBtn.disabled = true;
             setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
             setMessage('initGraphMessage', 'Upload a document first.', 'text-muted');
             document.getElementById('ingestSqlOutput').innerText = '';
             document.getElementById('ingestLogOutput').innerText = '';
             ingestBatchResults.innerHTML = '';
+            updateDecompositionWorkflowState();
         }
 
         async function checkBackendStatus() {
@@ -974,23 +1674,6 @@
                 setBackendStatus('warning', detail ? `Backend online: ${detail}` : `Backend online (status ${response.status}).`);
             } catch (err) {
                 setBackendStatus('offline', `Backend offline: ${err.message}`);
-            }
-        }
-
-        async function loadGraphMakerAgentPrompt() {
-            const promptElement = document.getElementById('graphMakerAgentPrompt');
-            promptElement.textContent = 'Loading Graph Maker Agent system prompt...';
-            try {
-                const response = await fetch(`${backendBaseUrl}/api/graph-maker-agent`);
-                const payload = await response.json().catch(() => null);
-                if (!response.ok) {
-                    promptElement.textContent = (payload && (payload.error || payload.detail)) || `Graph Maker Agent prompt unavailable (status ${response.status}).`;
-                    return;
-                }
-
-                promptElement.textContent = payload?.systemPrompt || '(no system prompt returned)';
-            } catch (err) {
-                promptElement.textContent = `Graph Maker Agent prompt unavailable: ${err.message}`;
             }
         }
 
@@ -1015,34 +1698,1009 @@
 
             activeUploadButton.disabled = true;
             resetUploadedDocumentsForNewBatch();
+            const parallelism = getLlmParallelism();
             setMessage('uploadMessage', cacheMode
                 ? `Uploading ${files.length} cache file${files.length === 1 ? '' : 's'} without LLM processing...`
-                : `Uploading and analyzing ${files.length} file${files.length === 1 ? '' : 's'}...`, 'text-muted');
+                : `Uploading ${files.length} file${files.length === 1 ? '' : 's'} with parallelism ${parallelism}...`, 'text-muted');
 
             let succeeded = 0;
             let failed = 0;
-            for (let index = 0; index < files.length; index++) {
-                const file = files[index];
-                const resultItem = appendUploadBatchResult(file.name, 'Uploading...', 'text-muted');
-                setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Analyzing'} ${index + 1}/${files.length}: ${file.name}`, 'text-muted');
+            const jobs = files.map((file, index) => ({
+                file,
+                index,
+                resultItem: appendUploadBatchResult(file.name, 'Queued...', 'text-muted')
+            }));
+            let nextJobIndex = 0;
 
-                const result = await uploadSingleFile(file, cacheMode);
-                if (result.ok) {
-                    succeeded++;
-                    handleUploadSuccess(result.payload);
-                    const statusMessage = result.payload.cached
-                        ? `Document ${result.payload.documentId} loaded from cache (${result.payload.status.state}). Analysis step skipped by duplicate/content-hash handling.`
-                        : `Document ${result.payload.documentId} analyzed (${result.payload.status.state}).`;
-                    updateUploadBatchResult(resultItem, statusMessage, result.payload.cached ? 'text-warning' : 'text-success');
-                } else {
-                    failed++;
-                    updateUploadBatchResult(resultItem, result.error, 'text-danger');
+            async function runUploadWorker() {
+                while (nextJobIndex < jobs.length) {
+                    const job = jobs[nextJobIndex++];
+                    updateUploadBatchResult(job.resultItem, `${cacheMode ? 'Loading cache' : 'Uploading'} ${job.index + 1}/${files.length}...`, 'text-muted');
+                    setMessage('uploadMessage', `${cacheMode ? 'Loading cache' : 'Uploading'} ${job.index + 1}/${files.length}: ${job.file.name}`, 'text-muted');
+
+                    const result = await uploadSingleFile(job.file, cacheMode);
+                    if (result.ok) {
+                        succeeded++;
+                        handleUploadSuccess(result.payload);
+                        const statusMessage = result.payload.cached
+                            ? `Document ${result.payload.documentId} loaded from cache (${result.payload.status.state}). Analysis step skipped by duplicate/content-hash handling.`
+                            : `Document ${result.payload.documentId} uploaded (${result.payload.status.state}).`;
+                        updateUploadBatchResult(job.resultItem, statusMessage, result.payload.cached ? 'text-warning' : 'text-success');
+                    } else {
+                        failed++;
+                        updateUploadBatchResult(job.resultItem, result.error, 'text-danger');
+                    }
                 }
             }
+
+            const workerCount = cacheMode ? Math.min(files.length, parallelism) : Math.min(files.length, parallelism);
+            await Promise.all(Array.from({ length: workerCount }, () => runUploadWorker()));
 
             activeUploadButton.disabled = false;
             const summaryClass = failed > 0 ? (succeeded > 0 ? 'text-warning' : 'text-danger') : 'text-success';
             setMessage('uploadMessage', `Batch complete: ${succeeded} succeeded, ${failed} failed. See detailed file results above.`, summaryClass);
+        }
+
+        function getLlmParallelism() {
+            const value = Number.parseInt(llmParallelismInput?.value || '2', 10);
+            return Math.max(1, Math.min(Number.isFinite(value) ? value : 2, 8));
+        }
+
+        function getNumberInputValue(input, fallback, min, max) {
+            const value = Number.parseFloat(input?.value || '');
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(value, max));
+        }
+
+        function getIntegerInputValue(input, fallback, min, max) {
+            const value = Number.parseInt(input?.value || '', 10);
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.max(min, Math.min(value, max));
+        }
+
+        function getCommunityBuildRequest() {
+            return {
+                parallelism: getLlmParallelism(),
+                communityDetection: {
+                    algorithm: 'LeidenCpm',
+                    directed: Boolean(communityDirectedInput?.checked),
+                    seed: getIntegerInputValue(communitySeedInput, 42, 0, Number.MAX_SAFE_INTEGER),
+                    cpmResolution: getNumberInputValue(communityResolutionInput, 0.25, 0.001, 2),
+                    typedRelationshipWeight: getNumberInputValue(communityTypedWeightInput, 2.0, 0.01, 20),
+                    coMentionWeight: getNumberInputValue(communityCoMentionWeightInput, 1.0, 0.01, 20),
+                    minCommunitySizeToSummarize: getIntegerInputValue(communityMinSizeInput, 2, 1, 1000),
+                    maxCommunitiesToSummarize: getIntegerInputValue(communityMaxSummariesInput, 50, 1, 500)
+                }
+            };
+        }
+
+        function updateCommunityConfigOutput() {
+            if (!communityConfigOutput) {
+                return;
+            }
+            communityConfigOutput.value = JSON.stringify(getCommunityBuildRequest(), null, 2);
+            resizeCommunityConfigOutput();
+            updateCommunityTuningPrompts();
+        }
+
+        function resizeCommunityConfigOutput() {
+            if (!communityConfigOutput) {
+                return;
+            }
+
+            communityConfigOutput.style.height = 'auto';
+            communityConfigOutput.style.height = `${communityConfigOutput.scrollHeight}px`;
+        }
+
+        function applyCommunityBuildRequestToInputs(request) {
+            if (!request || !request.communityDetection) {
+                return;
+            }
+
+            const detection = request.communityDetection;
+            if (llmParallelismInput) llmParallelismInput.value = String(request.parallelism ?? 1);
+            if (communityResolutionInput) communityResolutionInput.value = String(detection.cpmResolution ?? 0.25);
+            if (communityTypedWeightInput) communityTypedWeightInput.value = String(detection.typedRelationshipWeight ?? 2.0);
+            if (communityCoMentionWeightInput) communityCoMentionWeightInput.value = String(detection.coMentionWeight ?? 1.0);
+            if (communitySeedInput) communitySeedInput.value = String(detection.seed ?? 42);
+            if (communityMinSizeInput) communityMinSizeInput.value = String(detection.minCommunitySizeToSummarize ?? 2);
+            if (communityMaxSummariesInput) communityMaxSummariesInput.value = String(detection.maxCommunitiesToSummarize ?? 50);
+            if (communityDirectedInput) communityDirectedInput.checked = Boolean(detection.directed);
+            updateCommunityConfigOutput();
+        }
+
+        function getDefaultCommunityBuildRequest() {
+            return {
+                parallelism: 1,
+                communityDetection: {
+                    algorithm: 'LeidenCpm',
+                    directed: false,
+                    seed: 42,
+                    cpmResolution: 0.25,
+                    typedRelationshipWeight: 2.0,
+                    coMentionWeight: 1.0,
+                    minCommunitySizeToSummarize: 2,
+                    maxCommunitiesToSummarize: 50
+                }
+            };
+        }
+
+        function normalizePercentValue(value) {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return null;
+            }
+
+            return Math.max(0, Math.min(100, numeric));
+        }
+
+        function describeCommunityProfile(profile) {
+            const createdAt = profile?.createdAt ? new Date(profile.createdAt).toLocaleString() : 'n/a';
+            const score = normalizePercentValue(profile?.scorePercent);
+            const confidence = normalizePercentValue(profile?.confidencePercent);
+            const scoreText = score === null ? 'score: n/a' : `score: ${score.toFixed(1)}%`;
+            const confidenceText = confidence === null ? 'confidence: n/a' : `confidence: ${confidence.toFixed(1)}%`;
+            const source = profile?.source || 'manual';
+            return `${createdAt} | ${scoreText} | ${confidenceText} | source: ${source}`;
+        }
+
+        function getCommunityProfileDisplayParts(profile) {
+            const score = normalizePercentValue(profile?.scorePercent);
+            const confidence = normalizePercentValue(profile?.confidencePercent);
+            const scoreLabel = score === null ? 'score n/a' : `score ${score.toFixed(1)}%`;
+            const confidenceLabel = confidence === null ? 'conf n/a' : `conf ${confidence.toFixed(1)}%`;
+            const createdAt = profile?.createdAt ? new Date(profile.createdAt).toLocaleString() : 'n/a';
+            const detection = profile?.config?.communityDetection || {};
+            const parallelism = Number.isFinite(Number(profile?.config?.parallelism)) ? Number(profile.config.parallelism) : 'n/a';
+            const cpm = Number.isFinite(Number(detection.cpmResolution)) ? Number(detection.cpmResolution).toFixed(2) : 'n/a';
+            const minSize = Number.isFinite(Number(detection.minCommunitySizeToSummarize)) ? Number(detection.minCommunitySizeToSummarize) : 'n/a';
+            const maxSummaries = Number.isFinite(Number(detection.maxCommunitiesToSummarize)) ? Number(detection.maxCommunitiesToSummarize) : 'n/a';
+            return {
+                createdAt,
+                details: `${scoreLabel} | ${confidenceLabel} | p ${parallelism} | cpm ${cpm} | min ${minSize} | max ${maxSummaries}`
+            };
+        }
+
+        async function loadCommunityProfiles(selectActive) {
+            if (!communityProfileList) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles`);
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Failed to load profiles (status ${response.status}).`);
+                }
+
+                const profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+                communityProfilesState.profiles = profiles;
+                communityProfilesState.activeProfileId = payload?.activeProfileId || null;
+                communityProfilesState.defaults = payload?.defaultConfig || getDefaultCommunityBuildRequest();
+
+                renderCommunityProfileOptions(selectActive);
+            } catch (err) {
+                communityProfileList.innerHTML = '';
+                communityProfilesState.profiles = [];
+                communityProfilesState.activeProfileId = null;
+                communityProfilesState.selectedProfileId = '__defaults';
+                communityProfilesState.defaults = getDefaultCommunityBuildRequest();
+                communityProfileMeta.innerText = `Unable to load profiles: ${err.message}. Using defaults.`;
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults);
+            }
+        }
+
+        function renderCommunityProfileOptions(selectActive) {
+            const previousSelected = communityProfilesState.selectedProfileId;
+            if (selectActive && communityProfilesState.activeProfileId) {
+                communityProfilesState.selectedProfileId = communityProfilesState.activeProfileId;
+            } else if (previousSelected && (previousSelected === '__defaults' || communityProfilesState.profiles.some(profile => profile.id === previousSelected))) {
+                communityProfilesState.selectedProfileId = previousSelected;
+            } else {
+                communityProfilesState.selectedProfileId = '__defaults';
+            }
+
+            renderCommunityProfileList();
+
+            updateCommunityProfileMeta();
+
+            const selectedProfile = getSelectedCommunityProfile();
+            if (selectedProfile) {
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+            } else if (selectActive) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+            }
+        }
+
+        function getSelectedCommunityProfile() {
+            const selectedId = communityProfilesState.selectedProfileId;
+            if (!selectedId || selectedId === '__defaults') {
+                return null;
+            }
+
+            return communityProfilesState.profiles.find(profile => profile.id === selectedId) || null;
+        }
+
+        function updateCommunityProfileMeta() {
+            const selectedProfile = getSelectedCommunityProfile();
+            if (!selectedProfile) {
+                communityProfileMeta.innerText = 'No persisted profile selected. Current build uses defaults or your unsaved edits.';
+                return;
+            }
+
+            const isActive = selectedProfile.id === communityProfilesState.activeProfileId;
+            const activeText = isActive ? 'ACTIVE' : 'not active';
+            const improvement = selectedProfile.improvement ? ` | ${truncateText(selectedProfile.improvement, 180)}` : '';
+            communityProfileMeta.innerText = `${activeText}: ${describeCommunityProfile(selectedProfile)}${improvement}`;
+        }
+
+        function onCommunityProfileSelectionChanged(profileId) {
+            communityProfilesState.selectedProfileId = profileId || '__defaults';
+            renderCommunityProfileList();
+            updateCommunityProfileMeta();
+
+            const selectedProfile = getSelectedCommunityProfile();
+            if (selectedProfile?.config) {
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+                return;
+            }
+
+            if (communityProfilesState.defaults) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults);
+            }
+        }
+
+        function getCommunityProfileTuneButton(profileId) {
+            if (!communityProfileList) {
+                return null;
+            }
+
+            const targetProfileId = profileId || '__defaults';
+            const rows = communityProfileList.querySelectorAll('.community-profile-row');
+            for (const row of rows) {
+                if ((row.getAttribute('data-profile-id') || '') === targetProfileId) {
+                    return row.querySelector('[data-role="tune"]');
+                }
+            }
+
+            return null;
+        }
+
+        function renderCommunityProfileList() {
+            if (!communityProfileList) {
+                return;
+            }
+
+            const selectedId = communityProfilesState.selectedProfileId || '__defaults';
+            const activeId = communityProfilesState.activeProfileId;
+            communityProfileList.innerHTML = '';
+
+            const defaultsRow = document.createElement('div');
+            defaultsRow.className = `community-profile-row${selectedId === '__defaults' ? ' selected' : ''}`;
+            defaultsRow.setAttribute('role', 'option');
+            defaultsRow.setAttribute('aria-selected', selectedId === '__defaults' ? 'true' : 'false');
+            defaultsRow.setAttribute('data-profile-id', '__defaults');
+            defaultsRow.innerHTML = `
+                <div class="community-profile-row-main">
+                    <div class="community-profile-row-title">Defaults (unsaved)</div>
+                </div>
+                <div class="community-profile-row-actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-role="tune" title="Use this profile as baseline for a new optimized profile.">Tune</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary">Use</button>
+                </div>`;
+            defaultsRow.addEventListener('click', () => onCommunityProfileSelectionChanged('__defaults'));
+            defaultsRow.querySelector('[data-role="tune"]')?.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                onCommunityProfileSelectionChanged('__defaults');
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                const visibleTuneButton = getCommunityProfileTuneButton('__defaults');
+                await tuneCommunityProfile('manual', visibleTuneButton || event.currentTarget);
+            });
+            defaultsRow.querySelector('.btn-outline-primary')?.addEventListener('click', (event) => {
+                event.stopPropagation();
+                onCommunityProfileSelectionChanged('__defaults');
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                hideCommunityPostBuildActions();
+            });
+            communityProfileList.appendChild(defaultsRow);
+
+            communityProfilesState.profiles.forEach((profile) => {
+                const isSelected = selectedId === profile.id;
+                const isActive = activeId === profile.id;
+                const row = document.createElement('div');
+                row.className = `community-profile-row${isSelected ? ' selected' : ''}${isActive ? ' active' : ''}`;
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+                row.setAttribute('data-profile-id', profile.id);
+
+                const displayParts = getCommunityProfileDisplayParts(profile);
+                row.innerHTML = `
+                    <div class="community-profile-row-main">
+                        <div class="community-profile-row-title">${escapeHtml(displayParts.createdAt)}${isActive ? ' (active)' : ''}</div>
+                        <div class="community-profile-row-meta">${escapeHtml(displayParts.details)}</div>
+                    </div>
+                    <div class="community-profile-row-actions">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-role="tune" title="Use this profile as baseline for a new optimized profile.">Tune</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" data-role="use">Use</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" data-role="delete">Delete</button>
+                    </div>`;
+
+                row.addEventListener('click', () => onCommunityProfileSelectionChanged(profile.id));
+                row.querySelector('[data-role="tune"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    onCommunityProfileSelectionChanged(profile.id);
+                    applyCommunityBuildRequestToInputs(profile.config);
+                    const visibleTuneButton = getCommunityProfileTuneButton(profile.id);
+                    await tuneCommunityProfile('manual', visibleTuneButton || event.currentTarget);
+                });
+                row.querySelector('[data-role="use"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    onCommunityProfileSelectionChanged(profile.id);
+                    await applySelectedCommunityProfile();
+                });
+                row.querySelector('[data-role="delete"]')?.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    await deleteCommunityProfile(profile.id);
+                });
+
+                communityProfileList.appendChild(row);
+            });
+        }
+
+        async function applySelectedCommunityProfile() {
+            const selectedProfile = getSelectedCommunityProfile();
+            if (!selectedProfile) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                hideCommunityPostBuildActions();
+                return;
+            }
+
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles/active`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profileId: selectedProfile.id })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Unable to activate profile (status ${response.status}).`);
+                }
+
+                communityProfilesState.previousProfileId = communityProfilesState.activeProfileId;
+                communityProfilesState.activeProfileId = payload?.activeProfileId || selectedProfile.id;
+                applyCommunityBuildRequestToInputs(selectedProfile.config);
+                setInlineStatus(document.getElementById('communityStatus'), 'Selected community profile loaded.', 'text-success');
+                updateCommunityProfileMeta();
+                renderCommunityProfileList();
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+            }
+        }
+
+        async function deleteCommunityProfile(profileId) {
+            if (!profileId) {
+                return;
+            }
+
+            if (!window.confirm('Delete this persisted profile?')) {
+                return;
+            }
+
+            document.getElementById('communityError').innerText = '';
+            try {
+                const response = await fetch(`${backendBaseUrl}/api/communities/profiles/${encodeURIComponent(profileId)}`, {
+                    method: 'DELETE'
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error((payload && (payload.error || payload.detail)) || `Unable to delete profile (status ${response.status}).`);
+                }
+
+                communityProfilesState.profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+                communityProfilesState.activeProfileId = payload?.activeProfileId || null;
+                if (communityProfilesState.selectedProfileId === profileId) {
+                    communityProfilesState.selectedProfileId = communityProfilesState.activeProfileId || '__defaults';
+                }
+
+                renderCommunityProfileOptions(false);
+                setInlineStatus(document.getElementById('communityStatus'), 'Profile deleted.', 'text-success');
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+            }
+        }
+
+        function showCommunityPostBuildActions(message) {
+            if (!communityPostBuildActions) {
+                return;
+            }
+
+            communityPostBuildActions.classList.remove('d-none');
+            if (communityPostBuildMessage) {
+                communityPostBuildMessage.innerText = message || 'Build the community with the current profile, continue tuning, or cancel.';
+            }
+        }
+
+        function setCommunityFurtherTuningAvailability(disabled, reason) {
+            communityFurtherTuningDisabledReason = disabled ? (reason || 'Further tuning is not available right now.') : '';
+
+            if (communityPostTuneBtn) {
+                communityPostTuneBtn.disabled = disabled;
+                if (disabled) {
+                    communityPostTuneBtn.setAttribute('title', communityFurtherTuningDisabledReason);
+                    communityPostTuneBtn.setAttribute('aria-disabled', 'true');
+                } else {
+                    communityPostTuneBtn.setAttribute('title', 'Run another tuning pass for this profile.');
+                    communityPostTuneBtn.removeAttribute('aria-disabled');
+                }
+            }
+
+            if (communityPostTuneBtnWrapper) {
+                communityPostTuneBtnWrapper.setAttribute('title', disabled ? communityFurtherTuningDisabledReason : '');
+            }
+        }
+
+        function cancelCommunityPostBuildActions() {
+            hideCommunityPostBuildActions();
+            setInlineStatus(document.getElementById('communityStatus'), 'Community build canceled. Current profile remains selected.', 'text-muted');
+        }
+
+        async function onCommunityContinueClicked() {
+            const communityError = document.getElementById('communityError');
+            if (communityError) {
+                communityError.className = 'text-danger mb-2';
+                communityError.innerText = '';
+            }
+
+            setButtonLoading(communityContinueBtn, true, 'Continuing...');
+            try {
+                const selectedProfile = getSelectedCommunityProfile();
+                if (selectedProfile) {
+                    await applySelectedCommunityProfile();
+                } else {
+                    applyCommunityBuildRequestToInputs(communityProfilesState.defaults || getDefaultCommunityBuildRequest());
+                }
+
+                if (communityError && communityError.innerText) {
+                    return;
+                }
+
+                await runCommunityBuildExecution();
+            } finally {
+                setButtonLoading(communityContinueBtn, false);
+            }
+        }
+
+        function hideCommunityPostBuildActions() {
+            if (!communityPostBuildActions) {
+                return;
+            }
+
+            communityPostBuildActions.classList.add('d-none');
+            if (communityQuickAssessment) {
+                communityQuickAssessment.innerHTML = '';
+            }
+            setCommunityFinalProfileOutput(null);
+        }
+
+        function setCommunityFinalProfileOutput(config) {
+            if (!communityFinalProfileDetails || !communityFinalProfileJson) {
+                return;
+            }
+
+            if (!config || typeof config !== 'object') {
+                communityFinalProfileJson.textContent = '';
+                communityFinalProfileDetails.classList.add('d-none');
+                communityFinalProfileDetails.open = false;
+                return;
+            }
+
+            communityFinalProfileJson.textContent = JSON.stringify(config, null, 2);
+            communityFinalProfileDetails.classList.remove('d-none');
+        }
+
+        function parseCommunityClusteringMetrics(detail) {
+            const text = String(detail || '');
+            const readInt = (pattern) => {
+                const match = text.match(pattern);
+                return match ? Number.parseInt(match[1], 10) : null;
+            };
+
+            return {
+                totalCommunities: readInt(/Total communities:\s*(\d+)/i),
+                singletonCommunities: readInt(/Singleton communities:\s*(\d+)/i),
+                multiEntityCommunities: readInt(/Multi-entity communities:\s*(\d+)/i)
+            };
+        }
+
+        function assessCommunityTuningPotential(configOverride) {
+            const state = ensureCommunitySummaryTabsState();
+            const config = configOverride || getCommunityBuildRequest();
+            const metrics = parseCommunityClusteringMetrics(state.clusteringDetail);
+            const completedSummaryCount = state.completedBlocks.filter(Boolean).length;
+            const hasRunMetrics = Boolean(metrics.totalCommunities || metrics.multiEntityCommunities || metrics.singletonCommunities || state.clusteringDetail);
+
+            if (!hasRunMetrics) {
+                const reasons = [];
+                if (config.communityDetection.cpmResolution < 0.08 || config.communityDetection.cpmResolution > 0.8) {
+                    reasons.push('resolution is in an extreme range');
+                }
+                if (config.communityDetection.minCommunitySizeToSummarize >= 4) {
+                    reasons.push('minimum summary size may filter aggressively');
+                }
+                if (config.communityDetection.maxCommunitiesToSummarize < 25) {
+                    reasons.push('summary cap is relatively low');
+                }
+
+                return {
+                    potential: null,
+                    confidence: reasons.length ? 35 : 25,
+                    band: 'Unknown',
+                    total: null,
+                    singleton: null,
+                    multiEntity: null,
+                    summaryCount: 0,
+                    reasons,
+                    recommendation: reasons.length
+                        ? 'only config-level risks are visible before detection; proceed with build to measure real community quality, or tune conservatively first'
+                        : 'no detected communities/entities are available yet; proceed with build to collect real metrics before judging tuning upside',
+                    source: 'config-only'
+                };
+            }
+
+            const multiEntity = metrics.multiEntityCommunities ?? completedSummaryCount;
+            const singleton = metrics.singletonCommunities ?? 0;
+            const total = metrics.totalCommunities ?? (multiEntity + singleton);
+            const singletonRatio = total > 0 ? singleton / total : 0;
+            const candidateSummaryCount = completedSummaryCount > 0
+                ? completedSummaryCount
+                : Math.min(multiEntity, config.communityDetection.maxCommunitiesToSummarize);
+            const summarizedCoverage = multiEntity > 0 ? candidateSummaryCount / multiEntity : 0;
+
+            let potential = 5;
+            const reasons = [];
+
+            if (singletonRatio >= 0.35) {
+                potential += 22;
+                reasons.push(`high singleton ratio (${(singletonRatio * 100).toFixed(1)}%) suggests fragmentation`);
+            } else if (singletonRatio >= 0.22) {
+                potential += 10;
+                reasons.push(`moderate singleton ratio (${(singletonRatio * 100).toFixed(1)}%)`);
+            }
+
+            if (multiEntity > config.communityDetection.maxCommunitiesToSummarize) {
+                potential += 20;
+                reasons.push(`summary cap hit (${config.communityDetection.maxCommunitiesToSummarize}/${multiEntity})`);
+            }
+
+            if (summarizedCoverage > 0 && summarizedCoverage < 0.7) {
+                potential += 10;
+                reasons.push(`low summarized coverage (${(summarizedCoverage * 100).toFixed(1)}%)`);
+            }
+
+            if (config.communityDetection.cpmResolution < 0.08 || config.communityDetection.cpmResolution > 0.8) {
+                potential += 8;
+                reasons.push('resolution is in an extreme range');
+            }
+
+            if (config.communityDetection.minCommunitySizeToSummarize >= 4) {
+                potential += 6;
+                reasons.push('minimum summary size may filter too aggressively');
+            }
+
+            potential = Math.max(0, Math.min(95, Math.round(potential)));
+
+            const confidence = Math.max(45, Math.min(90,
+                45
+                + (metrics.totalCommunities ? 15 : 0)
+                + (metrics.multiEntityCommunities ? 10 : 0)
+                + (completedSummaryCount > 0 ? 10 : 0)
+            ));
+
+            let band = 'Low';
+            if (potential >= 60) {
+                band = 'High';
+            } else if (potential >= 30) {
+                band = 'Medium';
+            }
+
+            const recommendation = [];
+            if (singletonRatio >= 0.3) {
+                recommendation.push('try slightly lower CPM resolution or slightly higher co-mention weight');
+            }
+            if (multiEntity > config.communityDetection.maxCommunitiesToSummarize) {
+                recommendation.push('raise max summaries or tighten resolution to focus high-value communities');
+            }
+            if (recommendation.length === 0) {
+                recommendation.push('current profile looks stable; tune only if retrieval quality is weak');
+            }
+
+            return {
+                potential,
+                confidence,
+                band,
+                total,
+                singleton,
+                multiEntity,
+                summaryCount: candidateSummaryCount,
+                reasons,
+                recommendation: recommendation.join('; '),
+                source: 'run-metrics'
+            };
+        }
+
+        function formatAssessmentPotential(assessment) {
+            return assessment.potential === null || assessment.potential === undefined
+                ? `${assessment.band} (needs detected community metrics)`
+                : `${assessment.band} (${assessment.potential}%)`;
+        }
+
+        function buildCommunityReviewRubricPrompt() {
+            return [
+                'This review is generated by a deterministic rule-based rubric (no LLM call).',
+                '',
+                'Scoring logic summary:',
+                '- Start potential at 5%.',
+                '- Add +22 when singleton ratio >= 35%, or +10 when >= 22%.',
+                '- Add +20 when multi-entity communities exceed max summaries.',
+                '- Add +10 when summarized coverage is between 0% and 70%.',
+                '- Add +8 when CPM resolution is in extreme range (<0.08 or >0.8).',
+                '- Add +6 when minimum summary size >= 4.',
+                '- Clamp potential to 0-95%.',
+                '- Confidence is derived from detected run metrics and completed summaries (45-90%).',
+                '',
+                'Output fields:',
+                '- Improvement potential band and percentage',
+                '- Confidence',
+                '- Candidate coverage',
+                '- Recommendation text'
+            ].join('\n');
+        }
+
+        function buildCommunityReviewInputPayload(assessment) {
+            const state = ensureCommunitySummaryTabsState();
+            const metrics = parseCommunityClusteringMetrics(state.clusteringDetail);
+            const completedSummaryCount = state.completedBlocks.filter(Boolean).length;
+
+            return [
+                'Source: local deterministic assessment (no LLM system prompt/user prompt sent).',
+                '',
+                'Current config:',
+                JSON.stringify(getCommunityBuildRequest(), null, 2),
+                '',
+                'Detected clustering output:',
+                truncateText(state.clusteringDetail || '(not available)', 12000),
+                '',
+                'Derived metrics:',
+                JSON.stringify({
+                    totalCommunities: metrics.totalCommunities,
+                    singletonCommunities: metrics.singletonCommunities,
+                    multiEntityCommunities: metrics.multiEntityCommunities,
+                    completedSummaryCount,
+                    assessmentPotential: assessment?.potential ?? null,
+                    assessmentBand: assessment?.band ?? null,
+                    assessmentConfidence: assessment?.confidence ?? null
+                }, null, 2)
+            ].join('\n');
+        }
+
+        function renderCommunityQuickAssessment(assessment) {
+            if (!communityQuickAssessment) {
+                return;
+            }
+
+            const reasonText = assessment.reasons.length
+                ? `Signals: ${assessment.reasons.join(' | ')}`
+                : 'Signals: no major risk indicators detected from this run.';
+            communityQuickAssessment.innerHTML = `
+                <div><strong>Quick assessment before tuning:</strong> ${formatAssessmentPotential(assessment)} | confidence ${assessment.confidence}%.</div>
+                <div>Coverage: summarized ${assessment.summaryCount} multi-entity communities out of ${assessment.multiEntity} (${assessment.total} total communities, ${assessment.singleton} singleton).</div>
+                <div>${escapeHtml(reasonText)}</div>
+                <div><strong>Recommendation:</strong> ${escapeHtml(assessment.recommendation)}</div>`;
+        }
+
+        function renderCommunityPreBuildAssessment(assessment) {
+            if (!communityPreBuildAssessment) {
+                return;
+            }
+
+            const scopeText = assessment.source === 'run-metrics'
+                ? 'Based on the detected communities from this Leiden run.'
+                : 'Config-only preflight: no detected communities/entities exist yet for this build.';
+            const coverageText = assessment.source === 'run-metrics'
+                ? `<div>Candidate coverage: ${assessment.summaryCount} of ${assessment.multiEntity} multi-entity communities would be summarized (${assessment.total} total, ${assessment.singleton} singleton).</div>`
+                : '<div>Community/entity counts are not known until the backend detection step runs.</div>';
+            communityPreBuildAssessment.innerHTML = `
+                <div><strong>Estimated improvement potential:</strong> ${formatAssessmentPotential(assessment)} | confidence ${assessment.confidence}%.</div>
+                <div>${escapeHtml(scopeText)}</div>
+                ${coverageText}
+                <div><strong>Recommendation:</strong> ${escapeHtml(assessment.recommendation)}</div>
+                <div class="text-muted">No reset or LLM summary call has started yet. Proceed to continue with \"Existing community index cleared\".</div>`;
+        }
+
+        function showCommunityPreBuildGate(assessment) {
+            if (!communityPreBuildGate) {
+                return;
+            }
+
+            communityPreBuildGate.classList.remove('d-none');
+            if (communityPreBuildMessage) {
+                communityPreBuildMessage.innerText = 'Build is paused before execution. Choose proceed or tune first.';
+            }
+            renderCommunityPreBuildAssessment(assessment);
+        }
+
+        function formatCommunityConfigValue(value) {
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+            }
+            if (typeof value === 'boolean') {
+                return value ? 'true' : 'false';
+            }
+            return String(value ?? 'n/a');
+        }
+
+        function summarizeCommunityConfigChanges(beforeConfig, afterConfig) {
+            const changes = [];
+            const beforeDetection = beforeConfig?.communityDetection || {};
+            const afterDetection = afterConfig?.communityDetection || {};
+
+            const addChange = (label, beforeValue, afterValue) => {
+                if (beforeValue === afterValue) {
+                    return;
+                }
+                changes.push(`${label}: ${formatCommunityConfigValue(beforeValue)} -> ${formatCommunityConfigValue(afterValue)}`);
+            };
+
+            addChange('LLM parallelism', beforeConfig?.parallelism, afterConfig?.parallelism);
+            addChange('CPM resolution', beforeDetection.cpmResolution, afterDetection.cpmResolution);
+            addChange('Typed relationship weight', beforeDetection.typedRelationshipWeight, afterDetection.typedRelationshipWeight);
+            addChange('Co-mention weight', beforeDetection.coMentionWeight, afterDetection.coMentionWeight);
+            addChange('Min summary size', beforeDetection.minCommunitySizeToSummarize, afterDetection.minCommunitySizeToSummarize);
+            addChange('Max summaries', beforeDetection.maxCommunitiesToSummarize, afterDetection.maxCommunitiesToSummarize);
+            addChange('Directed graph', beforeDetection.directed, afterDetection.directed);
+            addChange('Seed', beforeDetection.seed, afterDetection.seed);
+
+            return changes;
+        }
+
+        function estimateCommunityTuningGain(beforeAssessment, scorePercent) {
+            const score = normalizePercentValue(scorePercent);
+            if (score === null || beforeAssessment?.potential === null || beforeAssessment?.potential === undefined) {
+                return null;
+            }
+
+            const baselineQuality = Math.max(0, Math.min(100, 100 - beforeAssessment.potential));
+            const delta = Number((score - baselineQuality).toFixed(1));
+            return {
+                baselineQuality,
+                projectedQuality: score,
+                delta
+            };
+        }
+
+        function appendCommunityTuningAgentReview(reason, payload, previousConfig, nextConfig, beforeAssessment) {
+            const configChanges = summarizeCommunityConfigChanges(previousConfig, nextConfig);
+            const expectedGain = estimateCommunityTuningGain(beforeAssessment, payload?.scorePercent);
+            const score = normalizePercentValue(payload?.scorePercent);
+            const confidence = normalizePercentValue(payload?.confidencePercent);
+            const scoreBreakdown = payload?.scoreBreakdown || null;
+            const scoreText = score === null ? 'n/a' : `${score.toFixed(1)}%`;
+            const confidenceText = confidence === null ? 'n/a' : `${confidence.toFixed(1)}%`;
+            const expectedGainText = expectedGain
+                ? `Projected quality after applying profile: ${expectedGain.projectedQuality.toFixed(1)}% (baseline ${expectedGain.baselineQuality.toFixed(1)}%, expected gain ${expectedGain.delta >= 0 ? '+' : ''}${expectedGain.delta.toFixed(1)}%).`
+                : 'Projected gain unavailable: score and run metrics are required.';
+
+            const scoreComponentText = Array.isArray(scoreBreakdown?.scoreComponents) && scoreBreakdown.scoreComponents.length
+                ? scoreBreakdown.scoreComponents
+                    .map(component => `${component.name}: ${component.value} (${component.detail || ''})`)
+                    .join('\n')
+                : '(no score components returned)';
+            const confidenceComponentText = Array.isArray(scoreBreakdown?.confidenceComponents) && scoreBreakdown.confidenceComponents.length
+                ? scoreBreakdown.confidenceComponents
+                    .map(component => `${component.name}: ${component.value} (${component.detail || ''})`)
+                    .join('\n')
+                : '(no confidence components returned)';
+            const scoringMethodLine = scoreBreakdown?.method
+                ? `Scoring method: ${scoreBreakdown.method} (deterministic backend)`
+                : 'Scoring method: not provided';
+
+            const reviewLines = [
+                `Trigger: ${reason || 'manual'}`,
+                `Agent score: ${scoreText} | confidence: ${confidenceText}`,
+                scoringMethodLine,
+                `Estimated improvement potential before tuning: ${formatAssessmentPotential(beforeAssessment)} | confidence ${beforeAssessment?.confidence ?? 'n/a'}%`,
+                expectedGainText,
+                `Recommendation: ${payload?.improvement || 'No recommendation text returned.'}`,
+                configChanges.length
+                    ? `Suggested config changes: ${configChanges.join(' | ')}`
+                    : 'Suggested config changes: none (agent kept current profile).'
+            ];
+
+            appendCommunityProcessMap([
+                {
+                    title: 'Community Tuning Agent review',
+                    variant: 'agent',
+                    role: 'GraphRag Community Tuning Agent',
+                    purpose: 'Evaluate Leiden run quality and recommend a reversible profile optimization.',
+                    body: reviewLines.join('\n'),
+                    systemPrompt: communityTuningSystemPrompt?.value || '(system prompt unavailable)',
+                    systemPromptTitle: 'Community Tuning Agent system prompt',
+                    inputPayload: communityTuningUserPrompt?.value || '(agent input unavailable)',
+                    inputPayloadTitle: 'Community Tuning Agent input (config + detected entities/relationships + summary samples)',
+                    configPayload: JSON.stringify(nextConfig || payload?.config || {}, null, 2),
+                    configPayloadTitle: 'Suggested community profile JSON',
+                    outputPayload: [
+                        `scorePercent: ${scoreText}`,
+                        `confidencePercent: ${confidenceText}`,
+                        scoringMethodLine,
+                        '',
+                        'Score components:',
+                        scoreComponentText,
+                        '',
+                        'Confidence components:',
+                        confidenceComponentText
+                    ].join('\n'),
+                    outputPayloadTitle: 'Deterministic score breakdown',
+                    tokenUsage: payload?.tokenUsage || null
+                }
+            ]);
+        }
+
+        function hideCommunityPreBuildGate() {
+            if (!communityPreBuildGate) {
+                return;
+            }
+
+            communityPreBuildGate.classList.add('d-none');
+            if (communityPreBuildAssessment) {
+                communityPreBuildAssessment.innerHTML = '';
+            }
+        }
+
+        function cancelCommunityBuildGate() {
+            communityBuildGatePending = false;
+            hideCommunityPreBuildGate();
+            setInlineStatus(document.getElementById('communityStatus'), 'Community build paused. Click Build Communities when ready.', 'text-muted');
+        }
+
+        async function proceedCommunityBuild(triggerButton = null) {
+            communityBuildGatePending = false;
+            if (triggerButton) {
+                setButtonLoading(triggerButton, true, 'Proceeding...');
+            }
+
+            try {
+                return await runCommunityBuildExecution();
+            } finally {
+                if (triggerButton) {
+                    setButtonLoading(triggerButton, false);
+                }
+            }
+        }
+
+        async function tuneCommunityProfile(reason, triggerButton = null) {
+            const communityStatus = document.getElementById('communityStatus');
+            document.getElementById('communityError').innerText = '';
+            updateCommunityTuningPrompts();
+            const previousConfig = getCommunityBuildRequest();
+            const existingProfileIds = new Set((communityProfilesState.profiles || []).map(profile => profile.id));
+            const beforeAssessment = assessCommunityTuningPotential(previousConfig);
+            setInlineStatus(communityStatus, 'Running GraphRag Community Tuning Agent...', 'text-muted');
+
+            const tuningButtons = new Set();
+            if (triggerButton) {
+                tuningButtons.add(triggerButton);
+            }
+            if (reason === 'post-build' && communityPostTuneBtn) {
+                tuningButtons.add(communityPostTuneBtn);
+            }
+            if (reason === 'pre-build' && communityTuneBeforeBuildBtn) {
+                tuningButtons.add(communityTuneBeforeBuildBtn);
+            }
+            tuningButtons.forEach((button) => setButtonLoading(button, true, 'Tuning...'));
+
+            try {
+                communityProfilesState.previousConfigSnapshot = getCommunityBuildRequest();
+                communityProfilesState.previousProfileId = communityProfilesState.activeProfileId;
+
+                const response = await fetch(`${backendBaseUrl}/api/communities/tune-profile`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        systemPrompt: communityTuningSystemPrompt?.value || '',
+                        userPrompt: communityTuningUserPrompt?.value || '',
+                        currentConfig: getCommunityBuildRequest(),
+                        persistProfile: true,
+                        assessmentContext: {
+                            totalCommunities: beforeAssessment?.total ?? null,
+                            singletonCommunities: beforeAssessment?.singleton ?? null,
+                            multiEntityCommunities: beforeAssessment?.multiEntity ?? null,
+                            candidateSummaryCount: beforeAssessment?.summaryCount ?? null,
+                            source: beforeAssessment?.source || null
+                        }
+                    })
+                });
+                const payload = await response.json().catch(() => null);
+                if (!response.ok || !payload?.success) {
+                    throw new Error((payload && (payload.error || payload.detail)) || 'Tuning request failed.');
+                }
+
+                if (payload.config) {
+                    applyCommunityBuildRequestToInputs(payload.config);
+                }
+
+                const appliedConfig = payload.config || getCommunityBuildRequest();
+                setCommunityFinalProfileOutput(appliedConfig);
+                const configChanges = summarizeCommunityConfigChanges(previousConfig, appliedConfig);
+
+                await loadCommunityProfiles(true);
+                if (payload?.savedProfile?.id) {
+                    communityProfilesState.selectedProfileId = payload.savedProfile.id;
+                    renderCommunityProfileList();
+                    updateCommunityProfileMeta();
+                }
+
+                appendCommunityTuningAgentReview(reason, payload, previousConfig, appliedConfig, beforeAssessment);
+
+                const score = normalizePercentValue(payload.scorePercent);
+                const confidence = normalizePercentValue(payload.confidencePercent);
+                const scoreText = score === null ? 'n/a' : `${score.toFixed(1)}%`;
+                const confidenceText = confidence === null ? 'n/a' : `${confidence.toFixed(1)}%`;
+                const improvement = payload.improvement ? ` ${payload.improvement}` : '';
+                const reusedExistingProfile = !!(payload?.savedProfile?.id && existingProfileIds.has(payload.savedProfile.id));
+                const reuseNote = reusedExistingProfile ? ' Reused existing matching profile (no new profile created).' : '';
+                setInlineStatus(communityStatus, `Tuning complete (score ${scoreText}, confidence ${confidenceText}).${reuseNote}`, 'text-success');
+                if (configChanges.length === 0) {
+                    setCommunityFurtherTuningAvailability(
+                        true,
+                        'Further tuning disabled: no additional optimization was suggested because the agent kept the current profile (Suggested config changes: none).'
+                    );
+                } else {
+                    setCommunityFurtherTuningAvailability(false);
+                }
+                showCommunityPostBuildActions(`Tuning complete (${reason || 'manual'}). Review the Community Tuning Agent step, then build the community, continue with further tuning, or cancel.${improvement}`);
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                setInlineStatus(communityStatus, 'Community profile tuning failed.', 'text-danger');
+            } finally {
+                tuningButtons.forEach((button) => setButtonLoading(button, false));
+            }
+        }
+
+        async function revertToPreviousCommunityProfile() {
+            if (communityProfilesState.previousProfileId) {
+                communityProfilesState.selectedProfileId = communityProfilesState.previousProfileId;
+                renderCommunityProfileList();
+                await applySelectedCommunityProfile();
+                showCommunityPostBuildActions('Previous persisted profile restored.');
+                return;
+            }
+
+            if (communityProfilesState.previousConfigSnapshot) {
+                applyCommunityBuildRequestToInputs(communityProfilesState.previousConfigSnapshot);
+                showCommunityPostBuildActions('Previous unsaved config restored.');
+                return;
+            }
+
+            setInlineStatus(document.getElementById('communityStatus'), 'No previous profile/config available to restore.', 'text-warning');
+        }
+
+        function copyElementValue(elementId) {
+            const element = document.getElementById(elementId || '');
+            if (!element) {
+                return;
+            }
+            element.select();
+            element.setSelectionRange(0, element.value.length);
+            navigator.clipboard?.writeText(element.value).catch(() => document.execCommand('copy'));
         }
 
         async function uploadSingleFile(file, cacheMode) {
@@ -1082,6 +2740,7 @@
         function handleUploadSuccess(payload) {
             uploadedDocuments.set(payload.documentId, payload);
             selectedDocumentIds.add(payload.documentId);
+            syncDecompositionStateFromUploadedPlans();
             showDocumentPlan(payload.documentId);
         }
 
@@ -1470,6 +3129,7 @@
             uploadedDocuments.clear();
             selectedDocumentIds.clear();
             metadataDrafts.clear();
+            decompositionStepCompleted = false;
             setMessage('uploadMessage', 'Database reset. Upload a document to start again.', 'text-muted');
             setMessage('metadataMessage', 'Select uploaded documents, define metadata, then apply it to that subset.', 'text-muted');
             setMessage('ingestMessage', 'Upload a document first.', 'text-muted');
@@ -1478,14 +3138,15 @@
             initScriptOutput.innerText = '';
             document.getElementById('statusOutput').innerText = '';
             document.getElementById('originalContent').textContent = 'Upload a document to see its raw markdown here.';
-            document.getElementById('decompositionSystemPrompt').textContent = 'Upload a document to see the prompt used for entity extraction.';
-            await loadGraphMakerAgentPrompt();
+            document.getElementById('graphMakerSystemPrompt').textContent = 'Decompose a document to see the system prompt used for Graph Maker Agent.';
+            document.getElementById('graphMakerInputPrompt').textContent = 'Decompose a document to see the full input prompt sent to Graph Maker Agent.';
             renderList('chunksOutput', []);
             renderList('entitiesOutput', []);
             renderList('mentionsOutput', []);
             renderList('relationshipsOutput', []);
             setMetadataForm(null);
             renderUploadedDocuments();
+            updateDecompositionWorkflowState();
             renderResults([]);
             renderGraph([], []);
             document.getElementById('graphCheckStatus').innerText = 'Graph counts not loaded.';
@@ -1544,8 +3205,27 @@
             }
 
             const selectedMode = hybridModeSelect.value;
-            if (!isClarification && (selectedMode === 'global' || (selectedMode === 'auto' && shouldUseGlobalMode(question)))) {
-                await runGlobalGraphRag(question);
+            const isAutoMode = selectedMode === 'auto';
+            const autoModeReason = isAutoMode ? describeAutoModeDecision(question) : '';
+            const autoRoutesToGlobal = isAutoMode && shouldUseGlobalMode(question);
+            if (!isClarification && (selectedMode === 'global' || autoRoutesToGlobal)) {
+                const initialSteps = [];
+                if (isAutoMode) {
+                    initialSteps.push({
+                        title: 'Intent router (Auto mode)',
+                        variant: 'purpose',
+                        purpose: 'Use deterministic keyword intent routing to choose Local / Hybrid or Global / Temporal before retrieval starts.',
+                        inputPayloadTitle: 'Intent router rules (deterministic)',
+                        inputPayload: buildAutoRouterExplanation(question)
+                    });
+                    initialSteps.push({
+                        title: 'Mode selected (Auto)',
+                        indent: true,
+                        body: `Auto mode chose: Global / Temporal GraphRAG.\nReason: ${autoModeReason}`
+                    });
+                }
+
+                await runGlobalGraphRag(question, initialSteps);
                 return;
             }
 
@@ -1634,11 +3314,26 @@
                 mapItems.push({ title: 'User question received', body: question });
             }
 
+            if (isAutoMode) {
+                mapItems.push({
+                    title: 'Intent router (Auto mode)',
+                    variant: 'purpose',
+                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs Local / Hybrid before retrieval starts.',
+                    inputPayloadTitle: 'Intent router rules (deterministic)',
+                    inputPayload: buildAutoRouterExplanation(question)
+                });
+                mapItems.push({
+                    title: 'Mode selected (Auto)',
+                    indent: true,
+                    body: `Auto mode chose: Local / Hybrid GraphRAG.\nReason: ${autoModeReason}`
+                });
+            }
+
             // Phase 1: Clarification required path -------------------------
             if (payload.clarificationQuestion) {
                 mapItems.push(buildAgentBubble(
-                    'Clarification Agent',
-                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    'Question Analysis Agent (LLM)',
+                    'Extract entities, detect ambiguity, and decide whether clarification is required.',
                     analysisSystemPrompt,
                     entityLlmStep));
                 mapItems.push({
@@ -1657,8 +3352,8 @@
             // Phase 2: Clarification received + question rewrite ----------
             if (isClarification && window.lastClarificationResponse) {
                 mapItems.push(buildAgentBubble(
-                    'Clarification Agent',
-                    'Detect ambiguity in the user question and ask a clarifying question when needed.',
+                    'Question Analysis Agent (LLM)',
+                    'Extract entities, detect ambiguity, and decide whether clarification is required.',
                     analysisSystemPrompt,
                     entityLlmStep));
                 mapItems.push({
@@ -1823,55 +3518,476 @@
             setButtonLoading(runHybridBtn, false);
         }
 
+        function getGlobalModeIntentMatch(question) {
+            return question.match(/\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i);
+        }
+
         function shouldUseGlobalMode(question) {
-            return /\b(theme|themes|pattern|patterns|trend|trends|across|overall|summary|summarize|top\s+\d+|changed|timeline|over time|before|after|recent|chronolog)/i.test(question);
+            return !!getGlobalModeIntentMatch(question);
+        }
+
+        function describeAutoModeDecision(question) {
+            const match = getGlobalModeIntentMatch(question);
+            if (match && match[0]) {
+                return `Matched global/temporal intent keyword "${match[0]}".`;
+            }
+
+            return 'No global or temporal intent keyword matched, so entity-focused Local/Hybrid retrieval was selected.';
+        }
+
+        function buildAutoRouterExplanation(question) {
+            const match = getGlobalModeIntentMatch(question);
+            const matchedKeyword = match && match[0] ? match[0] : '(none)';
+
+            return [
+                `Question: ${question}`,
+                'Rule set:',
+                '- If any global/temporal keyword is present -> Global / Temporal GraphRAG',
+                '- Otherwise -> Local / Hybrid GraphRAG',
+                'Keywords checked:',
+                'theme, themes, pattern, patterns, trend, trends, across, overall, summary, summarize, top <number>, changed, timeline, over time, before, after, recent, chronolog*',
+                `Matched keyword: ${matchedKeyword}`
+            ].join('\n');
         }
 
         async function buildCommunities() {
             const communityStatus = document.getElementById('communityStatus');
             document.getElementById('communityError').innerText = '';
-            setButtonLoading(buildCommunitiesBtn, true, 'Building...');
-            setInlineStatus(communityStatus, 'Building communities...', 'text-muted');
+            hideCommunityPostBuildActions();
+            hideCommunityPreBuildGate();
+            resetCommunitySummaryTabsState();
             document.getElementById('communityProcessMap').innerHTML = '';
+            setButtonLoading(buildCommunitiesBtn, true, 'Detecting...');
+            setInlineStatus(communityStatus, 'Detecting communities with Leiden...', 'text-muted');
 
             try {
-                const response = await fetch(`${backendBaseUrl}/api/communities/build`, { method: 'POST' });
-                const payload = await response.json();
-                if (!response.ok || !payload.success) {
-                    throw new Error(payload.error || 'Community build failed.');
-                }
-
-                const items = [];
-                if (payload.trace?.steps) {
-                    payload.trace.steps.forEach(step => items.push(buildCommunityTraceItem(step)));
-                }
-                appendCommunityProcessMap(items);
-                setInlineStatus(communityStatus, 'Communities built.', 'text-success');
+                await streamCommunityDetection();
+                communityBuildGatePending = true;
+                const assessment = assessCommunityTuningPotential();
+                appendCommunityProcessMap([
+                    {
+                        title: 'Review Leiden detection before reset/LLM summaries',
+                        body: [
+                            `Improvement potential: ${formatAssessmentPotential(assessment)}`,
+                            `Confidence: ${assessment.confidence}%`,
+                            'Basis: detected communities from this run',
+                            `Candidate coverage: ${assessment.summaryCount}/${assessment.multiEntity} multi-entity communities would be summarized`,
+                            `Recommendation: ${assessment.recommendation}`,
+                            'User action required: proceed to clear the existing community index and summarize, or tune the profile first.'
+                        ].join('\n'),
+                        systemPrompt: buildCommunityReviewRubricPrompt(),
+                        systemPromptTitle: 'Review rubric (deterministic, no LLM call)',
+                        inputPayload: buildCommunityReviewInputPayload(assessment),
+                        inputPayloadTitle: 'Input used for this review',
+                        actions: [
+                            { label: 'Proceed to clear index and summarize', className: 'btn-success', communityAction: 'proceed' },
+                            { label: 'Tune profile first', className: 'btn-primary', communityAction: 'tune-before-build' },
+                            { label: 'Cancel', className: 'btn-outline-secondary', communityAction: 'cancel-build' }
+                        ]
+                    }
+                ]);
+                setInlineStatus(communityStatus, 'Leiden detection complete. Build paused for user action.', 'text-warning');
             } catch (err) {
                 document.getElementById('communityError').innerText = err.message;
-                appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
-                setInlineStatus(communityStatus, 'Community build failed.', 'text-danger');
+                appendCommunityProcessMap([{ title: 'Community detection failed', body: err.message }]);
+                setInlineStatus(communityStatus, 'Community detection failed.', 'text-danger');
             } finally {
                 setButtonLoading(buildCommunitiesBtn, false);
             }
         }
 
+        async function runCommunityBuildExecution() {
+            const communityStatus = document.getElementById('communityStatus');
+            resetCommunitySummaryTabsState();
+            hideCommunityPostBuildActions();
+            hideCommunityPreBuildGate();
+            document.getElementById('communityError').innerText = '';
+            setButtonLoading(buildCommunitiesBtn, true, 'Building...');
+            setInlineStatus(communityStatus, 'Building communities...', 'text-muted');
+            setCommunityFurtherTuningAvailability(false);
+
+            try {
+                await streamCommunityBuild();
+                const assessment = assessCommunityTuningPotential();
+                appendCommunityProcessMap([
+                    {
+                        title: 'Pre-tuning assessment',
+                        body: [
+                            `Improvement potential: ${assessment.band} (${assessment.potential}%)`,
+                            `Confidence: ${assessment.confidence}%`,
+                            `Coverage: ${assessment.summaryCount}/${assessment.multiEntity} summarized multi-entity communities`,
+                            `Recommendation: ${assessment.recommendation}`,
+                            'User action required: choose Build Community or continue with Further Tuning.'
+                        ].join('\n')
+                    }
+                ]);
+                renderCommunityQuickAssessment(assessment);
+                setInlineStatus(communityStatus, 'Communities built.', 'text-success');
+                showCommunityPostBuildActions('Leiden community optimization finished. Review quick assessment, then build the community, continue with further tuning, or cancel.');
+            } catch (err) {
+                document.getElementById('communityError').innerText = err.message;
+                appendCommunityProcessMap([{ title: 'Community build failed', body: err.message }]);
+                setInlineStatus(communityStatus, 'Community build failed.', 'text-danger');
+            } finally {
+                communityBuildGatePending = false;
+                setButtonLoading(buildCommunitiesBtn, false);
+            }
+        }
+
+        async function streamCommunityBuild() {
+            const response = await fetch(`${backendBaseUrl}/api/communities/build/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.error || 'Community build failed.');
+            }
+
+            if (!response.body) {
+                return buildCommunitiesLegacy();
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalPayload = null;
+
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    if (!line.trim()) {
+                        continue;
+                    }
+
+                    const event = JSON.parse(line);
+                    if (event.type === 'step-start') {
+                        upsertCommunityPendingStep(event.payload);
+                    } else if (event.type === 'step') {
+                        completeCommunityPendingStep(event.payload);
+                    } else if (event.type === 'complete') {
+                        finalPayload = event.payload;
+                    }
+                }
+
+                if (done) {
+                    break;
+                }
+            }
+
+            if (!finalPayload?.success) {
+                throw new Error(finalPayload?.error || 'Community build failed.');
+            }
+
+            return finalPayload;
+        }
+
+        async function streamCommunityDetection() {
+            const response = await fetch(`${backendBaseUrl}/api/communities/detect/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.error || 'Community detection failed.');
+            }
+
+            if (!response.body) {
+                throw new Error('Community detection stream is not available.');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalPayload = null;
+
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    if (!line.trim()) {
+                        continue;
+                    }
+
+                    const event = JSON.parse(line);
+                    if (event.type === 'step-start') {
+                        upsertCommunityPendingStep(event.payload);
+                    } else if (event.type === 'step') {
+                        completeCommunityPendingStep(event.payload);
+                    } else if (event.type === 'complete') {
+                        finalPayload = event.payload;
+                    }
+                }
+
+                if (done) {
+                    break;
+                }
+            }
+
+            if (!finalPayload?.success) {
+                throw new Error(finalPayload?.error || 'Community detection failed.');
+            }
+
+            return finalPayload;
+        }
+
+        async function buildCommunitiesLegacy() {
+            const response = await fetch(`${backendBaseUrl}/api/communities/build`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getCommunityBuildRequest())
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.success) {
+                throw new Error(payload.error || 'Community build failed.');
+            }
+
+            if (payload.trace?.steps) {
+                payload.trace.steps.forEach(step => completeCommunityPendingStep(step));
+            }
+
+            return payload;
+        }
+
+        function upsertCommunityPendingStep(step) {
+            if (step.name === 'community-progress') {
+                upsertCommunitySummaryPendingTab(step.summary || 'Building community');
+                return;
+            }
+            if (step.name === 'community-summary') {
+                upsertCommunitySummaryBubble(step.summary || 'Finalizing community summaries');
+                return;
+            }
+
+            const pendingItem = {
+                name: step.name,
+                title: step.summary || step.name || 'Working',
+                pending: true,
+                body: 'Working...'
+            };
+            const container = document.getElementById('communityProcessMap');
+            const existing = container.querySelector('.process-bubble[data-pending="true"]');
+            const bubble = createProcessBubble(pendingItem);
+            if (existing) {
+                existing.replaceWith(bubble);
+                return;
+            }
+
+            appendCommunityProcessMap([pendingItem]);
+        }
+
+        function completeCommunityPendingStep(step) {
+            if (step.name === 'community-clustering') {
+                ensureCommunitySummaryTabsState().clusteringDetail = step.detail || '';
+                updateCommunityTuningPrompts();
+            }
+            if (step.name === 'community-progress') {
+                upsertCommunitySummaryCompletedTab(step);
+                return;
+            }
+            if (step.name === 'community-summary') {
+                finalizeCommunitySummaryTabs(step);
+                return;
+            }
+
+            const item = buildCommunityTraceItem(step);
+            item.name = step.name;
+
+            const container = document.getElementById('communityProcessMap');
+            const pending = Array.from(container.querySelectorAll('.process-bubble[data-pending="true"]'))
+                .find(bubble => bubble.dataset.stepName === (step.name || ''))
+                || container.querySelector('.process-bubble[data-pending="true"]');
+            if (pending) {
+                pending.replaceWith(createProcessBubble(item));
+                return;
+            }
+
+            appendCommunityProcessMap([item]);
+        }
+
+        function resetCommunitySummaryTabsState() {
+            communitySummaryTabsState = {
+                title: 'Community summaries',
+                overview: buildCommunitySummaryProcessOverview(),
+                clusteringDetail: '',
+                sqlTemplates: '',
+                total: 0,
+                completedBlocks: [],
+                pending: [],
+                selectedIndex: 1
+            };
+        }
+
+        function ensureCommunitySummaryTabsState() {
+            if (!communitySummaryTabsState) {
+                resetCommunitySummaryTabsState();
+            }
+            return communitySummaryTabsState;
+        }
+
+        function upsertCommunitySummaryPendingTab(summary) {
+            const state = ensureCommunitySummaryTabsState();
+            const parsed = parseCommunityProgressSummary(summary);
+            state.total = parsed.total || state.total;
+            const completedCount = state.completedBlocks.filter(Boolean).length;
+            const pending = {
+                index: parsed.index || completedCount + state.pending.length + 1,
+                title: parsed.title || summary || 'Community'
+            };
+            const existingIndex = state.pending.findIndex(item => item.index === pending.index);
+            if (existingIndex >= 0) {
+                state.pending[existingIndex] = pending;
+            } else {
+                state.pending.push(pending);
+                state.pending.sort((left, right) => left.index - right.index);
+            }
+            upsertCommunitySummaryBubble('Building community summaries');
+            updateCommunityTuningPrompts();
+        }
+
+        function upsertCommunitySummaryCompletedTab(step) {
+            const state = ensureCommunitySummaryTabsState();
+            const parsed = parseCommunityProgressSummary(step.summary || '');
+            state.total = parsed.total || state.total;
+            const originalIndex = parsed.index || state.completedBlocks.filter(Boolean).length + 1;
+            state.pending = state.pending.filter(item => item.index !== originalIndex);
+            state.completedBlocks[originalIndex - 1] = step.detail || '';
+            const completedCount = state.completedBlocks.filter(Boolean).length;
+            upsertCommunitySummaryBubble(`Built ${completedCount}${state.total ? ` of ${state.total}` : ''} community summaries`);
+            updateCommunityTuningPrompts();
+        }
+
+        function finalizeCommunitySummaryTabs(step) {
+            const state = ensureCommunitySummaryTabsState();
+            const parsed = parseCommunitySummaryDetail(step.detail || '');
+            state.title = step.summary || state.title;
+            state.overview = parsed.overview || state.overview;
+            state.sqlTemplates = parsed.sqlTemplates || state.sqlTemplates;
+            if (parsed.communityBlocks.length > 0) {
+                state.completedBlocks = parsed.communityBlocks;
+            }
+            state.total = state.completedBlocks.length || state.total;
+            state.pending = [];
+            state.selectedIndex = Math.max(1, Math.min(state.selectedIndex, state.completedBlocks.length || 1));
+            upsertCommunitySummaryBubble(state.title, step.tokenUsage);
+            updateCommunityTuningPrompts();
+        }
+
+        function upsertCommunitySummaryBubble(title, tokenUsage) {
+            const state = ensureCommunitySummaryTabsState();
+            state.title = title || state.title;
+
+            const container = document.getElementById('communityProcessMap');
+            const item = {
+                name: 'community-summary-live',
+                title: state.title,
+                bodyHtml: buildCommunitySummaryLiveHtml(),
+                tokenUsage
+            };
+            const bubble = createProcessBubble(item);
+            const existing = container.querySelector('.process-bubble[data-step-name="community-summary-live"]');
+            if (existing) {
+                existing.replaceWith(bubble);
+                return;
+            }
+
+            appendCommunityProcessMap([item]);
+        }
+
+        function buildCommunitySummaryLiveHtml() {
+            const state = ensureCommunitySummaryTabsState();
+            const completedCount = state.completedBlocks.filter(Boolean).length;
+            const totalText = state.total ? ` of ${state.total}` : '';
+            const overview = state.overview || buildCommunitySummaryProcessOverview();
+            return buildCommunitySummaryListHtml(state.completedBlocks, state.sqlTemplates, `${overview}\n\n${completedCount}${totalText} completed.`, state.pending, state.selectedIndex);
+        }
+
+        function buildCommunitySummaryProcessOverview() {
+            return [
+                'Building community summaries...',
+                '',
+                'For each selected multi-entity component:',
+                '',
+                '1. Build LLM context from entity labels/names, relationship triples, document dates/titles, and evidence text.',
+                "2. Ask Foundry to summarize the community's main topic, key entities, relationship patterns, and temporal span.",
+                '3. Embed the summary and persist it to kg_data.communities.',
+                '4. Persist entity membership to kg_data.community_members and source documents to kg_data.community_sources.'
+            ].join('\n');
+        }
+
+        function parseCommunityProgressSummary(summary) {
+            const match = String(summary || '').match(/community\s+(\d+)\s+of\s+(\d+):\s*(.+)$/i);
+            return {
+                index: match ? Number.parseInt(match[1], 10) : 0,
+                total: match ? Number.parseInt(match[2], 10) : 0,
+                title: match ? match[3].trim() : ''
+            };
+        }
+
+        function parseCommunitySummaryDetail(detail) {
+            const firstCommunity = detail.indexOf('Community id:');
+            const intro = firstCommunity >= 0 ? detail.slice(0, firstCommunity).trim() : detail;
+            const communitiesText = firstCommunity >= 0 ? detail.slice(firstCommunity).trim() : '';
+            const sqlStart = intro.indexOf('Write SQL templates:');
+            const overview = sqlStart >= 0 ? intro.slice(0, sqlStart).trim() : intro;
+            const sqlTemplates = sqlStart >= 0 ? intro.slice(sqlStart + 'Write SQL templates:'.length).trim() : '';
+            const communityBlocks = communitiesText ? communitiesText.split(/\n\s*---\s*\n/).filter(Boolean) : [];
+            return { overview, sqlTemplates, communityBlocks };
+        }
+
+        function communityTabTitle(block, index) {
+            const title = (block.match(/^Title:\s*(.+)$/m)?.[1] || '').trim();
+            return communityTabTitleFromParts(index + 1, title || `Community ${index + 1}`);
+        }
+
+        function communityListTitle(block, index) {
+            const title = (block.match(/^Title:\s*(.+)$/m)?.[1] || '').trim();
+            return communityTabTitleFromParts(index + 1, title || `Community ${index + 1}`);
+        }
+
+        function communityListMeta(block) {
+            const read = (regex) => block.match(regex)?.[1]?.trim() || '';
+            const id = read(/^Community id:\s*(.+)$/m);
+            const entities = read(/^Entities:\s*(.+)$/m);
+            const relationships = read(/^Relationships:\s*(.+)$/m);
+            return [`Community ${id || 'new'}`, entities ? `${entities} entities` : '', relationships ? `${relationships} relationships` : '']
+                .filter(Boolean)
+                .join(' | ');
+        }
+
+        function communityTabTitleFromParts(index, title) {
+            const shortTitle = truncateText(title || 'Community', 34);
+            return `${index}. ${shortTitle}`;
+        }
+
         function buildCommunityTraceItem(step) {
             const detail = step.detail || '';
             if (step.name === 'community-schema') {
-                return { title: step.summary || step.name, bodyHtml: buildCommunitySchemaTabs(detail) };
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySchemaTabs(detail), tokenUsage: step.tokenUsage };
             }
             if (step.name === 'community-load') {
-                return { title: step.summary || step.name, bodyHtml: buildCommunityLoadTabs(detail) };
+                return { title: step.summary || step.name, bodyHtml: buildCommunityLoadTabs(detail), tokenUsage: step.tokenUsage };
             }
             if (step.name === 'community-clustering') {
-                return { title: step.summary || step.name, bodyHtml: buildCommunityClusteringTabs(detail) };
+                return { title: step.summary || step.name, bodyHtml: buildCommunityClusteringTabs(detail), tokenUsage: step.tokenUsage };
+            }
+            if (step.name === 'community-progress') {
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySummaryLiveHtml(), tokenUsage: step.tokenUsage };
             }
             if (step.name === 'community-summary') {
-                return { title: step.summary || step.name, bodyHtml: buildCommunitySummaryTabs(detail) };
+                return { title: step.summary || step.name, bodyHtml: buildCommunitySummaryTabs(detail), tokenUsage: step.tokenUsage };
             }
 
-            return { title: step.summary || step.name, scroll: true, body: detail };
+            return { title: step.summary || step.name, scroll: true, body: detail, tokenUsage: step.tokenUsage };
         }
 
         function buildCommunitySchemaTabs(detail) {
@@ -1902,28 +4018,72 @@
 
         function buildCommunityClusteringTabs(detail) {
             const allLines = detail.split(/\r?\n/);
-            const componentStart = allLines.findIndex(line => line.startsWith('Components') || line.startsWith('Largest components'));
+            const componentStart = allLines.findIndex(line => line.startsWith('Communities') || line.startsWith('Largest communities') || line.startsWith('Components') || line.startsWith('Largest components'));
             const overview = componentStart >= 0 ? allLines.slice(0, componentStart).join('\n') : detail;
             const components = componentStart >= 0 ? allLines.slice(componentStart + 1).filter(Boolean) : [];
             const multi = components.filter(line => /entities=(?!1,)/.test(line));
             const singletons = components.filter(line => /entities=1,/.test(line));
-            return buildTabsHtml('community-clustering-tabs', [
+            return `<div class="community-clustering-window">${buildTabsHtml('community-clustering-tabs', [
                 { title: `Multi-Entity (${multi.length})`, content: multi.join('\n') || '(none)', pre: true },
                 { title: `Singleton (${singletons.length})`, content: singletons.join('\n') || '(none)', pre: true },
                 { title: `All (${components.length})`, content: components.join('\n') || '(none)', pre: true }
-            ], overview);
+            ], overview)}</div>`;
         }
 
         function buildCommunitySummaryTabs(detail) {
-            const firstCommunity = detail.indexOf('Community id:');
-            const intro = firstCommunity >= 0 ? detail.slice(0, firstCommunity).trim() : detail;
-            const communitiesText = firstCommunity >= 0 ? detail.slice(firstCommunity).trim() : '';
-            const sqlStart = intro.indexOf('Write SQL templates:');
-            const bullets = sqlStart >= 0 ? intro.slice(0, sqlStart).trim() : intro;
-            const sqlTemplates = sqlStart >= 0 ? intro.slice(sqlStart + 'Write SQL templates:'.length).trim() : '';
-            const communityBlocks = communitiesText ? communitiesText.split(/\n\s*---\s*\n/).filter(Boolean) : [];
-            const tabs = communityBlocks.map((block, index) => ({ title: `Community ${index + 1}`, contentHtml: buildCommunityDetailTabs(block, sqlTemplates) }));
-            return buildTabsHtml('community-summary-tabs', tabs, bullets);
+            const parsed = parseCommunitySummaryDetail(detail);
+            return buildCommunitySummaryListHtml(parsed.communityBlocks, parsed.sqlTemplates, parsed.overview, null, 0);
+        }
+
+        function buildCommunitySummaryListHtml(communityBlocks, sqlTemplates, overview = '', pending = [], selectedIndex = 0) {
+            const items = [];
+            communityBlocks.forEach((block, index) => {
+                if (!block) {
+                    return;
+                }
+
+                items.push({
+                    sortIndex: index + 1,
+                    pending: false,
+                    title: communityListTitle(block, index),
+                    meta: communityListMeta(block),
+                    contentHtml: buildCommunityDetailTabs(block, sqlTemplates)
+                });
+            });
+
+            const pendingItems = Array.isArray(pending) ? pending : (pending ? [pending] : []);
+            pendingItems.forEach(item => {
+                items.push({
+                    sortIndex: item.index,
+                    pending: true,
+                    title: communityTabTitleFromParts(item.index, item.title),
+                    meta: 'Building summary and embedding',
+                    contentHtml: `<div class="d-flex align-items-center gap-2 text-muted"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Building summary and embedding...</span></div>`
+                });
+            });
+            items.sort((left, right) => left.sortIndex - right.sortIndex);
+
+            const selectedOriginalIndex = selectedIndex || items[0]?.sortIndex || 1;
+            const requestedActiveIndex = items.findIndex(item => item.sortIndex === selectedOriginalIndex);
+            const activeIndex = items.length === 0 ? -1 : (requestedActiveIndex >= 0 ? requestedActiveIndex : 0);
+            const normalizedOverview = normalizeDisplayText(overview);
+            const overviewHtml = normalizedOverview ? `<div class="community-tab-overview mb-2">${escapeHtml(normalizedOverview).replace(/\n/g, '<br />')}</div>` : '';
+
+            if (items.length === 0) {
+                return `<div class="community-summary-layout">${overviewHtml}<div class="text-muted small">No communities generated yet.</div></div>`;
+            }
+
+            const listItems = items.map((item, index) => `
+                <button type="button" class="community-summary-item${index === activeIndex ? ' active' : ''}" data-community-index="${index}" data-community-original-index="${item.sortIndex}" aria-selected="${index === activeIndex ? 'true' : 'false'}" title="${escapeHtml(item.title)}">
+                    <span class="community-summary-item-title">${item.pending ? '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>' : ''}${escapeHtml(item.title)}</span>
+                    <span class="community-summary-item-meta">${escapeHtml(item.meta || '')}</span>
+                </button>`).join('');
+            const panels = items.map((item, index) => `
+                <div class="community-summary-detail${index === activeIndex ? '' : ' d-none'}" data-community-panel="${index}">
+                    ${item.contentHtml}
+                </div>`).join('');
+
+            return `<div class="community-summary-layout">${overviewHtml}<div class="community-summary-browser"><div class="community-summary-list" role="listbox" aria-label="Community summaries">${listItems}</div><div class="community-summary-detail-pane">${panels}</div></div></div>`;
         }
 
         function buildCommunityDetailTabs(block, sqlTemplates) {
@@ -1942,6 +4102,102 @@
 
         function buildCommunityPromptText(question, context) {
             return `LLM question:\n${(question || '(none)').trim()}\n\nLLM context:\n${(context || '(none)').trim()}`;
+        }
+
+        function updateCommunityTuningPrompts() {
+            if (!communityTuningSystemPrompt || !communityTuningUserPrompt) {
+                return;
+            }
+
+            communityTuningSystemPrompt.value = buildCommunityTuningSystemPrompt();
+            communityTuningUserPrompt.value = buildCommunityTuningUserPrompt();
+        }
+
+        function buildCommunityTuningSystemPrompt() {
+            return [
+                'You are a community detection tuning agent for a GraphRAG knowledge graph.',
+                '',
+                'Your job is to assess whether Leiden CPM community settings should be tuned. Optimize for useful GraphRAG community summaries and retrieval quality, not only graph metrics.',
+                '',
+                'Evaluate for these failure modes:',
+                '- communities too broad or generic',
+                '- communities too fragmented',
+                '- hub entities polluting otherwise unrelated themes',
+                '- typed relationship weights overpowering noisy extracted facts',
+                '- co-mention weights over-binding weakly related entities',
+                '- build cost too high for low-value tiny summaries',
+                '',
+                'Use these tuning rules:',
+                '- Increase cpmResolution to create smaller/more communities when large communities are generic or mixed.',
+                '- Decrease cpmResolution to create larger/fewer communities when themes are fragmented into tiny groups.',
+                '- Increase typedRelationshipWeight when explicit relationships should dominate weak co-mentions.',
+                '- Decrease typedRelationshipWeight when extraction noise binds unrelated entities.',
+                '- Increase coMentionWeight when typed relationships are sparse and communities are fragmented.',
+                '- Decrease coMentionWeight when common co-mentions or hubs create mixed communities.',
+                '- Increase minCommunitySizeToSummarize when many pair summaries are low value.',
+                '- Increase maxCommunitiesToSummarize only when important coherent long-tail communities are omitted.',
+                '',
+                'Recommend one primary change unless the current configuration is clearly broken. Keep the seed fixed for comparisons.',
+                '',
+                'Return:',
+                '1. Diagnosis',
+                '2. Recommended change',
+                '3. Rationale',
+                '4. Risks',
+                '5. Updated config as valid JSON with all fields present',
+                '6. Validation plan'
+            ].join('\n');
+        }
+
+        function buildCommunityTuningUserPrompt() {
+            const state = ensureCommunitySummaryTabsState();
+            const completedBlocks = state.completedBlocks.filter(Boolean);
+            const summarySamples = selectCommunitySummarySamples(completedBlocks);
+            const clustering = state.clusteringDetail || '(community clustering output not available yet; run Build Communities or wait for clustering step)';
+            const completedCount = completedBlocks.length;
+            const totalText = state.total ? `${completedCount} of ${state.total}` : String(completedCount);
+
+            return [
+                'Assess the current community detection configuration and recommend whether it should be tuned.',
+                '',
+                'Current config:',
+                '```json',
+                JSON.stringify(getCommunityBuildRequest(), null, 2),
+                '```',
+                '',
+                'Detection output:',
+                '```text',
+                truncateText(clustering, 8000),
+                '```',
+                '',
+                `Community summaries available: ${totalText}`,
+                '',
+                'Representative community summary samples:',
+                '```text',
+                summarySamples.length ? summarySamples.join('\n\n---\n\n') : '(no community summaries available yet)',
+                '```',
+                '',
+                'Please decide if cpmResolution, typedRelationshipWeight, coMentionWeight, minCommunitySizeToSummarize, maxCommunitiesToSummarize, or parallelism should change. Prefer a small reversible change and output the updated JSON config.'
+            ].join('\n');
+        }
+
+        function selectCommunitySummarySamples(blocks) {
+            if (!blocks.length) {
+                return [];
+            }
+
+            const selected = new Map();
+            const add = (index) => {
+                if (index >= 0 && index < blocks.length && !selected.has(index)) {
+                    selected.set(index, truncateText(blocks[index], 2200));
+                }
+            };
+
+            [0, 1, 2, 3, 4].forEach(add);
+            const middle = Math.floor(blocks.length / 2);
+            [middle - 2, middle - 1, middle, middle + 1, middle + 2].forEach(add);
+            [blocks.length - 5, blocks.length - 4, blocks.length - 3, blocks.length - 2, blocks.length - 1].forEach(add);
+            return Array.from(selected.values()).slice(0, 15);
         }
 
         function buildCommunitySqlTemplateTabs(sqlTemplates, sampleCommunityBlock) {
@@ -2036,11 +4292,13 @@
                 return `<div class="community-tabs">${overviewHtml}</div>`;
             }
 
-            const buttons = safeTabs.map((tab, index) => `<button type="button" class="btn btn-sm btn-outline-secondary community-tab-btn ${index === 0 ? 'active' : ''}" data-tab-target="${id}-${index}" aria-selected="${index === 0 ? 'true' : 'false'}">${escapeHtml(tab.title)}</button>`).join('');
+            const requestedActiveIndex = safeTabs.findIndex(tab => tab.active);
+            const activeIndex = requestedActiveIndex >= 0 ? requestedActiveIndex : 0;
+            const buttons = safeTabs.map((tab, index) => `<button type="button" class="btn btn-sm btn-outline-secondary community-tab-btn ${index === activeIndex ? 'active' : ''}" data-tab-target="${id}-${index}" aria-selected="${index === activeIndex ? 'true' : 'false'}">${tab.titleHtml || escapeHtml(tab.title)}</button>`).join('');
             const panels = safeTabs.map((tab, index) => {
                 const content = escapeHtml((tab.content || '').trim() || '(none)');
                 const body = tab.contentHtml || (tab.pre ? `<pre class="sql-toggle-view mb-0">${content}</pre>` : `<div>${content.replace(/\n/g, '<br />')}</div>`);
-                return `<div class="community-tab-panel ${index === 0 ? '' : 'd-none'}" id="${id}-${index}" data-tab-index="${index}">${body}</div>`;
+                return `<div class="community-tab-panel ${index === activeIndex ? '' : 'd-none'}" id="${id}-${index}" data-tab-index="${index}">${body}</div>`;
             }).join('');
             return `<div class="community-tabs">${overviewHtml}<div class="btn-group btn-group-sm flex-wrap mb-2" role="group">${buttons}</div>${panels}</div>`;
         }
@@ -2084,12 +4342,17 @@
             return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
         }
 
-        async function runGlobalGraphRag(question) {
+        async function runGlobalGraphRag(question, initialSteps = null) {
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
             document.getElementById('hybridError').innerText = '';
-            renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            if (Array.isArray(initialSteps) && initialSteps.length > 0) {
+                renderProcessMap(initialSteps, false);
+                appendProcessMap([{ title: 'Global / Temporal question received', body: question }]);
+            } else {
+                renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+            }
             setButtonLoading(runHybridBtn, true, 'Running...');
             setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
 
@@ -2131,10 +4394,10 @@
         }
 
         function renderDecomposition(payload) {
-            const systemPrompt = payload.decompositionSystemPrompt || '(no system prompt returned)';
-            document.getElementById('originalContent').textContent = payload.originalContent || '(no original content returned)';
-            document.getElementById('graphMakerAgentPrompt').textContent = systemPrompt;
-            document.getElementById('decompositionSystemPrompt').textContent = systemPrompt;
+            const previewText = normalizeDocumentPreviewText(payload.originalContent);
+            document.getElementById('originalContent').textContent = previewText || '(no original content returned)';
+            document.getElementById('graphMakerSystemPrompt').textContent = payload.decompositionSystemPrompt || '(no system prompt returned)';
+            document.getElementById('graphMakerInputPrompt').textContent = payload.decompositionInputPrompt || '(no input prompt returned)';
             renderList('chunksOutput', payload.chunks.map(c => `#${c.id}: ${c.text}`));
             renderList('entitiesOutput', payload.entities.map(e => `${e.label}: ${e.name}`));
             renderList('mentionsOutput', payload.mentions.map(m => `Chunk ${m.chunkId} -> ${m.entityLabel}(${m.entityName})`));
@@ -2212,6 +4475,13 @@
         function createProcessBubble(item) {
             const bubble = document.createElement('div');
             bubble.className = 'process-bubble';
+            if (item.name) {
+                bubble.dataset.stepName = item.name;
+            }
+            if (item.pending) {
+                bubble.dataset.pending = 'true';
+                bubble.classList.add('process-bubble-pending');
+            }
             if (item.indent) {
                 bubble.classList.add('process-bubble-indent');
             }
@@ -2226,7 +4496,11 @@
 
             const title = document.createElement('div');
             title.className = 'process-bubble-title';
-            title.innerText = item.title || 'Step';
+            if (item.pending) {
+                title.innerHTML = `<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>${escapeHtml(item.title || 'Working')}`;
+            } else {
+                title.innerText = item.title || 'Step';
+            }
             bubble.appendChild(title);
 
             if (item.role) {
@@ -2254,11 +4528,40 @@
                 const body = document.createElement('div');
                 body.className = 'process-bubble-body';
                 if (item.bodyHtml) {
+                    body.classList.add('process-bubble-body-html');
                     body.innerHTML = item.bodyHtml;
                 } else {
                     body.innerText = item.body;
                 }
                 bubble.appendChild(body);
+            }
+
+            if (Array.isArray(item.actions) && item.actions.length) {
+                const actionGroup = document.createElement('div');
+                actionGroup.className = 'process-bubble-actions';
+
+                item.actions.forEach(action => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = `btn btn-sm ${action.className || 'btn-outline-secondary'}`;
+                    button.innerText = action.label || 'Action';
+                    button.addEventListener('click', () => {
+                        actionGroup.querySelectorAll('button').forEach(actionButton => {
+                            actionButton.disabled = true;
+                        });
+
+                        if (action.communityAction === 'proceed') {
+                            proceedCommunityBuild();
+                        } else if (action.communityAction === 'tune-before-build') {
+                            tuneCommunityProfile('pre-build');
+                        } else if (action.communityAction === 'cancel-build') {
+                            cancelCommunityBuildGate();
+                        }
+                    });
+                    actionGroup.appendChild(button);
+                });
+
+                bubble.appendChild(actionGroup);
             }
 
             if (item.systemPrompt) {
@@ -2269,6 +4572,42 @@
                 details.appendChild(summary);
                 const pre = document.createElement('pre');
                 pre.innerText = item.systemPrompt;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.inputPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.inputPayloadTitle || 'Agent Input';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.inputPayload;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.outputPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.outputPayloadTitle || 'Agent Output';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.outputPayload;
+                details.appendChild(pre);
+                bubble.appendChild(details);
+            }
+
+            if (item.configPayload) {
+                const details = document.createElement('details');
+                details.className = 'process-bubble-systemprompt';
+                const summary = document.createElement('summary');
+                summary.innerText = item.configPayloadTitle || 'Suggested Config JSON';
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.innerText = item.configPayload;
                 details.appendChild(pre);
                 bubble.appendChild(details);
             }
@@ -2384,6 +4723,32 @@
         }
 
         document.addEventListener('click', (event) => {
+            const communitySummaryItem = event.target.closest('.community-summary-item');
+            if (communitySummaryItem) {
+                const browser = communitySummaryItem.closest('.community-summary-browser');
+                if (!browser) {
+                    return;
+                }
+
+                const index = Number.parseInt(communitySummaryItem.dataset.communityIndex || '0', 10);
+                browser.querySelectorAll('.community-summary-item').forEach((item) => {
+                    const active = item === communitySummaryItem;
+                    item.classList.toggle('active', active);
+                    item.setAttribute('aria-selected', active ? 'true' : 'false');
+                });
+                browser.querySelectorAll('.community-summary-detail').forEach((panel) => {
+                    panel.classList.toggle('d-none', panel.dataset.communityPanel !== String(index));
+                });
+                if (communitySummaryTabsState) {
+                    communitySummaryTabsState.selectedIndex = Number.parseInt(communitySummaryItem.dataset.communityOriginalIndex || communitySummaryItem.dataset.communityIndex || '1', 10);
+                }
+                const selectedPanel = browser.querySelector(`.community-summary-detail[data-community-panel="${index}"]`);
+                if (selectedPanel) {
+                    resetNestedCommunityTabs(selectedPanel);
+                }
+                return;
+            }
+
             const communityTabButton = event.target.closest('.community-tab-btn');
             if (communityTabButton) {
                 const wrapper = communityTabButton.closest('.community-tabs');

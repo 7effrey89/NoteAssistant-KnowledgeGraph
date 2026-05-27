@@ -35,6 +35,7 @@ public interface IFoundryInferenceClient
     Task<GraphExtractionDto> ExtractGraphAsync(string markdownContent, CancellationToken cancellationToken);
     Task<AnswerResult> AnswerQuestionAsync(string question, string context, CancellationToken cancellationToken, string agentName = "Answer Agent");
     Task<QuestionAnalysisResult> AnalyzeQuestionAsync(string question, string? clarification, CancellationToken cancellationToken);
+    Task<PromptCompletionResult> CompletePromptAsync(string systemPrompt, string userPrompt, string agentName, string operation, CancellationToken cancellationToken);
     string AnswerSystemPrompt { get; }
     string AnalysisSystemPrompt { get; }
     string EntityExtractionSystemPrompt { get; }
@@ -48,6 +49,12 @@ public sealed record QuestionAnalysisResult(
     IReadOnlyList<string> Entities,
     string? ClarificationQuestion,
     string RewrittenQuestion,
+    string SystemPrompt,
+    string UserPrompt,
+    LlmTokenUsage? TokenUsage = null);
+
+public sealed record PromptCompletionResult(
+    string Content,
     string SystemPrompt,
     string UserPrompt,
     LlmTokenUsage? TokenUsage = null);
@@ -248,6 +255,36 @@ public sealed class FoundryInferenceClient : IFoundryInferenceClient
             UserPrompt = userPrompt,
             TokenUsage = tokenUsage
         };
+    }
+
+    public async Task<PromptCompletionResult> CompletePromptAsync(
+        string systemPrompt,
+        string userPrompt,
+        string agentName,
+        string operation,
+        CancellationToken cancellationToken)
+    {
+        if (_chatClient is null)
+        {
+            throw new InvalidOperationException("Foundry chat is not configured. Set Copilot:ModelDeployment.");
+        }
+
+        var effectiveSystemPrompt = string.IsNullOrWhiteSpace(systemPrompt)
+            ? _analysisSystemPrompt
+            : systemPrompt;
+        var effectiveUserPrompt = userPrompt ?? string.Empty;
+
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.CreateSystemMessage(effectiveSystemPrompt),
+            ChatMessage.CreateUserMessage(effectiveUserPrompt)
+        };
+
+        var response = await _chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var content = response.Value.Content.Count > 0 ? response.Value.Content[0].Text ?? string.Empty : string.Empty;
+        var tokenUsage = ExtractTokenUsage(response.Value.Usage);
+        await LogTokenUsageAsync(agentName, operation, response.Value.Usage, cancellationToken).ConfigureAwait(false);
+        return new PromptCompletionResult(content, effectiveSystemPrompt, effectiveUserPrompt, tokenUsage);
     }
 
     private string LoadPromptTemplate(IHostEnvironment environment, string fileName, string fallback)
