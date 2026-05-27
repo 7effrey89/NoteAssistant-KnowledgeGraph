@@ -399,6 +399,26 @@ function buildNodeAttributes(node) {
   return { x: 0, y: 0, size, label: node.title, color: state.colorByLabel.get(node.label) || palette[0], kgLabel: node.label, title: node.title, properties: node.properties, degree };
 }
 
+function colorWithAlpha(color, alpha) {
+  if (!color) return `rgba(37, 99, 235, ${alpha})`;
+  if (color.startsWith("#")) {
+    const hex = color.slice(1);
+    const normalized = hex.length === 3
+      ? hex.split("").map(ch => ch + ch).join("")
+      : hex;
+    if (normalized.length === 6) {
+      const red = Number.parseInt(normalized.slice(0, 2), 16);
+      const green = Number.parseInt(normalized.slice(2, 4), 16);
+      const blue = Number.parseInt(normalized.slice(4, 6), 16);
+      if (Number.isFinite(red) && Number.isFinite(green) && Number.isFinite(blue)) {
+        return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+      }
+    }
+  }
+
+  return color;
+}
+
 function calculateNodeSize(degree) {
   const baseSizeInside = state.settings.nodeNamesInside ? 14 : 7;
   const maxSizeInside = state.settings.nodeNamesInside ? 28 : 18;
@@ -662,14 +682,16 @@ function nodeReducer(node, data) {
   const anchor = state.hoveredNode || state.selectedNode;
   const isNeighbor = anchor && (anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
+  const baseColor = data.color || palette[0];
   if (state.settings.highlightNeighborhood && anchor && !isNeighbor) {
-    reduced.color = "#d5dce5";
+    reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
   if (matchesSearch) {
-    reduced.color = "#f59e0b";
+    reduced.color = baseColor;
     reduced.size = Math.max(data.size + 4, 15);
     reduced.forceLabel = true;
+    reduced.highlighted = true;
   }
   if (isHovered) {
     reduced.highlighted = true;
@@ -677,7 +699,7 @@ function nodeReducer(node, data) {
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   } else if (isSelected) {
-    reduced.color = "#111827";
+    reduced.color = baseColor;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;

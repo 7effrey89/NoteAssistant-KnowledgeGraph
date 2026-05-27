@@ -542,6 +542,15 @@
                 </div>
                 <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
                     <label class="form-label mb-0" for="hybridModeSelect">Mode</label>
+                    <button
+                        class="btn btn-sm btn-outline-secondary rounded-circle p-0"
+                        id="hybridModeInfoBtn"
+                        type="button"
+                        aria-label="How to choose Hybrid GraphRAG mode"
+                        title="Mode guide"
+                        style="width:1.4rem;height:1.4rem;line-height:1.2rem;">
+                        i
+                    </button>
                     <select class="form-select form-select-sm" id="hybridModeSelect" style="max-width: 220px;">
                         <option value="auto" selected>Auto</option>
                         <option value="local">Local / Entity-first</option>
@@ -791,6 +800,7 @@
         const communityFinalProfileDetails = document.getElementById('communityFinalProfileDetails');
         const communityFinalProfileJson = document.getElementById('communityFinalProfileJson');
         const hybridModeSelect = document.getElementById('hybridModeSelect');
+        const hybridModeInfoBtn = document.getElementById('hybridModeInfoBtn');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
         const initScriptBtn = document.getElementById('initScriptBtn');
@@ -812,6 +822,33 @@
         const graphSettingsToggleBtn = document.getElementById('graphSettingsToggleBtn');
         const querySidebarToggleBtn = document.getElementById('querySidebarToggleBtn');
 
+        if (hybridModeInfoBtn && window.bootstrap?.Popover) {
+            const modeGuideHtml = [
+                '<div class="small">',
+                '<div class="fw-semibold mb-1">Which mode should I choose?</div>',
+                '<div><strong>Auto</strong>: Router chooses for you based on intent.</div>',
+                '<div class="text-muted mb-1">Use when unsure.</div>',
+                '<div><strong>Local / Entity-first</strong>: Focused retrieval around matched entities.</div>',
+                '<div class="text-muted mb-1">Ideal: direct fact lookup about specific customers, products, or people.</div>',
+                '<div><strong>Light / Parallel-friendly</strong>: Entity branch + global branch in parallel, then merge/rerank.</div>',
+                '<div class="text-muted mb-1">Ideal: broad summaries, status snapshots, and mixed-signal questions.</div>',
+                '<div><strong>Path / Multi-hop</strong>: Prioritizes relationship chains and path evidence grounding.</div>',
+                '<div class="text-muted mb-1">Ideal: "how/why" questions involving indirect influence or dependency chains.</div>',
+                '<div><strong>Global / Temporal</strong>: Community summaries first, timeline second, answer third.</div>',
+                '<div class="text-muted mb-1">This is not entity-first lookup. It starts from community summaries, then uses the timeline as supporting context.</div>',
+                '<div class="text-muted">Ideal: trends over time, cross-account themes, portfolio-level changes, and “what changed?” questions.</div>',
+                '</div>'
+            ].join('');
+
+            new bootstrap.Popover(hybridModeInfoBtn, {
+                trigger: 'hover focus',
+                placement: 'right',
+                html: true,
+                sanitize: false,
+                content: modeGuideHtml
+            });
+        }
+
         uploadBtn.addEventListener('click', () => uploadFile(false));
         uploadCacheBtn.addEventListener('click', () => uploadFile(true));
         selectAllDocsBtn.addEventListener('click', selectAllUploadedDocuments);
@@ -830,7 +867,7 @@
         initGraphBtn.addEventListener('click', initGraph);
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
-        runHybridBtn.addEventListener('click', runHybridRetrieval);
+        runHybridBtn.addEventListener('click', () => runHybridRetrieval(false));
         buildCommunitiesBtn.addEventListener('click', buildCommunities);
         document.querySelectorAll('.community-config-input').forEach(input => {
             input.addEventListener('input', updateCommunityConfigOutput);
@@ -3208,6 +3245,7 @@
         }
 
         async function runHybridRetrieval(isClarification = false) {
+            isClarification = isClarification === true;
             const question = document.getElementById('hybridQuestion').value.trim();
             if (!question) {
                 document.getElementById('hybridError').innerText = 'Question is required.';
@@ -3217,7 +3255,7 @@
             const selectedMode = hybridModeSelect.value;
             const isAutoMode = selectedMode === 'auto';
             const autoModeReason = isAutoMode ? describeAutoModeDecision(question) : '';
-            const requestedRetrievalMode = selectedMode === 'global'
+            const backendRetrievalMode = selectedMode === 'global'
                 ? 'auto'
                 : selectedMode;
             const autoRoutesToGlobal = isAutoMode && shouldUseGlobalMode(question);
@@ -3264,7 +3302,7 @@
                     limit: 10,
                     includeTrace,
                     includeAnswer,
-                    retrievalMode: requestedRetrievalMode,
+                    retrievalMode: backendRetrievalMode,
                     clarificationAttempts: hybridClarificationAttempts,
                     clarificationResponse: isClarification ? (window.lastClarificationResponse || '') : ''
                 })
@@ -3355,9 +3393,11 @@
 
             if (payload.resolvedRetrievalMode) {
                 mapItems.push({
-                    title: 'Backend retrieval mode',
+                    title: selectedMode === 'global' ? 'Global mode routing' : 'Backend retrieval mode',
                     indent: true,
-                    body: `Requested: ${requestedRetrievalMode}\nResolved: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
+                    body: selectedMode === 'global'
+                        ? `Selected mode: Global / Temporal\nGlobal path: community summaries -> timeline -> LLM\nBackend request: ${backendRetrievalMode}\nResolved backend route: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
+                        : `Selected mode: ${selectedMode}\nSent to backend: ${backendRetrievalMode}\nResolved: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
                 });
             }
             if (payload.chunkSourceBreakdown && payload.chunkSourceBreakdown.length) {
@@ -4474,16 +4514,74 @@
             return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
         }
 
+        function buildGlobalCommunityRetrievalLogic(question, limit, communities) {
+            const candidateLines = (communities || []).map(c => {
+                const distance = c.distance === null || c.distance === undefined ? 'n/a' : Number(c.distance).toFixed(4);
+                const span = `${c.startDate || 'unknown'} to ${c.endDate || 'unknown'}`;
+                return `- Community ${c.id}: ${c.title}\n  distance: ${distance}\n  entities: ${c.entityCount ?? 'n/a'}; relationships: ${c.relationshipCount ?? 'n/a'}; span: ${span}`;
+            });
+            return [
+                'Retrieval logic used for Global / Temporal community summaries:',
+                '',
+                `1. Create an embedding for the user question: ${question}`,
+                '2. Search only persisted rows in the communities table where embedding IS NOT NULL.',
+                '3. Score each community summary embedding with vector cosine distance using pgvector: embedding <=> query_vector.',
+                '4. Sort ascending by distance. Lower distance means more similar to the question.',
+                `5. Return the top ${limit} communities and pass their summaries into the global prompt context.`,
+                '',
+                'Executable query shape:',
+                'SELECT id, title, summary, embedding <=> CAST(@@query_vector AS vector) AS distance, entity_count, relationship_count, start_date, end_date',
+                'FROM communities',
+                'WHERE embedding IS NOT NULL',
+                'ORDER BY embedding <=> CAST(@@query_vector AS vector)',
+                'LIMIT @@limit;',
+                '',
+                'Selected communities in this run:',
+                candidateLines.length ? candidateLines.join('\n') : '(none - the communities table has no embedded summaries to rank)'
+            ].join('\n');
+        }
+
+        function buildTemporalTimelineSelectionLogic(limit, timeline) {
+            const selectedLines = (timeline || []).map(d => {
+                const date = d.documentDate || 'undated';
+                const type = d.documentType || 'unknown';
+                const tags = d.tags ? `; tags: ${d.tags}` : '';
+                return `- ${date}: ${d.title}\n  type: ${type}${tags}`;
+            });
+
+            return [
+                'Selection logic used for temporal timeline context:',
+                '',
+                '1. Read documents from the documents table, ordered by document_date and title.',
+                '2. For rows without document_date, try to parse a date from the document title using the pattern DD-MM-YY.',
+                '3. Keep only documents that have a usable date after either database lookup or title parsing.',
+                '4. Sort the remaining documents chronologically, then by title for stable ordering.',
+                `5. Return the first ${limit} dated documents as supporting temporal context.`,
+                '',
+                'Executable query shape:',
+                'SELECT id, title, document_date, document_type, tags::text',
+                'FROM documents',
+                'ORDER BY document_date NULLS LAST, title',
+                'LIMIT 200;',
+                '',
+                'Important: this is not vector similarity search. The timeline is selected by date availability and chronological order, then used as supporting context beside the community summaries.',
+                '',
+                'Selected timeline documents in this run:',
+                selectedLines.length ? selectedLines.join('\n') : '(none - no dated documents were available)'
+            ].join('\n');
+        }
+
         async function runGlobalGraphRag(question, initialSteps = null) {
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
+            const communityLimit = 6;
+            const timelineLimit = 20;
             document.getElementById('hybridError').innerText = '';
             if (Array.isArray(initialSteps) && initialSteps.length > 0) {
                 renderProcessMap(initialSteps, false);
-                appendProcessMap([{ title: 'Global / Temporal question received', body: question }]);
             } else {
-                renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+                renderProcessMap([], false);
             }
             setButtonLoading(runHybridBtn, true, 'Running...');
             setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
@@ -4492,7 +4590,7 @@
                 const response = await fetch(`${backendBaseUrl}/api/retrieval/global`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: question, limit: 6, includeTrace, includeAnswer })
+                    body: JSON.stringify({ query: question, limit: communityLimit, includeTrace, includeAnswer })
                 });
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
@@ -4500,17 +4598,67 @@
                 }
 
                 const items = [];
-                if (payload.trace?.steps) {
-                    payload.trace.steps.forEach(step => items.push({
+                items.push({
+                    title: 'Global / Temporal GraphRAG',
+                    variant: 'purpose',
+                    purpose: 'This mode is community-first, then time-aware. It does not start with entity matching or graph expansion.'
+                });
+                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
+                const hasCommunitySummaries = communityLines.length > 0;
+                items.push({
+                    title: 'Community-first retrieval',
+                    variant: 'purpose',
+                    purpose: 'Retrieve the most relevant community summaries from the graph as the primary evidence layer for broad, cross-document reasoning.',
+                    inputPayloadTitle: 'How relevant communities are selected',
+                    inputPayload: buildGlobalCommunityRetrievalLogic(question, communityLimit, payload.communities || [])
+                });
+                const communityTraceStepNames = new Set(['global-question', 'global-embedding', 'community-retrieval']);
+                const communityTraceSteps = (payload.trace?.steps || []).filter(step => communityTraceStepNames.has(step.name));
+                if (communityTraceSteps.length) {
+                    communityTraceSteps.forEach(step => items.push({
                         title: step.summary || step.name,
                         scroll: true,
                         body: step.detail || ''
                     }));
                 }
-                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
-                items.push({ title: 'Community summary output', indent: true, scroll: true, body: communityLines.length ? communityLines.join('\n\n') : '(none - build communities first)' });
+                items.push({
+                    title: 'Community summary output',
+                    indent: true,
+                    scroll: true,
+                    body: hasCommunitySummaries ? communityLines.join('\n\n') : '(none - build communities first)'
+                });
                 const timelineLines = (payload.timeline || []).map(d => `${d.documentDate || 'undated'}: ${d.title}`);
-                items.push({ title: 'Temporal timeline output', indent: true, scroll: true, body: timelineLines.length ? timelineLines.join('\n') : '(none)' });
+                if (!hasCommunitySummaries && timelineLines.length > 0) {
+                    items.push({
+                        title: 'Global evidence is incomplete',
+                        variant: 'purpose',
+                        purpose: 'No community summaries were found, so this run can still use dated documents as temporal context, but it is missing the primary global evidence layer. Run Build Communities to enable community-summary retrieval.'
+                    });
+                }
+                items.push({
+                    title: 'Temporal timeline retrieval',
+                    variant: 'purpose',
+                    purpose: 'Collect dated documents in order as supporting temporal context so the model can reason about change, sequence, and recency.',
+                    inputPayloadTitle: 'How temporal documents are selected',
+                    inputPayload: buildTemporalTimelineSelectionLogic(timelineLimit, payload.timeline || [])
+                });
+                items.push({
+                    title: 'Temporal timeline output',
+                    indent: true,
+                    scroll: true,
+                    body: timelineLines.length ? timelineLines.join('\n') : '(none)'
+                });
+                items.push({
+                    title: 'Global prompt assembly',
+                    variant: 'purpose',
+                    purpose: 'Combine community summaries and timeline evidence into a single global prompt context before answering.'
+                });
+                items.push({
+                    title: 'Global GraphRAG answer context input',
+                    indent: true,
+                    scroll: true,
+                    body: payload.promptContext || '(no prompt context returned)'
+                });
                 if (includeAnswer) {
                     items.push({ title: 'Global GraphRAG answer', indent: true, scroll: true, body: payload.answer || '(no answer returned)' });
                 }
