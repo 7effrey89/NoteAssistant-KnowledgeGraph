@@ -1517,9 +1517,35 @@ body.kg-inspector-resizing {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   color: #475569;
   font-size: 0.78rem;
   font-weight: 650;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.kg-legend-item:hover,
+.kg-legend-item:focus-visible,
+.kg-legend-item.is-active {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.kg-legend-item.is-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.kg-legend-item:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
 }
 
 .kg-legend-item span,

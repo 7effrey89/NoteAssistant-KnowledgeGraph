@@ -23,6 +23,8 @@ const state = {
   selectedNode: null,
   selectedEdge: null,
   hoveredNode: null,
+  hoveredLegendLabel: null,
+  selectedLegendLabel: null,
   inspectorHighlightedNode: null,
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
   settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50 },
@@ -330,6 +332,8 @@ function loadGraph(nodes, edges) {
   state.colorByLabel = buildColorMap(state.rawNodes);
   state.selectedNode = null;
   state.selectedEdge = null;
+  state.hoveredLegendLabel = null;
+  state.selectedLegendLabel = null;
   state.inspectorHighlightedNode = null;
   state.history = [];
   state.historyIndex = -1;
@@ -594,14 +598,18 @@ function registerGraphEvents() {
   renderer.on("clickEdge", ({ edge }) => {
     state.selectedEdge = edge;
     state.selectedNode = null;
+    state.selectedLegendLabel = null;
     renderInspector({ type: "edge", id: edge });
+    updateLegendActiveState();
     refreshRenderer();
     recordGraphHistory();
   });
   renderer.on("clickStage", () => {
     state.selectedNode = null;
     state.selectedEdge = null;
+    state.selectedLegendLabel = null;
     renderInspector(null);
+    updateLegendActiveState();
     refreshRenderer();
     recordGraphHistory();
   });
@@ -679,11 +687,17 @@ function nodeReducer(node, data) {
   }
   const isSelected = state.selectedNode === node;
   const isHovered = state.hoveredNode === node;
+  const activeLegendLabel = getActiveLegendLabel();
+  const matchesLegendHighlight = activeLegendLabel && data.kgLabel === activeLegendLabel;
   const anchor = state.hoveredNode || state.selectedNode;
   const isNeighbor = anchor && (anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
   const baseColor = data.color || palette[0];
   if (state.settings.highlightNeighborhood && anchor && !isNeighbor) {
+    reduced.color = colorWithAlpha(baseColor, 0.14);
+    reduced.label = "";
+  }
+  if (state.settings.highlightNeighborhood && activeLegendLabel && !anchor && !matchesLegendHighlight) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
@@ -704,7 +718,14 @@ function nodeReducer(node, data) {
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   }
-  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered) reduced.label = "";
+  if (matchesLegendHighlight) {
+    reduced.color = baseColor;
+    reduced.highlighted = true;
+    reduced.size = data.size + 5;
+    reduced.forceLabel = true;
+    reduced.zIndex = 10;
+  }
+  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered && !matchesLegendHighlight) reduced.label = "";
   return reduced;
 }
 
@@ -717,6 +738,9 @@ function edgeReducer(edge, data) {
     return reduced;
   }
   const anchor = state.hoveredNode || state.selectedNode;
+  const activeLegendLabel = getActiveLegendLabel();
+  const matchesLegendEndpoint = activeLegendLabel
+    && (state.graph.getNodeAttribute(source, "kgLabel") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgLabel") === activeLegendLabel);
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
@@ -726,6 +750,12 @@ function edgeReducer(edge, data) {
   } else if (anchor && (source === anchor || target === anchor)) {
     reduced.color = "#2563eb";
     reduced.size = 2.6;
+  } else if (state.settings.highlightNeighborhood && activeLegendLabel && !matchesLegendEndpoint) {
+    reduced.color = "#e2e8f0";
+    reduced.label = "";
+  } else if (matchesLegendEndpoint) {
+    reduced.color = "#2563eb";
+    reduced.size = 2.6;
   }
   if (!state.settings.showEdgeLabels) reduced.label = "";
   return reduced;
@@ -733,6 +763,8 @@ function edgeReducer(edge, data) {
 
 function isNodeHidden(node, data) {
   if (state.selectedNode === node || state.hoveredNode === node) return false;
+  const activeLegendLabel = getActiveLegendLabel();
+  if (activeLegendLabel && data.kgLabel === activeLegendLabel) return false;
   if (state.filters.nodeTypes.length && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
   if (state.filters.minDegree && (data.degree || 0) < state.filters.minDegree) return true;
   if (state.filters.search && !nodeMatchesSearch(node, data, state.filters.search)) {
@@ -1032,7 +1064,9 @@ function selectNode(node, options = {}) {
   clearInspectorHoverState();
   state.selectedNode = node;
   state.selectedEdge = null;
+  state.selectedLegendLabel = null;
   renderInspector({ type: "node", id: node });
+  updateLegendActiveState();
   refreshRenderer();
   if (options.center !== false) requestAnimationFrame(() => centerNode(node));
   setTimeout(() => recordGraphHistory(), options.center === false ? 0 : 360);
@@ -1105,6 +1139,7 @@ function createGraphHistorySnapshot() {
   return {
     selectedNode: state.selectedNode,
     selectedEdge: state.selectedEdge,
+    selectedLegendLabel: state.selectedLegendLabel,
     camera: {
       x: roundCameraValue(cameraState.x),
       y: roundCameraValue(cameraState.y),
@@ -1126,11 +1161,13 @@ function restoreGraphHistory(snapshot) {
   state.isRestoringHistory = true;
   state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : null;
   state.selectedEdge = snapshot.selectedEdge && state.graph?.hasEdge(snapshot.selectedEdge) ? snapshot.selectedEdge : null;
+  state.selectedLegendLabel = snapshot.selectedLegendLabel && state.colorByLabel.has(snapshot.selectedLegendLabel) ? snapshot.selectedLegendLabel : null;
 
   if (state.selectedNode) renderInspector({ type: "node", id: state.selectedNode });
   else if (state.selectedEdge) renderInspector({ type: "edge", id: state.selectedEdge });
   else renderInspector(null);
 
+  updateLegendActiveState();
   refreshRenderer();
   state.renderer.getCamera().animate(snapshot.camera, { duration: 220 });
   setTimeout(() => {
@@ -1148,6 +1185,7 @@ function updateHistoryButtons() {
 function sameHistorySnapshot(left, right) {
   return left.selectedNode === right.selectedNode
     && left.selectedEdge === right.selectedEdge
+    && (left.selectedLegendLabel || null) === (right.selectedLegendLabel || null)
     && left.camera.x === right.camera.x
     && left.camera.y === right.camera.y
     && left.camera.ratio === right.camera.ratio
@@ -1502,11 +1540,62 @@ function renderPropertyTable(properties) {
 function renderLegend() {
   el.legend.innerHTML = "";
   for (const [label, color] of state.colorByLabel.entries()) {
-    const item = document.createElement("span");
+    const item = document.createElement("button");
+    item.type = "button";
     item.className = "kg-legend-item";
+    item.dataset.kgLabel = label;
+    item.setAttribute("aria-pressed", state.selectedLegendLabel === label ? "true" : "false");
+    item.title = `Highlight ${label} nodes`;
     item.innerHTML = `<span style="background:${color}"></span>${escapeHtml(label)}`;
+    item.addEventListener("mouseenter", () => setLegendHover(label));
+    item.addEventListener("mouseleave", () => clearLegendHover(label));
+    item.addEventListener("focus", () => setLegendHover(label));
+    item.addEventListener("blur", () => clearLegendHover(label));
+    item.addEventListener("click", () => toggleLegendSelection(label));
     el.legend.appendChild(item);
   }
+  updateLegendActiveState();
+}
+
+function getActiveLegendLabel() {
+  return state.hoveredLegendLabel || state.selectedLegendLabel;
+}
+
+function setLegendHover(label) {
+  if (state.hoveredLegendLabel === label) return;
+  state.hoveredLegendLabel = label;
+  updateLegendActiveState();
+  refreshRenderer();
+}
+
+function clearLegendHover(label) {
+  if (state.hoveredLegendLabel !== label) return;
+  state.hoveredLegendLabel = null;
+  updateLegendActiveState();
+  refreshRenderer();
+}
+
+function toggleLegendSelection(label) {
+  clearInspectorHoverState();
+  state.selectedLegendLabel = state.selectedLegendLabel === label ? null : label;
+  state.selectedNode = null;
+  state.selectedEdge = null;
+  renderInspector(null);
+  updateLegendActiveState();
+  refreshRenderer();
+  recordGraphHistory();
+}
+
+function updateLegendActiveState() {
+  if (!el.legend) return;
+  const activeLegendLabel = getActiveLegendLabel();
+  el.legend.querySelectorAll(".kg-legend-item").forEach(item => {
+    const label = item.dataset.kgLabel || "";
+    const isSelected = state.selectedLegendLabel === label;
+    item.classList.toggle("is-active", activeLegendLabel === label);
+    item.classList.toggle("is-selected", isSelected);
+    item.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  });
 }
 
 function renderStats() {
