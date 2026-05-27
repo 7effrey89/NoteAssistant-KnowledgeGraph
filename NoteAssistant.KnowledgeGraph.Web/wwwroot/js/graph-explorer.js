@@ -29,6 +29,8 @@ const state = {
   selectedLegendLabel: null,
   inspectorHighlightedNode: null,
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
+  filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false },
+  filterOptions: { nodeTypes: [], edgeTypes: [] },
   settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50 },
   currentLayout: "random",
   currentWorkerLayout: null,
@@ -349,6 +351,8 @@ function loadGraph(nodes, edges) {
   state.rawEdges = edges.map(normalizeEdge).filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
   state.degreeById = calculateDegrees(state.rawNodes, state.rawEdges);
   state.colorByLabel = buildColorMap(state.rawNodes);
+  state.filterDefaultsInitialized = { nodeTypes: false, edgeTypes: false };
+  state.filterOptions = { nodeTypes: [], edgeTypes: [] };
   state.selectedNode = null;
   state.selectedNodes = new Set();
   state.deselectedRelatedNodes = new Set();
@@ -724,7 +728,12 @@ function nodeReducer(node, data) {
   const isDeselectedRelated = isNodeDeselectedFromNeighborhood(node) && !isSelected;
   const isHighlightedNeighbor = isNeighbor && !isDeselectedRelated;
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
+  const hasSearch = Boolean(state.filters.search);
   const baseColor = data.color || palette[0];
+  if (hasSearch && !matchesSearch) {
+    reduced.color = colorWithAlpha(baseColor, 0.14);
+    reduced.label = "";
+  }
   if (state.settings.highlightNeighborhood && hasAnchors && !isHighlightedNeighbor) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
@@ -735,17 +744,20 @@ function nodeReducer(node, data) {
   }
   if (matchesSearch) {
     reduced.color = baseColor;
+    reduced.label = data.label;
     reduced.size = Math.max(data.size + 4, 15);
     reduced.forceLabel = true;
     reduced.highlighted = true;
   }
-  if (isHovered && !isDeselectedRelated) {
+  if (isHovered && !isDeselectedRelated && (!hasSearch || matchesSearch)) {
+    reduced.label = data.label;
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
-  } else if (isSelected) {
+  } else if (isSelected && (!hasSearch || matchesSearch)) {
     reduced.color = baseColor;
+    reduced.label = data.label;
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
@@ -753,6 +765,7 @@ function nodeReducer(node, data) {
   }
   if (matchesLegendHighlight) {
     reduced.color = baseColor;
+    reduced.label = data.label;
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
@@ -773,6 +786,9 @@ function edgeReducer(edge, data) {
   const anchors = getActiveAnchorNodes();
   const hasAnchors = anchors.length > 0;
   const activeLegendLabel = getActiveLegendLabel();
+  const hasSearch = Boolean(state.filters.search);
+  const sourceMatchesSearch = hasSearch && nodeMatchesSearch(source, state.graph.getNodeAttributes(source), state.filters.search);
+  const targetMatchesSearch = hasSearch && nodeMatchesSearch(target, state.graph.getNodeAttributes(target), state.filters.search);
   const touchesDeselectedRelated = isNodeDeselectedFromNeighborhood(source) || isNodeDeselectedFromNeighborhood(target);
   const touchesAnchor = hasAnchors && anchors.some(anchor => source === anchor || target === anchor);
   const matchesLegendEndpoint = activeLegendLabel
@@ -780,6 +796,9 @@ function edgeReducer(edge, data) {
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
+  } else if (hasSearch && !sourceMatchesSearch && !targetMatchesSearch) {
+    reduced.color = "#e2e8f0";
+    reduced.label = "";
   } else if (state.settings.highlightNeighborhood && hasAnchors && (!touchesAnchor || touchesDeselectedRelated)) {
     reduced.color = "#e2e8f0";
     reduced.label = "";
@@ -801,7 +820,7 @@ function isNodeHidden(node, data) {
   if (isNodeSelected(node) || state.hoveredNode === node) return false;
   const activeLegendLabel = getActiveLegendLabel();
   if (activeLegendLabel && data.kgLabel === activeLegendLabel) return false;
-  if (state.filters.nodeTypes.length && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
+  if (state.colorByLabel.size && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
   if (state.filters.minDegree && (data.degree || 0) < state.filters.minDegree) return true;
   if (state.filters.search && !nodeMatchesSearch(node, data, state.filters.search)) {
     const hasMatchingNeighbor = state.rawEdges.some(edge => {
@@ -816,7 +835,7 @@ function isNodeHidden(node, data) {
 }
 
 function isEdgeHidden(data) {
-  return Boolean(state.filters.edgeTypes.length && !state.filters.edgeTypes.includes(data.relationship));
+  return Boolean(getAvailableEdgeTypes().length && !state.filters.edgeTypes.includes(data.relationship));
 }
 
 function nodeMatchesSearch(node, data, query) {
@@ -992,42 +1011,59 @@ function assignGridLayout(graph) {
 }
 
 function rebuildFilterOptions() {
+  const nodeTypes = uniqueSorted(state.rawNodes.map(node => node.label));
+  const edgeTypes = getAvailableEdgeTypes();
+  const hadAllNodeTypesSelected = hasAllValuesSelected(state.filterOptions.nodeTypes, state.filters.nodeTypes);
+  const hadAllEdgeTypesSelected = hasAllValuesSelected(state.filterOptions.edgeTypes, state.filters.edgeTypes);
+  if (!state.filterDefaultsInitialized.nodeTypes) {
+    state.filters.nodeTypes = [...nodeTypes];
+    state.filterDefaultsInitialized.nodeTypes = true;
+  } else if (hadAllNodeTypesSelected) {
+    state.filters.nodeTypes = [...nodeTypes];
+  }
+  if (!state.filterDefaultsInitialized.edgeTypes) {
+    state.filters.edgeTypes = [...edgeTypes];
+    state.filterDefaultsInitialized.edgeTypes = true;
+  } else if (hadAllEdgeTypesSelected) {
+    state.filters.edgeTypes = [...edgeTypes];
+  }
+  state.filterOptions = { nodeTypes: [...nodeTypes], edgeTypes: [...edgeTypes] };
   rebuildCheckboxDropdown({
     list: el.nodeTypeFilterList,
     summary: el.nodeTypeFilterSummary,
-    values: uniqueSorted(state.rawNodes.map(node => node.label)),
+    values: nodeTypes,
     selectedValues: state.filters.nodeTypes,
     onChange: selected => updateFilters({ nodeTypes: selected })
   });
   rebuildCheckboxDropdown({
     list: el.edgeTypeFilterList,
     summary: el.edgeTypeFilterSummary,
-    values: uniqueSorted(state.rawEdges.map(edge => edge.label)),
+    values: edgeTypes,
     selectedValues: state.filters.edgeTypes,
     onChange: selected => updateFilters({ edgeTypes: selected })
   });
+}
+
+function getAvailableEdgeTypes() {
+  return uniqueSorted(state.rawEdges.map(edge => edge.label));
+}
+
+function hasAllValuesSelected(values, selectedValues) {
+  return Boolean(values.length && selectedValues.length === values.length && values.every(value => selectedValues.includes(value)));
 }
 
 function rebuildCheckboxDropdown({ list, summary, values, selectedValues, onChange }) {
   if (!list || !summary) return;
   const selected = selectedValues.filter(value => values.includes(value));
   list.innerHTML = "";
-  list.appendChild(createCheckboxOption("All", "", selected.length === 0, checked => {
-    if (!checked) return;
-    list.querySelectorAll('input[data-filter-value]').forEach(input => { input.checked = false; });
-    updateCheckboxDropdownSummary(summary, []);
-    onChange([]);
-  }));
   values.forEach(value => {
     list.appendChild(createCheckboxOption(value, value, selected.includes(value), () => {
       const next = Array.from(list.querySelectorAll('input[data-filter-value]:checked')).map(input => input.dataset.filterValue);
-      const allCheckbox = list.querySelector('input:not([data-filter-value])');
-      if (allCheckbox) allCheckbox.checked = next.length === 0;
-      updateCheckboxDropdownSummary(summary, next);
+      updateCheckboxDropdownSummary(summary, next, values.length);
       onChange(next);
     }));
   });
-  updateCheckboxDropdownSummary(summary, selected);
+  updateCheckboxDropdownSummary(summary, selected, values.length);
   if (selected.length !== selectedValues.length) onChange(selected);
 }
 
@@ -1047,10 +1083,15 @@ function createCheckboxOption(labelText, value, checked, onChange) {
   return label;
 }
 
-function updateCheckboxDropdownSummary(summary, selected) {
+function updateCheckboxDropdownSummary(summary, selected, totalCount) {
+  if (totalCount > 0 && selected.length === totalCount) {
+    summary.textContent = "All selected";
+    summary.title = selected.join(", ");
+    return;
+  }
   if (!selected.length) {
-    summary.textContent = "All";
-    summary.title = "All";
+    summary.textContent = "None selected";
+    summary.title = "None selected";
     return;
   }
   summary.textContent = selected.length === 1 ? selected[0] : `${selected.length} selected`;
@@ -1071,12 +1112,12 @@ function updateSearchResults() {
 
 function renderSearchResults(results) {
   el.searchResults.innerHTML = "";
-  if (!state.rawNodes.length) {
-    el.searchResults.textContent = "Run a query to search graph nodes.";
+  el.searchResults.hidden = !state.filters.search;
+  if (!state.filters.search) {
     return;
   }
-  if (!state.filters.search) {
-    el.searchResults.textContent = "Type to filter and highlight nodes.";
+  if (!state.rawNodes.length) {
+    el.searchResults.textContent = "Run a query to search graph nodes.";
     return;
   }
   if (!results.length) {
