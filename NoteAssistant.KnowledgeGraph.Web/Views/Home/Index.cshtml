@@ -930,6 +930,8 @@
                 .map(file => normalizeNoteAssistantDate(file.folderCreationDate))
                 .filter(Boolean);
             const uniqueDates = Array.from(new Set(parsedDates));
+            const sortedDates = [...uniqueDates].sort((left, right) => left.localeCompare(right));
+            const selectedDate = sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : '';
             const customers = Array.from(new Set(files.flatMap(file => Array.isArray(file.customers) ? file.customers : []).filter(Boolean)));
             const services = Array.from(new Set(files.flatMap(file => Array.isArray(file.services) ? file.services : []).filter(Boolean)));
             const tags = [];
@@ -938,7 +940,7 @@
 
             return {
                 documentType: 'meeting_summary',
-                documentDate: uniqueDates.length === 1 ? uniqueDates[0] : '',
+                documentDate: selectedDate,
                 tags: tags.join(', '),
                 summary: {
                     fileCount: files.length,
@@ -969,11 +971,36 @@
                 return `${fromIsoMatch[1]}-${fromIsoMatch[2]}-${fromIsoMatch[3]}`;
             }
 
+            const fromDashedYearFirst = input.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+\d{1,2}[.:]\d{1,2}(?:[.:]\d{1,2})?)?$/);
+            if (fromDashedYearFirst) {
+                const month = fromDashedYearFirst[2].padStart(2, '0');
+                const day = fromDashedYearFirst[3].padStart(2, '0');
+                return `${fromDashedYearFirst[1]}-${month}-${day}`;
+            }
+
+            const fromDashedDayFirst = input.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:\s+\d{1,2}[.:]\d{1,2}(?:[.:]\d{1,2})?)?$/);
+            if (fromDashedDayFirst) {
+                const day = fromDashedDayFirst[1].padStart(2, '0');
+                const month = fromDashedDayFirst[2].padStart(2, '0');
+                const rawYear = fromDashedDayFirst[3];
+                const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+                return `${year}-${month}-${day}`;
+            }
+
             const fromDotMatch = input.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
             if (fromDotMatch) {
                 const day = fromDotMatch[1].padStart(2, '0');
                 const month = fromDotMatch[2].padStart(2, '0');
                 return `${fromDotMatch[3]}-${month}-${day}`;
+            }
+
+            const fromSlashedDayFirst = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)?$/);
+            if (fromSlashedDayFirst) {
+                const day = fromSlashedDayFirst[1].padStart(2, '0');
+                const month = fromSlashedDayFirst[2].padStart(2, '0');
+                const rawYear = fromSlashedDayFirst[3];
+                const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+                return `${year}-${month}-${day}`;
             }
 
             const parsed = new Date(input);
@@ -985,6 +1012,110 @@
             }
 
             return '';
+        }
+
+        function getJsonStringProperty(obj, keys) {
+            if (!obj || typeof obj !== 'object') {
+                return '';
+            }
+
+            for (const key of keys) {
+                const value = obj[key];
+                if (typeof value === 'string' && value.trim()) {
+                    return value.trim();
+                }
+            }
+
+            return '';
+        }
+
+        function getBaseName(path) {
+            return String(path || '')
+                .split(/[\\/]/)
+                .pop() || '';
+        }
+
+        function normalizeMetadataMatchKey(value) {
+            if (!value) {
+                return '';
+            }
+
+            let normalized = String(value).trim().toLowerCase();
+            normalized = normalized.replace(/\.(md|json)$/i, '');
+            normalized = normalized.replace(/_metadata$/i, '');
+            normalized = normalized.replace(/(_summary|_transcript|_mynotes)$/i, '');
+            normalized = normalized.replace(/\s+-\s+(summary|transcript|mynotes)$/i, '');
+            normalized = normalized.replace(/\s+/g, ' ').trim();
+            return normalized;
+        }
+
+        function getDocumentMatchKey(plan) {
+            if (!plan) {
+                return '';
+            }
+
+            return normalizeMetadataMatchKey(plan.status?.fileName || plan.title || '');
+        }
+
+        function getMetadataFileMatchKeys(file) {
+            const keys = new Set();
+            const noteSessionKey = normalizeMetadataMatchKey(file?.noteSession || '');
+            const fileNameKey = normalizeMetadataMatchKey(getBaseName(file?.fileName || ''));
+            if (noteSessionKey) {
+                keys.add(noteSessionKey);
+            }
+            if (fileNameKey) {
+                keys.add(fileNameKey);
+            }
+            return Array.from(keys);
+        }
+
+        function selectMetadataFilesForDocument(metadataFiles, plan, options = {}) {
+            const allowFallbackAll = Boolean(options.allowFallbackAll);
+            const documentKey = getDocumentMatchKey(plan);
+            if (!documentKey) {
+                return {
+                    files: allowFallbackAll ? metadataFiles : [],
+                    mode: allowFallbackAll ? 'all-no-document' : 'no-document-key',
+                    documentKey,
+                    matchedCount: allowFallbackAll ? metadataFiles.length : 0
+                };
+            }
+
+            const matched = metadataFiles.filter((file) => {
+                const keys = getMetadataFileMatchKeys(file);
+                return keys.some(key => key === documentKey || key.includes(documentKey) || documentKey.includes(key));
+            });
+
+            if (matched.length > 0) {
+                return {
+                    files: matched,
+                    mode: 'matched',
+                    documentKey,
+                    matchedCount: matched.length
+                };
+            }
+
+            return {
+                files: allowFallbackAll ? metadataFiles : [],
+                mode: allowFallbackAll ? 'fallback-all' : 'no-match',
+                documentKey,
+                matchedCount: 0
+            };
+        }
+
+        function formatUsedFileNames(files, maxCount = 3) {
+            const names = files.map(file => getBaseName(file?.fileName || '')).filter(Boolean);
+            if (names.length === 0) {
+                return '(none)';
+            }
+
+            const preview = names.slice(0, maxCount).join(', ');
+            if (names.length <= maxCount) {
+                return preview;
+            }
+
+            return `${preview} (+${names.length - maxCount} more)`;
         }
 
         async function onNoteAssistantDbImportClicked() {
@@ -1013,10 +1144,18 @@
                 try {
                     const text = await file.text();
                     const json = JSON.parse(text);
+                    const folderCreationDate = getJsonStringProperty(json, [
+                        'FolderCreationDate',
+                        'folderCreationDate',
+                        'FolderCreatedDate',
+                        'folderCreatedDate',
+                        'CreationDate',
+                        'creationDate'
+                    ]);
                     metadataFiles.push({
                         fileName: file.webkitRelativePath || file.name,
                         noteSession: typeof json.NoteSession === 'string' ? json.NoteSession.trim() : '',
-                        folderCreationDate: typeof json.FolderCreationDate === 'string' ? json.FolderCreationDate : '',
+                        folderCreationDate,
                         customers: Array.isArray(json.Customers) ? json.Customers.filter(Boolean) : [],
                         services: Array.isArray(json.Services) ? json.Services.filter(Boolean) : []
                     });
@@ -1031,32 +1170,115 @@
             }
 
             const adapter = getMetadataImportAdapter();
-            const fieldValues = typeof adapter.toFieldValues === 'function'
-                ? adapter.toFieldValues(metadataFiles)
-                : defaultNoteAssistantMetadataToFields(metadataFiles);
+            const uploadedPlans = Array.from(uploadedDocuments.values());
+            if (uploadedPlans.length === 0) {
+                // If nothing is uploaded yet, keep legacy behavior: populate the form from all selected metadata files.
+                const fieldValues = typeof adapter.toFieldValues === 'function'
+                    ? adapter.toFieldValues(metadataFiles)
+                    : defaultNoteAssistantMetadataToFields(metadataFiles);
 
-            if (typeof adapter.applyToUi === 'function') {
-                adapter.applyToUi(fieldValues, {
-                    setMetadataForm,
-                    onMetadataFieldChanged,
-                    controls: {
-                        metadataDocumentType,
-                        metadataDocumentDate,
-                        metadataTags
-                    }
-                });
-            } else {
-                defaultApplyMetadataFieldsToUi(fieldValues);
+                if (typeof adapter.applyToUi === 'function') {
+                    adapter.applyToUi(fieldValues, {
+                        setMetadataForm,
+                        onMetadataFieldChanged,
+                        controls: {
+                            metadataDocumentType,
+                            metadataDocumentDate,
+                            metadataTags
+                        }
+                    });
+                } else {
+                    defaultApplyMetadataFieldsToUi(fieldValues);
+                }
+
+                const summary = fieldValues?.summary || {};
+                const dateNote = Number(summary.dateCount) > 1
+                    ? ` Multiple dates detected; using latest FolderCreationDate (${fieldValues?.documentDate || 'n/a'}).`
+                    : '';
+                setMessage(
+                    'metadataMessage',
+                    `Imported metadata from ${summary.fileCount || metadataFiles.length} file(s) (customers: ${summary.customerCount || 0}, services: ${summary.serviceCount || 0}).${dateNote} Used file(s): ${formatUsedFileNames(metadataFiles)}.`,
+                    'text-success');
+                return;
             }
 
-            const summary = fieldValues?.summary || {};
-            const dateNote = Number(summary.dateCount) > 1
-                ? ' Multiple dates detected; document date left blank for manual choice.'
+            let applied = 0;
+            let failed = 0;
+            const unmatched = [];
+            const mappingNotes = [];
+
+            for (const plan of uploadedPlans) {
+                const selection = selectMetadataFilesForDocument(metadataFiles, plan, { allowFallbackAll: false });
+                const metadataFilesForImport = selection.files;
+                if (metadataFilesForImport.length === 0) {
+                    unmatched.push(plan.status?.fileName || plan.title || `Document ${plan.documentId}`);
+                    continue;
+                }
+
+                const fieldValues = typeof adapter.toFieldValues === 'function'
+                    ? adapter.toFieldValues(metadataFilesForImport)
+                    : defaultNoteAssistantMetadataToFields(metadataFilesForImport);
+                const metadataPayload = {
+                    documentType: fieldValues?.documentType || '',
+                    documentDate: fieldValues?.documentDate || '',
+                    tags: fieldValues?.tags || ''
+                };
+
+                if (!hasMetadataPayload(metadataPayload)) {
+                    unmatched.push(plan.status?.fileName || plan.title || `Document ${plan.documentId}`);
+                    continue;
+                }
+
+                metadataDrafts.set(plan.documentId, metadataPayload);
+
+                let response;
+                try {
+                    response = await fetch(`${backendBaseUrl}/api/documents/metadata`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ documentIds: [plan.documentId], ...metadataPayload })
+                    });
+                } catch {
+                    failed++;
+                    continue;
+                }
+
+                const payload = await response.json().catch(() => null);
+                if (!response.ok) {
+                    failed++;
+                    continue;
+                }
+
+                const updatedPlan = (payload?.updated || [])[0];
+                if (updatedPlan) {
+                    uploadedDocuments.set(updatedPlan.documentId, updatedPlan);
+                    metadataDrafts.set(updatedPlan.documentId, normalizeMetadataDraft(updatedPlan.metadata));
+                }
+
+                applied++;
+                mappingNotes.push(`${plan.status?.fileName || plan.title || `Document ${plan.documentId}`} <= ${formatUsedFileNames(metadataFilesForImport, 2)}`);
+            }
+
+            if (currentDocumentId && uploadedDocuments.has(currentDocumentId)) {
+                showDocumentPlan(currentDocumentId, { loadMetadata: false });
+            } else {
+                renderUploadedDocuments();
+            }
+
+            const unmatchedNote = unmatched.length > 0
+                ? ` Unmatched documents: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? ` (+${unmatched.length - 3} more)` : ''}.`
                 : '';
+            const mappingPreview = mappingNotes.length > 0
+                ? ` Mappings: ${mappingNotes.slice(0, 3).join(' | ')}${mappingNotes.length > 3 ? ` | +${mappingNotes.length - 3} more` : ''}.`
+                : '';
+
+            const cssClass = failed > 0
+                ? (applied > 0 ? 'text-warning' : 'text-danger')
+                : (applied > 0 ? 'text-success' : 'text-warning');
             setMessage(
                 'metadataMessage',
-                `Imported metadata from ${summary.fileCount || metadataFiles.length} file(s) (customers: ${summary.customerCount || 0}, services: ${summary.serviceCount || 0}).${dateNote}`,
-                'text-success');
+                `Imported NoteAssistant metadata applied to ${applied}/${uploadedPlans.length} uploaded documents.${failed > 0 ? ` Failed: ${failed}.` : ''}${unmatchedNote}${mappingPreview}`,
+                cssClass);
         }
 
         function saveCurrentMetadataDraft() {
@@ -1148,6 +1370,25 @@
             return parts.length ? parts.join(' | ') : 'metadata not set';
         }
 
+        function hasDecompositionData(plan) {
+            return Boolean(
+                plan
+                && Array.isArray(plan.chunks)
+                && plan.chunks.length > 0
+                && Array.isArray(plan.entities)
+                && Array.isArray(plan.mentions)
+            );
+        }
+
+        function syncDecompositionStateFromUploadedPlans() {
+            if (uploadedDocuments.size === 0) {
+                decompositionStepCompleted = false;
+                return;
+            }
+
+            decompositionStepCompleted = Array.from(uploadedDocuments.values()).every(hasDecompositionData);
+        }
+
         function selectAllUploadedDocuments() {
             uploadedDocuments.forEach((_, id) => selectedDocumentIds.add(Number(id)));
             renderUploadedDocuments();
@@ -1172,6 +1413,8 @@
             const plan = uploadedDocuments.get(Number(documentId));
             if (!plan) return;
 
+            syncDecompositionStateFromUploadedPlans();
+
             currentDocumentId = plan.documentId;
             if (plan.graphName) currentGraphName = plan.graphName;
             document.getElementById('cachedBadge').style.display = plan.cached ? 'inline-block' : 'none';
@@ -1186,7 +1429,7 @@
             if (decompositionStepCompleted) {
                 setMessage('initGraphMessage', 'Ready to build graph for this document.', 'text-muted');
             } else {
-                setMessage('initGraphMessage', 'Run "Decompose documents" in Section 1 to unlock graph initialization.', 'text-muted');
+                setMessage('initGraphMessage', 'Decomposition is not available for this document yet. Click "Decompose documents" to compute it.', 'text-muted');
             }
             renderStatus(plan.status);
             if (options.loadMetadata !== false) {
@@ -1197,6 +1440,7 @@
         }
 
         function updateDecompositionWorkflowState() {
+            syncDecompositionStateFromUploadedPlans();
             const hasUploadedDocuments = uploadedDocuments.size > 0;
             const canProceedToIngestion = hasUploadedDocuments && decompositionStepCompleted;
 
@@ -1238,9 +1482,9 @@
             if (!hasUploadedDocuments) {
                 decompositionStepMessage.textContent = 'Upload documents first, then run decomposition to continue to Section 3.';
             } else if (!decompositionStepCompleted) {
-                decompositionStepMessage.textContent = 'Click "Decompose documents" to unlock the Decomposition tab and Section 3.';
+                decompositionStepMessage.textContent = 'Some uploaded documents are missing decomposition data. Click "Decompose documents" to compute it.';
             } else {
-                decompositionStepMessage.textContent = 'Decomposition completed. You can review the Decomposition tab and continue to Section 3.';
+                decompositionStepMessage.textContent = 'Decomposition data is available. You can continue to Section 3 (rerun Decompose anytime to refresh).';
             }
         }
 
@@ -2496,6 +2740,7 @@
         function handleUploadSuccess(payload) {
             uploadedDocuments.set(payload.documentId, payload);
             selectedDocumentIds.add(payload.documentId);
+            syncDecompositionStateFromUploadedPlans();
             showDocumentPlan(payload.documentId);
         }
 
