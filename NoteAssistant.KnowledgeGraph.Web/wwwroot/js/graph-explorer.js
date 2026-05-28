@@ -24,6 +24,7 @@ const state = {
   colorByLabel: new Map(),
   communityByEntityId: new Map(),
   communityByEntityKey: new Map(),
+  communityById: new Map(),
   colorByCommunityId: new Map(),
   communityMembershipsLoaded: false,
   communityMembershipsLoading: false,
@@ -963,6 +964,7 @@ async function loadCommunityMemberships() {
 function buildCommunityIndexes(memberships) {
   state.communityByEntityId = new Map();
   state.communityByEntityKey = new Map();
+  state.communityById = new Map();
   memberships.forEach(item => {
     const community = {
       communityId: item.communityId,
@@ -973,6 +975,9 @@ function buildCommunityIndexes(memberships) {
       entityLabel: item.entityLabel,
       entityName: item.entityName
     };
+    if (!state.communityById.has(String(item.communityId))) {
+      state.communityById.set(String(item.communityId), community);
+    }
     state.communityByEntityId.set(String(item.entityId), community);
     state.communityByEntityKey.set(buildEntityCommunityKey(item.entityLabel, item.entityName), community);
   });
@@ -1495,6 +1500,7 @@ function rebuildFilterOptions() {
     summary: el.communityFilterSummary,
     values: communityValues,
     labels: new Map(communities.map(option => [option.value, option.label])),
+    titles: new Map(communities.map(option => [option.value, option.title])),
     colors: new Map(communities.map(option => [option.value, state.colorByCommunityId.get(option.value) || communityPalette[0]])),
     selectedValues: state.filters.communities,
     onChange: selected => updateCommunitySelection(selected)
@@ -1512,39 +1518,50 @@ function getAvailableCommunityOptions() {
     if (!community) return;
     const value = String(community.communityId);
     if (!options.has(value)) {
-      options.set(value, `Community ${community.communityId}: ${community.communityTitle}`);
+      options.set(value, community);
     }
   });
 
   return Array.from(options.entries())
-    .map(([value, label]) => ({ value, label }))
-    .sort((left, right) => left.label.localeCompare(right.label));
+    .map(([value, community]) => ({
+      value,
+      label: `Community ${community.communityId}: ${community.communityTitle}`,
+      title: `Community ${community.communityId}: ${community.communityTitle}\nEntities: ${community.communityEntityCount}\nEdges: ${community.communityRelationshipCount}`,
+      entityCount: community.communityEntityCount,
+      relationshipCount: community.communityRelationshipCount,
+      numericId: Number(community.communityId)
+    }))
+    .sort((left, right) => (right.entityCount - left.entityCount)
+      || (right.relationshipCount - left.relationshipCount)
+      || (left.numericId - right.numericId)
+      || left.label.localeCompare(right.label));
 }
 
 function hasAllValuesSelected(values, selectedValues) {
   return Boolean(values.length && selectedValues.length === values.length && values.every(value => selectedValues.includes(value)));
 }
 
-function rebuildCheckboxDropdown({ list, summary, values, labels = null, colors = null, selectedValues, onChange }) {
+function rebuildCheckboxDropdown({ list, summary, values, labels = null, titles = null, colors = null, selectedValues, onChange }) {
   if (!list || !summary) return;
   const selected = selectedValues.filter(value => values.includes(value));
   list.innerHTML = "";
   values.forEach(value => {
     const labelText = labels?.get(value) || value;
+    const titleText = titles?.get(value) || labelText;
     list.appendChild(createCheckboxOption(labelText, value, selected.includes(value), () => {
       const next = Array.from(list.querySelectorAll('input[data-filter-value]:checked')).map(input => input.dataset.filterValue);
       updateCheckboxDropdownSummary(summary, next, values.length, labels);
       onChange(next);
-    }, colors?.get(value)));
+    }, colors?.get(value), titleText));
   });
   updateCheckboxDropdownSummary(summary, selected, values.length, labels);
   if (selected.length !== selectedValues.length) onChange(selected);
 }
 
-function createCheckboxOption(labelText, value, checked, onChange, color = null) {
+function createCheckboxOption(labelText, value, checked, onChange, color = null, titleText = labelText) {
   const label = document.createElement("label");
   label.className = "kg-checkbox-option";
-  label.title = labelText;
+  label.title = titleText;
   if (color) {
     label.classList.add("kg-community-checkbox-option");
     label.style.setProperty("--kg-community-color", color);
