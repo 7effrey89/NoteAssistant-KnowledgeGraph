@@ -1277,6 +1277,15 @@ body.kg-inspector-resizing {
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
 }
 
+.kg-community-filter-field {
+  grid-column: 1 / -1;
+}
+
+#kgCommunityFilter .kg-checkbox-dropdown-menu {
+  max-height: 300px;
+  padding: 6px;
+}
+
 .kg-checkbox-option {
   display: flex;
   align-items: center;
@@ -1293,6 +1302,18 @@ body.kg-inspector-resizing {
   background: #eff6ff;
 }
 
+.kg-community-checkbox-option {
+  position: relative;
+  min-height: 34px;
+  padding: 6px 8px 6px 10px;
+  border-left: 4px solid var(--kg-community-color, #2563eb);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--kg-community-color, #2563eb) 10%, #ffffff), #ffffff 48%);
+}
+
+.kg-community-checkbox-option:hover {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--kg-community-color, #2563eb) 18%, #ffffff), #f8fbff 56%);
+}
+
 .kg-checkbox-option input {
   flex: 0 0 auto;
 }
@@ -1302,6 +1323,11 @@ body.kg-inspector-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.kg-community-checkbox-option span {
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .kg-layout-group-title {
@@ -1448,6 +1474,28 @@ body.kg-inspector-resizing {
   color: #64748b;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+}
+
+.kg-force-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 3px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: help;
+}
+
+.kg-force-info:hover {
+  border-color: #94a3b8;
+  color: #334155;
+  background: #f8fafc;
 }
 
 .kg-force-control-grid .form-range {

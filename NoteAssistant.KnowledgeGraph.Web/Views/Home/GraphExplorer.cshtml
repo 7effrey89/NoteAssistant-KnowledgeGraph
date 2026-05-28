@@ -56,6 +56,13 @@ LIMIT 150</textarea>
                             <div class="kg-checkbox-dropdown-menu" id="kgEdgeTypeFilterList" role="group" aria-labelledby="kgEdgeTypeFilterLabel"></div>
                         </details>
                     </div>
+                    <div class="kg-community-filter-field">
+                        <div class="form-label" id="kgCommunityFilterLabel">Community</div>
+                        <details class="kg-checkbox-dropdown" id="kgCommunityFilter">
+                            <summary id="kgCommunityFilterSummary" aria-labelledby="kgCommunityFilterLabel kgCommunityFilterSummary">All selected</summary>
+                            <div class="kg-checkbox-dropdown-menu" id="kgCommunityFilterList" role="group" aria-labelledby="kgCommunityFilterLabel"></div>
+                        </details>
+                    </div>
                     <div>
                         <label class="form-label" for="kgMinDegreeInput">Min degree</label>
                         <input class="form-control form-control-sm" id="kgMinDegreeInput" type="number" min="0" step="1" value="0" />
@@ -76,10 +83,6 @@ LIMIT 150</textarea>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="kgNodeNamesInsideToggle" />
                         <label class="form-check-label" for="kgNodeNamesInsideToggle">Names inside nodes</label>
-                    </div>
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="kgCommunityColorsToggle" />
-                        <label class="form-check-label" for="kgCommunityColorsToggle">Community colors</label>
                     </div>
                     <div>
                         <label class="form-label" for="kgLabelDensitySlider">Label density</label>

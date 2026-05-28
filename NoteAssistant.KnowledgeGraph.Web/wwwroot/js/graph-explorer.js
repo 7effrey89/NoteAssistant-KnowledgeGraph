@@ -1,6 +1,7 @@
 import Graph from "https://esm.sh/graphology@0.26.0";
 import Sigma from "https://esm.sh/sigma@3.0.3";
 import { EdgeCurvedArrowProgram } from "https://esm.sh/@sigma/edge-curve@3.1.0?deps=sigma@3.0.3";
+import { bindWebGLLayer, createContoursProgram } from "https://esm.sh/@sigma/layer-webgl@3.0.0?deps=sigma@3.0.3";
 import { circlepack, circular, random } from "https://esm.sh/graphology-layout@0.6.1";
 import forceAtlas2 from "https://esm.sh/graphology-layout-forceatlas2@0.10.1";
 import ForceLayout from "https://esm.sh/graphology-layout-force@0.2.4/worker";
@@ -26,6 +27,7 @@ const state = {
   colorByCommunityId: new Map(),
   communityMembershipsLoaded: false,
   communityMembershipsLoading: false,
+  communityContourCleanups: [],
   selectedNode: null,
   selectedNodes: new Set(),
   deselectedRelatedNodes: new Set(),
@@ -34,9 +36,9 @@ const state = {
   hoveredLegendLabel: null,
   selectedLegendLabel: null,
   inspectorHighlightedNode: null,
-  filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
-  filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false },
-  filterOptions: { nodeTypes: [], edgeTypes: [] },
+  filters: { search: "", nodeTypes: [], edgeTypes: [], communities: [], minDegree: 0 },
+  filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false, communities: false },
+  filterOptions: { nodeTypes: [], edgeTypes: [], communities: [] },
   settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50, colorMode: "label", forceControls: { nodeScale: 65, spacing: 135, centerPull: 30, linkPull: 55 } },
   currentLayout: "random",
   currentWorkerLayout: null,
@@ -72,11 +74,13 @@ const el = {
   edgeTypeFilter: document.getElementById("kgEdgeTypeFilter"),
   edgeTypeFilterSummary: document.getElementById("kgEdgeTypeFilterSummary"),
   edgeTypeFilterList: document.getElementById("kgEdgeTypeFilterList"),
+  communityFilter: document.getElementById("kgCommunityFilter"),
+  communityFilterSummary: document.getElementById("kgCommunityFilterSummary"),
+  communityFilterList: document.getElementById("kgCommunityFilterList"),
   minDegreeInput: document.getElementById("kgMinDegreeInput"),
   sizeModeSelect: document.getElementById("kgSizeModeSelect"),
   labelsToggle: document.getElementById("kgLabelsToggle"),
   nodeNamesInsideToggle: document.getElementById("kgNodeNamesInsideToggle"),
-  communityColorsToggle: document.getElementById("kgCommunityColorsToggle"),
   labelDensitySlider: document.getElementById("kgLabelDensitySlider"),
   edgeLabelsToggle: document.getElementById("kgEdgeLabelsToggle"),
   curvedEdgesToggle: document.getElementById("kgCurvedEdgesToggle"),
@@ -131,7 +135,14 @@ el.nodeNamesInsideToggle.addEventListener("change", () => {
   state.settings.nodeNamesInside = el.nodeNamesInsideToggle.checked;
   updateRendererSettings();
 });
-el.communityColorsToggle?.addEventListener("change", () => setCommunityColorMode(el.communityColorsToggle.checked));
+el.communityFilter?.addEventListener("toggle", async () => {
+  if (!el.communityFilter.open || state.communityMembershipsLoaded || state.communityMembershipsLoading) return;
+  try {
+    await loadCommunityMemberships();
+  } catch (error) {
+    setQueryMessage(`Community list unavailable: ${error.message}`, "error");
+  }
+});
 if (el.labelDensitySlider) {
   el.labelDensitySlider.addEventListener("input", () => {
     state.settings.labelDensity = Number(el.labelDensitySlider.value) || 50;
@@ -169,7 +180,7 @@ document.querySelectorAll("[data-kg-worker-layout]").forEach(button => {
   button.addEventListener("click", () => toggleWorkerLayout(button.dataset.kgWorkerLayout || "force"));
 });
 document.addEventListener("click", event => {
-  [el.nodeTypeFilter, el.edgeTypeFilter].forEach(dropdown => {
+  [el.nodeTypeFilter, el.edgeTypeFilter, el.communityFilter].forEach(dropdown => {
     if (dropdown?.open && !dropdown.contains(event.target)) dropdown.open = false;
   });
 });
@@ -352,6 +363,10 @@ async function runQuery() {
     }
 
     state.lastPayload = payload;
+    try {
+      await loadCommunityMemberships();
+    } catch {
+    }
     loadGraph(payload.nodes || [], payload.edges || []);
     setQueryMessage(`Rendered ${(payload.nodes || []).length} nodes and ${(payload.edges || []).length} relationships.`, "success");
     el.exportBtn.disabled = false;
@@ -374,8 +389,8 @@ function loadGraph(nodes, edges) {
   state.rawEdges = edges.map(normalizeEdge).filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
   state.degreeById = calculateDegrees(state.rawNodes, state.rawEdges);
   state.colorByLabel = buildColorMap(state.rawNodes);
-  state.filterDefaultsInitialized = { nodeTypes: false, edgeTypes: false };
-  state.filterOptions = { nodeTypes: [], edgeTypes: [] };
+  state.filterDefaultsInitialized = { nodeTypes: false, edgeTypes: false, communities: false };
+  state.filterOptions = { nodeTypes: [], edgeTypes: [], communities: [] };
   state.selectedNode = null;
   state.selectedNodes = new Set();
   state.deselectedRelatedNodes = new Set();
@@ -400,6 +415,7 @@ function rebuildGraph() {
   const layoutForRebuild = workerLayoutToRestart || fallbackToRandom ? "random" : state.currentLayout;
 
   stopWorkerLayout({ clearLast: !workerLayoutToRestart });
+  clearCommunityContours();
   if (fallbackToRandom) {
     state.currentLayout = "random";
     document.querySelectorAll("[data-kg-layout]").forEach(button => button.classList.toggle("active", button.dataset.kgLayout === "random"));
@@ -438,6 +454,7 @@ function rebuildGraph() {
   renderLegend();
   renderStats();
   updateSearchResults();
+  updateCommunityContours();
   setTimeout(() => {
     if (workerLayoutToRestart && state.graph?.order && state.renderer) {
       startWorkerLayout(workerLayoutToRestart);
@@ -811,6 +828,7 @@ function registerGraphEvents() {
     state.selectedLegendLabel = null;
     renderInspector(null);
     updateLegendActiveState();
+    updateCommunityContours();
     refreshRenderer();
     recordGraphHistory();
   });
@@ -867,6 +885,7 @@ function updateFilters(partial) {
   updateReducers();
   updateSearchResults();
   renderStats();
+  updateCommunityContours();
 }
 
 function updateRendererSettings() {
@@ -877,30 +896,17 @@ function updateRendererSettings() {
   updateReducers();
 }
 
-async function setCommunityColorMode(enabled) {
-  if (!enabled) {
-    state.settings.colorMode = "label";
-    state.hoveredLegendLabel = null;
-    state.selectedLegendLabel = null;
-    applyColorModeToExistingGraph();
-    setQueryMessage(state.rawNodes.length ? "Coloring nodes by label." : "Run a query to render graph nodes.", "muted");
-    return;
-  }
-
-  try {
-    await loadCommunityMemberships();
-    state.settings.colorMode = "community";
-    state.hoveredLegendLabel = null;
-    state.selectedLegendLabel = null;
-    applyColorModeToExistingGraph();
-    const matchedCount = state.rawNodes.filter(node => getNodeCommunity(node)).length;
-    setQueryMessage(`Community colors enabled (${matchedCount} visible nodes matched to communities).`, matchedCount ? "success" : "muted");
-  } catch (error) {
-    state.settings.colorMode = "label";
-    if (el.communityColorsToggle) el.communityColorsToggle.checked = false;
-    applyColorModeToExistingGraph();
-    setQueryMessage(`Community colors unavailable: ${error.message}`, "error");
-  }
+function updateCommunitySelection(selected) {
+  state.filters.communities = selected;
+  state.settings.colorMode = selected.length ? "community" : "label";
+  state.hoveredLegendLabel = null;
+  state.selectedLegendLabel = null;
+  applyColorModeToExistingGraph();
+  setQueryMessage(
+    selected.length
+      ? `${selected.length} ${selected.length === 1 ? "community" : "communities"} selected for community contours.`
+      : "Community contours cleared.",
+    "muted");
 }
 
 function applyColorModeToExistingGraph() {
@@ -927,6 +933,7 @@ function applyColorModeToExistingGraph() {
   renderStats();
   updateSearchResults();
   updateReducers();
+  updateCommunityContours();
 
   if (state.selectedNode && state.graph.hasNode(state.selectedNode)) {
     renderInspector({ type: "node", id: state.selectedNode }, { details: state.nodeDetailsCache.get(state.selectedNode), skipDetailsLoad: true });
@@ -947,6 +954,7 @@ async function loadCommunityMemberships() {
 
     buildCommunityIndexes(payload?.memberships || []);
     state.communityMembershipsLoaded = true;
+    rebuildFilterOptions();
   } finally {
     state.communityMembershipsLoading = false;
   }
@@ -975,6 +983,11 @@ function buildCommunityIndexes(memberships) {
 
 function getNodeCommunity(node) {
   if (!node || state.settings.colorMode !== "community") return null;
+  return getNodeCommunityInfo(node);
+}
+
+function getNodeCommunityInfo(node) {
+  if (!node) return null;
   const properties = node.properties || {};
   if (node.label !== "Document" && node.label !== "Chunk") {
     const idMatch = state.communityByEntityId.get(String(properties.id ?? ""));
@@ -1000,6 +1013,94 @@ function updateReducers() {
   state.renderer.setSetting("nodeReducer", nodeReducer);
   state.renderer.setSetting("edgeReducer", edgeReducer);
   refreshRenderer();
+}
+
+function updateCommunityContours() {
+  clearCommunityContours();
+  if (!state.renderer || !state.graph?.order || state.settings.colorMode !== "community") return;
+
+  const groups = getCommunityContourGroups();
+  if (!groups.length) {
+    refreshRenderer();
+    return;
+  }
+
+  try {
+    state.communityContourCleanups = groups.map(group => bindWebGLLayer(
+      `community-contour-${group.id}`,
+      state.renderer,
+      createContoursProgram(group.nodes, {
+        radius: getCommunityContourRadius(group.active),
+        border: {
+          color: colorWithAlpha(group.color, group.active ? 0.9 : 0.68),
+          thickness: group.active ? 5 : 4
+        },
+        levels: [
+          {
+            color: "#00000000",
+            threshold: 0.5
+          }
+        ]
+      })
+    ));
+  } catch (error) {
+    state.communityContourCleanups = [];
+    console.warn("Community contour layers unavailable.", error);
+    setQueryMessage(`Community contour layers unavailable: ${error.message}`, "muted");
+  }
+
+  refreshRenderer();
+}
+
+function clearCommunityContours() {
+  if (!state.communityContourCleanups?.length) return;
+  state.communityContourCleanups.forEach(cleanup => {
+    try {
+      cleanup?.();
+    } catch {
+    }
+  });
+  state.communityContourCleanups = [];
+}
+
+function getCommunityContourGroups() {
+  const groups = new Map();
+  const activeLegendLabel = getActiveLegendLabel();
+  const focusedCommunityId = activeLegendLabel?.startsWith("community:")
+    ? activeLegendLabel.slice("community:".length)
+    : null;
+  const selectedCommunityIds = focusedCommunityId
+    ? [focusedCommunityId]
+    : state.filters.communities;
+
+  if (!selectedCommunityIds.length) {
+    return [];
+  }
+
+  const selectedCommunitySet = new Set(selectedCommunityIds);
+
+  state.graph.forEachNode((node, data) => {
+    if (!data.kgCommunityId || !selectedCommunitySet.has(data.kgCommunityId) || isNodeHidden(node, data)) return;
+    const group = groups.get(data.kgCommunityId) || {
+      id: data.kgCommunityId,
+      color: data.color || state.colorByCommunityId.get(data.kgCommunityId) || communityPalette[0],
+      active: true,
+      nodes: []
+    };
+    group.nodes.push(node);
+    groups.set(data.kgCommunityId, group);
+  });
+
+  return Array.from(groups.values())
+    .filter(group => group.nodes.length >= 2)
+    .sort((left, right) => right.nodes.length - left.nodes.length)
+    .slice(0, 12);
+}
+
+function getCommunityContourRadius(active = false) {
+  const densityScale = getGraphDensityScale();
+  const base = active ? 118 : 96;
+  return Math.max(72, Math.min(active ? 170 : 142, base / Math.max(0.62, densityScale)));
 }
 
 function nodeReducer(node, data) {
@@ -1237,6 +1338,7 @@ function stopWorkerLayout(options = {}) {
   updateLayoutStatus();
   if (options.autoSettled && state.lastWorkerLayout) {
     setQueryMessage(`${getWorkerLayoutLabel(state.lastWorkerLayout)} layout settled and stopped. Move a force slider or press Start to settle it again.`, "muted");
+    updateCommunityContours();
   }
 }
 
@@ -1351,6 +1453,8 @@ function assignGridLayout(graph) {
 function rebuildFilterOptions() {
   const nodeTypes = uniqueSorted(state.rawNodes.map(node => node.label));
   const edgeTypes = getAvailableEdgeTypes();
+  const communities = getAvailableCommunityOptions();
+  const communityValues = communities.map(option => option.value);
   const hadAllNodeTypesSelected = hasAllValuesSelected(state.filterOptions.nodeTypes, state.filters.nodeTypes);
   const hadAllEdgeTypesSelected = hasAllValuesSelected(state.filterOptions.edgeTypes, state.filters.edgeTypes);
   if (!state.filterDefaultsInitialized.nodeTypes) {
@@ -1365,7 +1469,13 @@ function rebuildFilterOptions() {
   } else if (hadAllEdgeTypesSelected) {
     state.filters.edgeTypes = [...edgeTypes];
   }
-  state.filterOptions = { nodeTypes: [...nodeTypes], edgeTypes: [...edgeTypes] };
+  if (!state.filterDefaultsInitialized.communities) {
+    state.filters.communities = [];
+    state.filterDefaultsInitialized.communities = true;
+  } else {
+    state.filters.communities = state.filters.communities.filter(value => communityValues.includes(value));
+  }
+  state.filterOptions = { nodeTypes: [...nodeTypes], edgeTypes: [...edgeTypes], communities: [...communityValues] };
   rebuildCheckboxDropdown({
     list: el.nodeTypeFilterList,
     summary: el.nodeTypeFilterSummary,
@@ -1380,38 +1490,69 @@ function rebuildFilterOptions() {
     selectedValues: state.filters.edgeTypes,
     onChange: selected => updateFilters({ edgeTypes: selected })
   });
+  rebuildCheckboxDropdown({
+    list: el.communityFilterList,
+    summary: el.communityFilterSummary,
+    values: communityValues,
+    labels: new Map(communities.map(option => [option.value, option.label])),
+    colors: new Map(communities.map(option => [option.value, state.colorByCommunityId.get(option.value) || communityPalette[0]])),
+    selectedValues: state.filters.communities,
+    onChange: selected => updateCommunitySelection(selected)
+  });
 }
 
 function getAvailableEdgeTypes() {
   return uniqueSorted(state.rawEdges.map(edge => edge.label));
 }
 
+function getAvailableCommunityOptions() {
+  const options = new Map();
+  state.rawNodes.forEach(node => {
+    const community = getNodeCommunityInfo(node);
+    if (!community) return;
+    const value = String(community.communityId);
+    if (!options.has(value)) {
+      options.set(value, `Community ${community.communityId}: ${community.communityTitle}`);
+    }
+  });
+
+  return Array.from(options.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
 function hasAllValuesSelected(values, selectedValues) {
   return Boolean(values.length && selectedValues.length === values.length && values.every(value => selectedValues.includes(value)));
 }
 
-function rebuildCheckboxDropdown({ list, summary, values, selectedValues, onChange }) {
+function rebuildCheckboxDropdown({ list, summary, values, labels = null, colors = null, selectedValues, onChange }) {
   if (!list || !summary) return;
   const selected = selectedValues.filter(value => values.includes(value));
   list.innerHTML = "";
   values.forEach(value => {
-    list.appendChild(createCheckboxOption(value, value, selected.includes(value), () => {
+    const labelText = labels?.get(value) || value;
+    list.appendChild(createCheckboxOption(labelText, value, selected.includes(value), () => {
       const next = Array.from(list.querySelectorAll('input[data-filter-value]:checked')).map(input => input.dataset.filterValue);
-      updateCheckboxDropdownSummary(summary, next, values.length);
+      updateCheckboxDropdownSummary(summary, next, values.length, labels);
       onChange(next);
-    }));
+    }, colors?.get(value)));
   });
-  updateCheckboxDropdownSummary(summary, selected, values.length);
+  updateCheckboxDropdownSummary(summary, selected, values.length, labels);
   if (selected.length !== selectedValues.length) onChange(selected);
 }
 
-function createCheckboxOption(labelText, value, checked, onChange) {
+function createCheckboxOption(labelText, value, checked, onChange, color = null) {
   const label = document.createElement("label");
   label.className = "kg-checkbox-option";
   label.title = labelText;
+  if (color) {
+    label.classList.add("kg-community-checkbox-option");
+    label.style.setProperty("--kg-community-color", color);
+  }
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = checked;
+  if (color) checkbox.style.accentColor = color;
   if (value) checkbox.dataset.filterValue = value;
   checkbox.addEventListener("change", () => onChange(checkbox.checked));
   const text = document.createElement("span");
@@ -1421,10 +1562,10 @@ function createCheckboxOption(labelText, value, checked, onChange) {
   return label;
 }
 
-function updateCheckboxDropdownSummary(summary, selected, totalCount) {
+function updateCheckboxDropdownSummary(summary, selected, totalCount, labels = null) {
   if (totalCount > 0 && selected.length === totalCount) {
     summary.textContent = "All selected";
-    summary.title = selected.join(", ");
+    summary.title = labels ? selected.map(value => labels.get(value) || value).join(", ") : selected.join(", ");
     return;
   }
   if (!selected.length) {
@@ -1432,8 +1573,9 @@ function updateCheckboxDropdownSummary(summary, selected, totalCount) {
     summary.title = "None selected";
     return;
   }
-  summary.textContent = selected.length === 1 ? selected[0] : `${selected.length} selected`;
-  summary.title = selected.join(", ");
+  const selectedLabels = labels ? selected.map(value => labels.get(value) || value) : selected;
+  summary.textContent = selected.length === 1 ? selectedLabels[0] : `${selected.length} selected`;
+  summary.title = selectedLabels.join(", ");
 }
 
 function updateSearchResults() {
@@ -1957,6 +2099,7 @@ function updateGraphAfterExpansion(nodeIdsToHighlight = []) {
   renderStats();
   updateSearchResults();
   updateReducers();
+  updateCommunityContours();
   el.exportBtn.disabled = false;
   nodeIdsToHighlight.forEach(nodeId => state.graph.hasNode(nodeId) && state.graph.setNodeAttribute(nodeId, "highlighted", true));
   refreshRenderer();
@@ -2074,6 +2217,7 @@ function getLegendGroups() {
 
   const groups = new Map();
   state.graph.forEachNode((node, data) => {
+    if (data.kgCommunityId) return;
     if (!data.kgColorGroup || groups.has(data.kgColorGroup)) return;
     groups.set(data.kgColorGroup, {
       id: data.kgColorGroup,
@@ -2099,6 +2243,7 @@ function setLegendHover(label) {
   if (state.hoveredLegendLabel === label) return;
   state.hoveredLegendLabel = label;
   updateLegendActiveState();
+  updateCommunityContours();
   refreshRenderer();
 }
 
@@ -2106,6 +2251,7 @@ function clearLegendHover(label) {
   if (state.hoveredLegendLabel !== label) return;
   state.hoveredLegendLabel = null;
   updateLegendActiveState();
+  updateCommunityContours();
   refreshRenderer();
 }
 
@@ -2118,6 +2264,7 @@ function toggleLegendSelection(label) {
   state.selectedEdge = null;
   renderInspector(null);
   updateLegendActiveState();
+  updateCommunityContours();
   refreshRenderer();
   recordGraphHistory();
 }
