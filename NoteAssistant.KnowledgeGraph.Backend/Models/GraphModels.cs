@@ -2,7 +2,7 @@ namespace NoteAssistant.KnowledgeGraph.Backend.Models;
 
 public sealed record ChunkDto(long Id, int ChunkIndex, string Text, float[]? Embedding = null);
 
-public sealed record EntityDto(string Label, string Name, string? EmbeddingText = null, float[]? Embedding = null);
+public sealed record EntityDto(string Label, string Name, string? EmbeddingText = null, float[]? Embedding = null, string? ImageUrl = null, string? PictogramUrl = null);
 
 public sealed record RelationshipDto(string SourceName, string Relationship, string TargetName, double? Confidence = null);
 
@@ -75,6 +75,28 @@ public sealed record GraphQueryResponse(
     IReadOnlyList<GraphEdgeDto> Edges);
 
 public sealed record GraphNodeDto(string Id, string Label, string Title, IReadOnlyDictionary<string, string?>? Properties = null);
+
+public sealed record EntityVisualDto(long Id, string Label, string Name, string? ImageUrl, string? PictogramUrl, string? Description = null);
+
+public sealed record EntityVisualsResponse(bool Success, string? Error, IReadOnlyList<EntityVisualDto> Entities);
+
+public sealed record UpdateEntityVisualRequest(long EntityId, string VisualKind, string? Url);
+
+public sealed record UpdateEntityDescriptionRequest(long EntityId, string? Description);
+
+public sealed record EntityVisualAssetDto(long Id, string FileName, string Url, string? Description, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+
+public sealed record EntityVisualAssetsResponse(bool Success, string? Error, IReadOnlyList<EntityVisualAssetDto> Assets);
+
+public sealed record UpsertEntityVisualAssetRequest(string FileName, string Url, string? Description = null);
+
+public sealed record UpdateEntityVisualAssetDescriptionRequest(long AssetId, string? Description);
+
+public sealed record EntityVisualSuggestionRequest(string VisualKind, IReadOnlyList<long> EntityIds, int Parallelism = 1);
+
+public sealed record EntityVisualSuggestionDto(long EntityId, long AssetId, string Url, string Reason);
+
+public sealed record EntityVisualSuggestionResponse(bool Success, string? Error, IReadOnlyList<EntityVisualSuggestionDto> Suggestions);
 
 public sealed record GraphEdgeDto(string Source, string Target, string Label);
 

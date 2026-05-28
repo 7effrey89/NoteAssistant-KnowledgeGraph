@@ -1079,6 +1079,54 @@ app.MapPost("/api/graph/node/details", async (GraphNodeDetailsRequest request, A
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapGet("/api/graph/entity-visuals", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetEntityVisualsAsync(cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapGet("/api/entities/visual-management", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetEntitiesForVisualManagementAsync(cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/entities/visual", async (UpdateEntityVisualRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.UpdateEntityVisualAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/entities/description", async (UpdateEntityDescriptionRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.UpdateEntityDescriptionAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapGet("/api/entity-visual-assets", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetEntityVisualAssetsAsync(cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/entity-visual-assets", async (UpsertEntityVisualAssetRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.UpsertEntityVisualAssetAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/entity-visual-assets/description", async (UpdateEntityVisualAssetDescriptionRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.UpdateEntityVisualAssetDescriptionAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapPost("/api/entities/visual-suggestions", async (EntityVisualSuggestionRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.SuggestEntityVisualsAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/query/assist", (QueryAssistantRequest request, QueryAssistantService assistant) =>
 {
     if (string.IsNullOrWhiteSpace(request.Prompt))

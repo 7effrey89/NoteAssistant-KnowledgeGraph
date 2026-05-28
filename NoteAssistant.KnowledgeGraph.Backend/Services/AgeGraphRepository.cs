@@ -10,8 +10,11 @@ using NoteAssistant.KnowledgeGraph.Backend.Models;
 
 namespace NoteAssistant.KnowledgeGraph.Backend.Services;
 
-public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoundryInferenceClient foundry, IAgeDatabaseConnectionFactory connectionFactory)
+public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoundryInferenceClient foundry, IAgeDatabaseConnectionFactory connectionFactory, IHostEnvironment environment)
 {
+    private const string PromptTemplateFolder = "prompt_template";
+    private const string EntityVisualSystemPromptFileName = "entityVisualAgent_SystemPrompt.txt";
+    private const string DefaultEntityVisualSystemPrompt = "You match graph entities to uploaded visual assets. Return strict JSON only.";
     private const string RetrievalModeAuto = "auto";
     private const string RetrievalModeLocal = "local";
     private const string RetrievalModeLight = "light";
@@ -20,6 +23,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private const int MaxVectorResultLimit = 50;
     private readonly IFoundryInferenceClient _foundry = foundry;
     private readonly IAgeDatabaseConnectionFactory _connectionFactory = connectionFactory;
+    private readonly string _entityVisualSystemPrompt = LoadPromptTemplate(environment, EntityVisualSystemPromptFileName, DefaultEntityVisualSystemPrompt);
 
     private sealed record CommunityEntityRow(long Id, string Label, string Name);
 
@@ -30,6 +34,12 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
     private sealed record CommunityBuildDetail(int Index, string Detail);
 
     public bool IsConfigured => _connectionFactory.IsConfigured;
+
+    private static string LoadPromptTemplate(IHostEnvironment environment, string fileName, string fallback)
+    {
+        var path = Path.Combine(environment.ContentRootPath, PromptTemplateFolder, fileName);
+        return File.Exists(path) ? File.ReadAllText(path) : fallback;
+    }
 
     private static (string Mode, string Rationale) ResolveRetrievalMode(string query, string? requestedMode)
     {
@@ -340,6 +350,11 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         try
         {
             await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            if (request.Label is not "Document" and not "Chunk")
+            {
+                await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+            }
+
             return request.Label switch
             {
                 "Document" => await GetDocumentNodeDetailsAsync(connection, request, cancellationToken),
@@ -400,6 +415,329 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         {
             logger.LogError(ex, "Failed to load graph community memberships.");
             return new CommunityGraphMembershipResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualsResponse> GetEntityVisualsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+
+            const string sql = """
+                               SELECT id, label, name, image_url, pictogram_url, description
+                               FROM entities
+                               WHERE NULLIF(image_url, '') IS NOT NULL
+                                  OR NULLIF(pictogram_url, '') IS NOT NULL
+                               ORDER BY label, name;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            var entities = new List<EntityVisualDto>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                entities.Add(new EntityVisualDto(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+
+            return new EntityVisualsResponse(true, null, entities);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load entity visual attributes.");
+            return new EntityVisualsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualsResponse> GetEntitiesForVisualManagementAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+
+            const string sql = """
+                               SELECT id, label, name, image_url, pictogram_url, description
+                               FROM entities
+                               ORDER BY label, name;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            var entities = new List<EntityVisualDto>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                entities.Add(new EntityVisualDto(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+
+            return new EntityVisualsResponse(true, null, entities);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load entities for visual management.");
+            return new EntityVisualsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualsResponse> UpdateEntityVisualAsync(UpdateEntityVisualRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        var visualKind = (request.VisualKind ?? string.Empty).Trim().ToLowerInvariant();
+        if (visualKind is not ("image" or "pictogram"))
+        {
+            return new EntityVisualsResponse(false, "Visual kind must be 'image' or 'pictogram'.", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+
+            var column = visualKind == "image" ? "image_url" : "pictogram_url";
+            var sql = $"""
+                       UPDATE entities
+                       SET {column} = @url
+                       WHERE id = @entity_id
+                       RETURNING id, label, name, image_url, pictogram_url, description;
+                       """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("entity_id", request.EntityId);
+            command.Parameters.AddWithValue("url", string.IsNullOrWhiteSpace(request.Url) ? DBNull.Value : request.Url.Trim());
+
+            var entities = new List<EntityVisualDto>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                entities.Add(new EntityVisualDto(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+
+            return entities.Count == 0
+                ? new EntityVisualsResponse(false, $"Entity {request.EntityId} was not found.", [])
+                : new EntityVisualsResponse(true, null, entities);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to update entity visual assignment.");
+            return new EntityVisualsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualsResponse> UpdateEntityDescriptionAsync(UpdateEntityDescriptionRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+            const string sql = """
+                               UPDATE entities
+                               SET description = @description
+                               WHERE id = @entity_id
+                               RETURNING id, label, name, image_url, pictogram_url, description;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("entity_id", request.EntityId);
+            command.Parameters.AddWithValue("description", string.IsNullOrWhiteSpace(request.Description) ? DBNull.Value : request.Description.Trim());
+            var entities = new List<EntityVisualDto>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                entities.Add(ReadEntityVisual(reader));
+            }
+
+            return entities.Count == 0
+                ? new EntityVisualsResponse(false, $"Entity {request.EntityId} was not found.", [])
+                : new EntityVisualsResponse(true, null, entities);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to update entity description.");
+            return new EntityVisualsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualAssetsResponse> GetEntityVisualAssetsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualAssetsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualAssetTableAsync(connection, cancellationToken);
+            const string sql = "SELECT id, file_name, url, description, created_at, updated_at FROM entity_visual_assets ORDER BY file_name;";
+            await using var command = new NpgsqlCommand(sql, connection);
+            return new EntityVisualAssetsResponse(true, null, await ReadEntityVisualAssetsAsync(command, cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load entity visual assets.");
+            return new EntityVisualAssetsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualAssetsResponse> UpsertEntityVisualAssetAsync(UpsertEntityVisualAssetRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualAssetsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.Url))
+        {
+            return new EntityVisualAssetsResponse(false, "File name and URL are required.", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualAssetTableAsync(connection, cancellationToken);
+            const string sql = """
+                               INSERT INTO entity_visual_assets(file_name, url, description, updated_at)
+                               VALUES (@file_name, @url, @description, NOW())
+                               ON CONFLICT (url) DO UPDATE SET
+                                   file_name = EXCLUDED.file_name,
+                                   description = COALESCE(EXCLUDED.description, entity_visual_assets.description),
+                                   updated_at = NOW()
+                               RETURNING id, file_name, url, description, created_at, updated_at;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("file_name", request.FileName.Trim());
+            command.Parameters.AddWithValue("url", request.Url.Trim());
+            command.Parameters.AddWithValue("description", string.IsNullOrWhiteSpace(request.Description) ? DBNull.Value : request.Description.Trim());
+            return new EntityVisualAssetsResponse(true, null, await ReadEntityVisualAssetsAsync(command, cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to upsert entity visual asset.");
+            return new EntityVisualAssetsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualAssetsResponse> UpdateEntityVisualAssetDescriptionAsync(UpdateEntityVisualAssetDescriptionRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualAssetsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualAssetTableAsync(connection, cancellationToken);
+            const string sql = """
+                               UPDATE entity_visual_assets
+                               SET description = @description,
+                                   updated_at = NOW()
+                               WHERE id = @asset_id
+                               RETURNING id, file_name, url, description, created_at, updated_at;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("asset_id", request.AssetId);
+            command.Parameters.AddWithValue("description", string.IsNullOrWhiteSpace(request.Description) ? DBNull.Value : request.Description.Trim());
+            var assets = await ReadEntityVisualAssetsAsync(command, cancellationToken);
+            return assets.Count == 0
+                ? new EntityVisualAssetsResponse(false, $"Asset {request.AssetId} was not found.", [])
+                : new EntityVisualAssetsResponse(true, null, assets);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to update entity visual asset description.");
+            return new EntityVisualAssetsResponse(false, ex.Message, []);
+        }
+    }
+
+    public async Task<EntityVisualSuggestionResponse> SuggestEntityVisualsAsync(EntityVisualSuggestionRequest request, CancellationToken cancellationToken)
+    {
+        if (!_foundry.IsConfigured)
+        {
+            return new EntityVisualSuggestionResponse(false, "Foundry is not configured.", []);
+        }
+
+        if (!IsConfigured)
+        {
+            return new EntityVisualSuggestionResponse(false, "Database settings are not configured.", []);
+        }
+
+        var visualKind = (request.VisualKind ?? string.Empty).Trim().ToLowerInvariant();
+        if (visualKind is not ("image" or "pictogram"))
+        {
+            return new EntityVisualSuggestionResponse(false, "Visual kind must be 'image' or 'pictogram'.", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+            await EnsureEntityVisualAssetTableAsync(connection, cancellationToken);
+            var entities = await LoadEntityVisualsByIdsAsync(connection, request.EntityIds, cancellationToken);
+            var assets = await LoadEntityVisualAssetsAsync(connection, cancellationToken);
+            if (entities.Count == 0 || assets.Count == 0)
+            {
+                return new EntityVisualSuggestionResponse(true, null, []);
+            }
+
+            var systemPrompt = _entityVisualSystemPrompt;
+            var parallelism = Math.Clamp(request.Parallelism, 1, 8);
+            var chunkSize = Math.Max(1, (int)Math.Ceiling(entities.Count / (double)parallelism));
+            var chunks = entities.Chunk(chunkSize).ToList();
+            var suggestionBags = new ConcurrentBag<EntityVisualSuggestionDto>();
+            await Parallel.ForEachAsync(chunks, new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken }, async (chunk, token) =>
+            {
+                var userPrompt = BuildVisualSuggestionPrompt(visualKind, chunk, assets);
+                var completion = await _foundry.CompletePromptAsync(systemPrompt, userPrompt, "Entity Visual Agent", "suggest-entity-visuals", token);
+                foreach (var suggestion in ParseVisualSuggestions(completion.Content, assets))
+                {
+                    suggestionBags.Add(suggestion);
+                }
+            });
+
+            var suggestions = suggestionBags.ToList();
+            var requested = request.EntityIds.ToHashSet();
+            suggestions = suggestions.Where(s => requested.Contains(s.EntityId)).ToList();
+            return new EntityVisualSuggestionResponse(true, null, suggestions);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to suggest entity visuals.");
+            return new EntityVisualSuggestionResponse(false, ex.Message, []);
         }
     }
 
@@ -1207,6 +1545,147 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                            """;
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureEntityVisualColumnsAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           ALTER TABLE entities ADD COLUMN IF NOT EXISTS image_url TEXT;
+                           ALTER TABLE entities ADD COLUMN IF NOT EXISTS pictogram_url TEXT;
+                           ALTER TABLE entities ADD COLUMN IF NOT EXISTS description TEXT;
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureEntityVisualAssetTableAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+                           CREATE TABLE IF NOT EXISTS entity_visual_assets (
+                               id BIGSERIAL PRIMARY KEY,
+                               file_name TEXT NOT NULL UNIQUE,
+                               url TEXT NOT NULL UNIQUE,
+                               description TEXT NULL,
+                               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                               updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                           );
+                           """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static EntityVisualDto ReadEntityVisual(NpgsqlDataReader reader)
+        => new(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5));
+
+    private static EntityVisualAssetDto ReadEntityVisualAsset(NpgsqlDataReader reader)
+        => new(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.GetFieldValue<DateTimeOffset>(4),
+            reader.GetFieldValue<DateTimeOffset>(5));
+
+    private static async Task<List<EntityVisualAssetDto>> ReadEntityVisualAssetsAsync(NpgsqlCommand command, CancellationToken cancellationToken)
+    {
+        var assets = new List<EntityVisualAssetDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            assets.Add(ReadEntityVisualAsset(reader));
+        }
+
+        return assets;
+    }
+
+    private static async Task<List<EntityVisualAssetDto>> LoadEntityVisualAssetsAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = "SELECT id, file_name, url, description, created_at, updated_at FROM entity_visual_assets WHERE NULLIF(description, '') IS NOT NULL ORDER BY file_name;";
+        await using var command = new NpgsqlCommand(sql, connection);
+        return await ReadEntityVisualAssetsAsync(command, cancellationToken);
+    }
+
+    private static async Task<List<EntityVisualDto>> LoadEntityVisualsByIdsAsync(NpgsqlConnection connection, IReadOnlyList<long> entityIds, CancellationToken cancellationToken)
+    {
+        if (entityIds.Count == 0)
+        {
+            return [];
+        }
+
+        const string sql = "SELECT id, label, name, image_url, pictogram_url, description FROM entities WHERE id = ANY(@entity_ids) ORDER BY label, name;";
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("entity_ids", entityIds.Distinct().ToArray());
+        var entities = new List<EntityVisualDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            entities.Add(ReadEntityVisual(reader));
+        }
+
+        return entities;
+    }
+
+    private static string BuildVisualSuggestionPrompt(string visualKind, IReadOnlyList<EntityVisualDto> entities, IReadOnlyList<EntityVisualAssetDto> assets)
+        => string.Join(Environment.NewLine,
+        [
+            $"Assign the best uploaded {visualKind} asset to each entity.",
+            "Use asset descriptions as the primary evidence. Use entity description first, then entity name and label.",
+            "Return strict JSON: {\"suggestions\":[{\"entityId\":123,\"assetId\":456,\"reason\":\"short reason\"}]}",
+            "Only suggest an asset when there is a plausible semantic match.",
+            string.Empty,
+            "Entities:",
+            JsonSerializer.Serialize(entities.Select(entity => new { entity.Id, entity.Label, entity.Name, entity.Description })),
+            string.Empty,
+            "Assets:",
+            JsonSerializer.Serialize(assets.Select(asset => new { asset.Id, asset.FileName, asset.Url, asset.Description }))
+        ]);
+
+    private static List<EntityVisualSuggestionDto> ParseVisualSuggestions(string content, IReadOnlyList<EntityVisualAssetDto> assets)
+    {
+        try
+        {
+            var assetLookup = assets.ToDictionary(asset => asset.Id, asset => asset);
+            var start = content.IndexOf('{', StringComparison.Ordinal);
+            var end = content.LastIndexOf('}');
+            if (start < 0 || end <= start)
+            {
+                return [];
+            }
+
+            using var document = JsonDocument.Parse(content[start..(end + 1)]);
+            if (!document.RootElement.TryGetProperty("suggestions", out var suggestionsElement) || suggestionsElement.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var suggestions = new List<EntityVisualSuggestionDto>();
+            foreach (var item in suggestionsElement.EnumerateArray())
+            {
+                if (!item.TryGetProperty("entityId", out var entityIdElement)
+                    || !item.TryGetProperty("assetId", out var assetIdElement)
+                    || !entityIdElement.TryGetInt64(out var entityId)
+                    || !assetIdElement.TryGetInt64(out var assetId)
+                    || !assetLookup.TryGetValue(assetId, out var asset))
+                {
+                    continue;
+                }
+
+                var reason = item.TryGetProperty("reason", out var reasonElement) ? reasonElement.GetString() ?? string.Empty : string.Empty;
+                suggestions.Add(new EntityVisualSuggestionDto(entityId, assetId, asset.Url, reason));
+            }
+
+            return suggestions;
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static string BuildCommunitySummaryContext(IReadOnlyList<CommunityEntityRow> entities, IReadOnlyList<CommunityRelationshipRow> relationships)
@@ -2609,6 +3088,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                                    SELECT e.id,
                                           e.label,
                                           e.name,
+                                    e.image_url,
+                                    e.pictogram_url,
                                     COUNT(DISTINCT ce.chunk_id)::text AS chunks_mentioning_this_entity,
                                     COUNT(DISTINCT c.document_id)::text AS documents_mentioning_this_entity,
                                     string_agg(DISTINCT 'Chunk ' || c.chunk_index::text, ', ' ORDER BY 'Chunk ' || c.chunk_index::text) AS chunks,
@@ -2619,7 +3100,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                                    LEFT JOIN chunks c ON c.id = ce.chunk_id
                                    LEFT JOIN documents d ON d.id = c.document_id
                                    WHERE e.id = @entity_id
-                                   GROUP BY e.id, e.label, e.name, e.created_at;
+                                   GROUP BY e.id, e.label, e.name, e.image_url, e.pictogram_url, e.created_at;
                                    """;
             await using var byIdCommand = new NpgsqlCommand(byIdSql, connection);
             byIdCommand.Parameters.AddWithValue("entity_id", entityId);
@@ -2635,6 +3116,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                            SELECT e.id,
                                   e.label,
                                   e.name,
+                                  e.image_url,
+                                  e.pictogram_url,
                                   COUNT(DISTINCT ce.chunk_id)::text AS chunks_mentioning_this_entity,
                                   COUNT(DISTINCT c.document_id)::text AS documents_mentioning_this_entity,
                                   string_agg(DISTINCT 'Chunk ' || c.chunk_index::text, ', ' ORDER BY 'Chunk ' || c.chunk_index::text) AS chunks,
@@ -2645,7 +3128,7 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                            LEFT JOIN chunks c ON c.id = ce.chunk_id
                            LEFT JOIN documents d ON d.id = c.document_id
                            WHERE e.name = @name
-                           GROUP BY e.id, e.label, e.name, e.created_at;
+                           GROUP BY e.id, e.label, e.name, e.image_url, e.pictogram_url, e.created_at;
                            """;
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("name", name);
@@ -2669,6 +3152,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 "id",
                 "label",
                 "name",
+                "image_url",
+                "pictogram_url",
                 "chunks_mentioning_this_entity",
                 "documents_mentioning_this_entity",
                 "chunks",
@@ -2685,6 +3170,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             ["id"] = "kg_data.entities.id",
             ["label"] = "kg_data.entities.label",
             ["name"] = "kg_data.entities.name",
+            ["image_url"] = "kg_data.entities.image_url",
+            ["pictogram_url"] = "kg_data.entities.pictogram_url",
             ["chunks_mentioning_this_entity"] = "COUNT(DISTINCT chunk_entities.chunk_id) WHERE chunk_entities.entity_id = entities.id",
             ["documents_mentioning_this_entity"] = "COUNT(DISTINCT chunks.document_id) WHERE chunk_entities.entity_id = entities.id",
             ["chunks"] = "string_agg(DISTINCT chunks.chunk_index) WHERE chunk_entities.entity_id = entities.id",
@@ -3517,7 +4004,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             }
         }
 
-        await using (var entityCommand = new NpgsqlCommand("SELECT id, label, name FROM entities ORDER BY id LIMIT @limit", connection))
+        await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+        await using (var entityCommand = new NpgsqlCommand("SELECT id, label, name, image_url, pictogram_url FROM entities ORDER BY id LIMIT @limit", connection))
         {
             entityCommand.Parameters.AddWithValue("limit", maxEntities);
             await using var reader = await entityCommand.ExecuteReaderAsync(cancellationToken);
@@ -3526,6 +4014,8 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                 var id = reader.GetInt64(0);
                 var label = reader.IsDBNull(1) ? "Entity" : reader.GetString(1);
                 var name = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+                var imageUrl = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var pictogramUrl = reader.IsDBNull(4) ? null : reader.GetString(4);
                 var nodeId = $"entity:{id}";
                 nodes[nodeId] = new GraphNodeDto(
                     nodeId,
@@ -3534,7 +4024,9 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
                     new Dictionary<string, string?>
                     {
                         ["id"] = id.ToString(CultureInfo.InvariantCulture),
-                        ["name"] = name
+                        ["name"] = name,
+                        ["image_url"] = imageUrl,
+                        ["pictogram_url"] = pictogramUrl
                     });
             }
         }

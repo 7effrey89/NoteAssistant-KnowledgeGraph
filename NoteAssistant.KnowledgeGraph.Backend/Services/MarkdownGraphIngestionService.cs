@@ -446,6 +446,9 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             "CREATE TABLE IF NOT EXISTS entities (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
             "ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding vector(1536);",
             "ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding_text TEXT;",
+            "ALTER TABLE entities ADD COLUMN IF NOT EXISTS image_url TEXT;",
+            "ALTER TABLE entities ADD COLUMN IF NOT EXISTS pictogram_url TEXT;",
+            "ALTER TABLE entities ADD COLUMN IF NOT EXISTS description TEXT;",
             "CREATE TABLE IF NOT EXISTS chunks (id BIGSERIAL PRIMARY KEY, document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, embedding vector(1536), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(document_id, chunk_index));",
             "CREATE TABLE IF NOT EXISTS chunk_entities (chunk_id BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, PRIMARY KEY(chunk_id, entity_id));",
             "CREATE TABLE IF NOT EXISTS relationships (id BIGSERIAL PRIMARY KEY, source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, relationship_type TEXT NOT NULL, chunk_id BIGINT NULL REFERENCES chunks(id) ON DELETE SET NULL, confidence DOUBLE PRECISION NULL, evidence TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(source_entity_id, target_entity_id, relationship_type, chunk_id));",
@@ -492,8 +495,22 @@ public sealed class MarkdownGraphIngestionService : IMarkdownGraphIngestionServi
             var entityEmbeddingTextLiteral = string.IsNullOrWhiteSpace(entity.EmbeddingText)
                 ? "NULL"
                 : $"'{EscapeSql(entity.EmbeddingText)}'";
-            statements.Add($"INSERT INTO entities(label, name, embedding, embedding_text) VALUES ('{EscapeSql(entity.Label)}', '{EscapeSql(entity.Name)}', {entityEmbeddingLiteral}, {entityEmbeddingTextLiteral}) ON CONFLICT (name) DO UPDATE SET label = EXCLUDED.label, embedding = COALESCE(EXCLUDED.embedding, entities.embedding), embedding_text = COALESCE(EXCLUDED.embedding_text, entities.embedding_text);");
-            statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (e:{entity.Label} {{name:\"{Escape(entity.Name)}\"}}) RETURN e $$) as (e agtype);");
+            var entityImageUrlLiteral = string.IsNullOrWhiteSpace(entity.ImageUrl)
+                ? "NULL"
+                : $"'{EscapeSql(entity.ImageUrl)}'";
+            var entityPictogramUrlLiteral = string.IsNullOrWhiteSpace(entity.PictogramUrl)
+                ? "NULL"
+                : $"'{EscapeSql(entity.PictogramUrl)}'";
+            var cypherImageUrlSet = string.IsNullOrWhiteSpace(entity.ImageUrl)
+                ? string.Empty
+                : $"e.image_url=\"{Escape(entity.ImageUrl)}\"";
+            var cypherPictogramUrlSet = string.IsNullOrWhiteSpace(entity.PictogramUrl)
+                ? string.Empty
+                : $"e.pictogram_url=\"{Escape(entity.PictogramUrl)}\"";
+            var cypherVisualSet = string.Join(", ", new[] { cypherImageUrlSet, cypherPictogramUrlSet }.Where(part => !string.IsNullOrWhiteSpace(part)));
+            var cypherVisualSetClause = string.IsNullOrWhiteSpace(cypherVisualSet) ? string.Empty : $" SET {cypherVisualSet}";
+            statements.Add($"INSERT INTO entities(label, name, embedding, embedding_text, image_url, pictogram_url) VALUES ('{EscapeSql(entity.Label)}', '{EscapeSql(entity.Name)}', {entityEmbeddingLiteral}, {entityEmbeddingTextLiteral}, {entityImageUrlLiteral}, {entityPictogramUrlLiteral}) ON CONFLICT (name) DO UPDATE SET label = EXCLUDED.label, embedding = COALESCE(EXCLUDED.embedding, entities.embedding), embedding_text = COALESCE(EXCLUDED.embedding_text, entities.embedding_text), image_url = COALESCE(EXCLUDED.image_url, entities.image_url), pictogram_url = COALESCE(EXCLUDED.pictogram_url, entities.pictogram_url);");
+            statements.Add($"SELECT * FROM ag_catalog.cypher('{EscapeSql(graphName)}', $$ MERGE (e:{entity.Label} {{name:\"{Escape(entity.Name)}\"}}){cypherVisualSetClause} RETURN e $$) as (e agtype);");
         }
 
         var chunkIndexLookup = chunks.ToDictionary(c => c.Id, c => c.ChunkIndex);

@@ -1526,6 +1526,311 @@ body.kg-inspector-resizing {
   margin: 12px 0;
 }
 
+.db-mgn-page {
+  color: #111827;
+}
+
+.db-mgn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 4px 16px;
+}
+
+.db-mgn-header h1 {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 750;
+}
+
+.db-mgn-status {
+  padding: 5px 10px;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.db-mgn-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.db-mgn-panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.db-mgn-upload-form,
+.db-mgn-assign-grid {
+  display: grid;
+  gap: 9px;
+}
+
+.db-mgn-assign-grid {
+  grid-template-columns: minmax(0, 1fr) 160px;
+  align-items: end;
+}
+
+.db-mgn-message {
+  min-height: 20px;
+  margin: 9px 0 14px;
+  font-size: 0.84rem;
+}
+
+.db-mgn-message-success { color: #166534; }
+.db-mgn-message-error { color: #991b1b; }
+.db-mgn-message-muted { color: #64748b; }
+
+.db-mgn-image-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.db-mgn-image-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  max-height: calc(100vh - 390px);
+  overflow: auto;
+}
+
+.db-mgn-image-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #1f2937;
+  text-align: left;
+}
+
+.db-mgn-image-item.selected {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.db-mgn-image-item img {
+  width: 100%;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.db-mgn-image-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.db-mgn-selected-image {
+  margin: 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.84rem;
+}
+
+.db-mgn-selected-image code {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-mgn-entity-list {
+  display: grid;
+  gap: 8px;
+  max-height: calc(100vh - 310px);
+  overflow: auto;
+}
+
+.db-mgn-entity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.db-mgn-entity-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.db-mgn-entity-main strong,
+.db-mgn-entity-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-mgn-entity-main span,
+.db-mgn-entity-main small {
+  color: #64748b;
+}
+
+.db-mgn-entity-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.db-mgn-empty {
+  padding: 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 7px;
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.db-mgn-image-pick {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.db-mgn-image-pick img {
+  width: 100%;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.db-mgn-image-item label {
+  display: grid;
+  gap: 3px;
+  color: #475569;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.db-mgn-image-item textarea,
+.db-mgn-entity-main textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #1f2937;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.db-mgn-tabs,
+.db-mgn-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.db-mgn-action-group {
+  margin: 12px 0;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.db-mgn-action-title {
+  margin-bottom: 7px;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.db-mgn-ai-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.db-mgn-parallelism {
+  display: grid;
+  gap: 3px;
+  margin-right: 4px;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.db-mgn-tab {
+  padding: 5px 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.db-mgn-tab.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.db-mgn-entity-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.db-mgn-entity-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-mgn-entity-actions {
+  max-width: 360px;
+}
+
+.db-mgn-suggestion {
+  color: #1d4ed8 !important;
+  font-weight: 650;
+}
+
+@media (max-width: 900px) {
+  .db-mgn-layout,
+  .db-mgn-assign-grid,
+  .db-mgn-entity-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .kg-search-results {
   display: grid;
   gap: 6px;

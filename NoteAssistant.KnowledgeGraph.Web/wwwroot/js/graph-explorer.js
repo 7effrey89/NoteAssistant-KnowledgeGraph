@@ -2,6 +2,7 @@ import Graph from "https://esm.sh/graphology@0.26.0";
 import Sigma from "https://esm.sh/sigma@3.0.3";
 import { EdgeCurvedArrowProgram } from "https://esm.sh/@sigma/edge-curve@3.1.0?deps=sigma@3.0.3";
 import { bindWebGLLayer, createContoursProgram } from "https://esm.sh/@sigma/layer-webgl@3.0.0?deps=sigma@3.0.3";
+import { NodeImageProgram, NodePictogramProgram } from "https://esm.sh/@sigma/node-image@3.0.0?deps=sigma@3.0.3";
 import { circlepack, circular, random } from "https://esm.sh/graphology-layout@0.6.1";
 import forceAtlas2 from "https://esm.sh/graphology-layout-forceatlas2@0.10.1";
 import ForceLayout from "https://esm.sh/graphology-layout-force@0.2.4/worker";
@@ -25,6 +26,10 @@ const state = {
   communityByEntityId: new Map(),
   communityByEntityKey: new Map(),
   communityById: new Map(),
+  entityVisualById: new Map(),
+  entityVisualByKey: new Map(),
+  entityVisualsLoaded: false,
+  entityVisualsLoading: false,
   colorByCommunityId: new Map(),
   communityMembershipsLoaded: false,
   communityMembershipsLoading: false,
@@ -365,7 +370,7 @@ async function runQuery() {
 
     state.lastPayload = payload;
     try {
-      await loadCommunityMemberships();
+      await Promise.all([loadCommunityMemberships(), loadEntityVisuals()]);
     } catch {
     }
     loadGraph(payload.nodes || [], payload.edges || []);
@@ -487,22 +492,32 @@ function buildNodeAttributes(node) {
   const color = state.settings.colorMode === "community" && community
     ? state.colorByCommunityId.get(String(community.communityId)) || communityPalette[0]
     : state.colorByLabel.get(node.label) || palette[0];
+  const visual = getNodeVisual(node);
+  const visualImage = visual?.imageUrl || visual?.pictogramUrl || node.properties?.image_url || node.properties?.pictogram_url || null;
+  const visualType = visual?.imageUrl || node.properties?.image_url ? "image" : visual?.pictogramUrl || node.properties?.pictogram_url ? "pictogram" : undefined;
+  const baseProperties = visual
+    ? { ...node.properties, image_url: visual.imageUrl, pictogram_url: visual.pictogramUrl }
+    : node.properties;
   const properties = community
     ? {
-      ...node.properties,
+      ...baseProperties,
       community_id: String(community.communityId),
       community_title: community.communityTitle,
       community_entity_count: String(community.communityEntityCount ?? ""),
       community_relationship_count: String(community.communityRelationshipCount ?? "")
     }
-    : node.properties;
+    : baseProperties;
   return {
     x: 0,
     y: 0,
     size,
     label: node.title,
     color,
+    type: visualType,
+    image: visualImage,
     kgLabel: node.label,
+    kgImageUrl: visual?.imageUrl || node.properties?.image_url || null,
+    kgPictogramUrl: visual?.pictogramUrl || node.properties?.pictogram_url || null,
     kgCommunityId: community ? String(community.communityId) : null,
     kgCommunityTitle: community?.communityTitle || null,
     kgColorGroup: colorGroup,
@@ -648,6 +663,10 @@ function buildSigmaSettings() {
     minCameraRatio: 0.03,
     maxCameraRatio: 8,
     defaultEdgeType: getEdgeType(),
+    nodeProgramClasses: {
+      image: NodeImageProgram,
+      pictogram: NodePictogramProgram
+    },
     edgeProgramClasses: { curvedArrow: EdgeCurvedArrowProgram },
     labelColor: { color: "#1f2937" },
     edgeLabelColor: { color: "#475569" }
@@ -921,6 +940,10 @@ function applyColorModeToExistingGraph() {
     const attributes = buildNodeAttributes(node);
     state.graph.mergeNodeAttributes(node.id, {
       color: attributes.color,
+      type: attributes.type,
+      image: attributes.image,
+      kgImageUrl: attributes.kgImageUrl,
+      kgPictogramUrl: attributes.kgPictogramUrl,
       kgCommunityId: attributes.kgCommunityId,
       kgCommunityTitle: attributes.kgCommunityTitle,
       kgColorGroup: attributes.kgColorGroup,
@@ -1005,6 +1028,48 @@ function getNodeCommunityInfo(node) {
 
 function buildEntityCommunityKey(label, name) {
   return `${String(label || "").trim().toLowerCase()}\u001f${String(name || "").trim().toLowerCase()}`;
+}
+
+async function loadEntityVisuals() {
+  if (state.entityVisualsLoaded || state.entityVisualsLoading) return;
+  state.entityVisualsLoading = true;
+  try {
+    const response = await fetch(`${backendBaseUrl}/api/graph/entity-visuals`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success === false) {
+      throw new Error(payload?.error || payload?.detail || `status ${response.status}`);
+    }
+
+    buildEntityVisualIndexes(payload?.entities || []);
+    state.entityVisualsLoaded = true;
+  } finally {
+    state.entityVisualsLoading = false;
+  }
+}
+
+function buildEntityVisualIndexes(entities) {
+  state.entityVisualById = new Map();
+  state.entityVisualByKey = new Map();
+  entities.forEach(item => {
+    const visual = {
+      id: item.id,
+      label: item.label,
+      name: item.name,
+      imageUrl: item.imageUrl || item.image_url || null,
+      pictogramUrl: item.pictogramUrl || item.pictogram_url || null
+    };
+    state.entityVisualById.set(String(item.id), visual);
+    state.entityVisualByKey.set(buildEntityCommunityKey(item.label, item.name), visual);
+  });
+}
+
+function getNodeVisual(node) {
+  if (!node || node.label === "Document" || node.label === "Chunk") return null;
+  const properties = node.properties || {};
+  const idMatch = state.entityVisualById.get(String(properties.id ?? ""));
+  if (idMatch) return idMatch;
+  const name = properties.name || extractNameFromTitle(node.label, node.title);
+  return state.entityVisualByKey.get(buildEntityCommunityKey(node.label, name)) || null;
 }
 
 function extractNameFromTitle(label, title) {

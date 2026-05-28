@@ -1,0 +1,77 @@
+@using System.Text.Json
+@{
+    ViewData["Title"] = "Database Mgn";
+    var backendBaseUrl = (string?)ViewData["BackendBaseUrl"] ?? "http://localhost:5070";
+    var encodedBackendBaseUrl = JsonSerializer.Serialize(backendBaseUrl.TrimEnd('/'));
+}
+
+<div class="db-mgn-page">
+    <header class="db-mgn-header">
+        <div>
+            <div class="kg-eyebrow">Entity visual assets</div>
+            <h1>Database Mgn</h1>
+        </div>
+        <div class="db-mgn-status" id="dbMgnStatus">Loading</div>
+    </header>
+
+    <div class="db-mgn-layout">
+        <section class="db-mgn-panel" aria-label="Upload entity image">
+            <div class="kg-section-title">Upload</div>
+            <form id="entityImageUploadForm" class="db-mgn-upload-form" enctype="multipart/form-data">
+                <label class="form-label" for="entityImageFile">Image file</label>
+                <input class="form-control" id="entityImageFile" name="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" />
+                <button class="btn btn-success" type="submit">Upload image</button>
+            </form>
+            <div class="db-mgn-message" id="entityImageUploadMessage"></div>
+
+            <div class="db-mgn-image-toolbar">
+                <div class="kg-section-title">Images</div>
+                <button class="btn btn-outline-secondary btn-sm" id="refreshEntityImagesBtn" type="button">Refresh</button>
+            </div>
+            <div class="db-mgn-image-list" id="entityImageList"></div>
+        </section>
+
+        <section class="db-mgn-panel" aria-label="Assign image to entity">
+            <div class="kg-section-title">Assign</div>
+            <div class="db-mgn-assign-grid">
+                <div>
+                    <label class="form-label" for="entitySearchInput">Find entity</label>
+                    <input class="form-control" id="entitySearchInput" placeholder="Name or label" />
+                </div>
+                <div>
+                    <label class="form-label" for="entityVisualMode">Assign as</label>
+                    <select class="form-select" id="entityVisualMode">
+                        <option value="image">Image</option>
+                        <option value="pictogram">Pictogram</option>
+                    </select>
+                </div>
+            </div>
+            <div class="db-mgn-selected-image" id="selectedEntityImage">Select an uploaded image.</div>
+            <div class="db-mgn-action-group" aria-label="Selection actions">
+                <div class="db-mgn-action-title">Selection</div>
+                <div class="db-mgn-bulk-actions">
+                    <button class="btn btn-outline-secondary btn-sm" id="selectVisibleEntitiesBtn" type="button">Select visible</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="deselectVisibleEntitiesBtn" type="button">Deselect visible</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="selectMissingVisualBtn" type="button">Select missing visual</button>
+                </div>
+            </div>
+            <div class="db-mgn-action-group" aria-label="AI suggestion actions">
+                <div class="db-mgn-action-title">AI suggestions</div>
+                <div class="db-mgn-ai-actions">
+                    <label class="db-mgn-parallelism" for="entityVisualParallelismInput"><span>LLM parallelism</span><input class="form-control form-control-sm parallelism-input" id="entityVisualParallelismInput" type="number" min="1" max="8" value="2" /></label>
+                    <button class="btn btn-outline-primary btn-sm" id="suggestVisualBtn" type="button">Suggest visual</button>
+                    <button class="btn btn-primary btn-sm" id="applySuggestedVisualBtn" type="button">Apply suggestions</button>
+                </div>
+            </div>
+            <div class="db-mgn-tabs" id="entityTypeTabs" role="tablist" aria-label="Entity type tabs"></div>
+            <div class="db-mgn-entity-list" id="entityVisualEntityList"></div>
+        </section>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        window.noteAssistantDatabaseMgn = { backendBaseUrl: @Html.Raw(encodedBackendBaseUrl) };
+    </script>
+    <script type="module" src="~/js/database-mgn.js" asp-append-version="true"></script>
+}
