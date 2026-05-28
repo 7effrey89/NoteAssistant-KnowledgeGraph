@@ -82,6 +82,53 @@
       "problemMatcher": []
     },
     {
+      "label": "run-backend",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--no-build",
+        "--project",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Backend/NoteAssistant.KnowledgeGraph.Backend.csproj",
+        "--urls",
+        "http://localhost:5070"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "run-web",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--no-build",
+        "--project",
+        "${workspaceFolder}/NoteAssistant.KnowledgeGraph.Web/NoteAssistant.KnowledgeGraph.Web.csproj",
+        "--urls",
+        "http://localhost:5272"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "start-backend",
+      "dependsOrder": "sequence",
+      "dependsOn": ["prep-backend", "run-backend"],
+      "problemMatcher": []
+    },
+    {
+      "label": "start-web",
+      "dependsOrder": "sequence",
+      "dependsOn": ["prep-web", "run-web"],
+      "problemMatcher": []
+    },
+    {
+      "label": "start-all",
+      "dependsOn": ["start-backend", "start-web"],
+      "problemMatcher": []
+    },
+    {
       "label": "test-backend-watch",
       "type": "shell",
       "command": "dotnet",

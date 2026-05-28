@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -35,6 +36,7 @@ builder.Services.AddSingleton<IAnalysisCache, AnalysisCache>();
 builder.Services.AddSingleton<IMarkdownGraphIngestionService, MarkdownGraphIngestionService>();
 builder.Services.AddSingleton<QueryAssistantService>();
 builder.Services.AddSingleton<AgeGraphRepository>();
+builder.Services.AddSingleton<IHybridRetrievalRunner, HybridRetrievalRunner>();
 builder.Services.AddSingleton<CommunityProfileStore>();
 
 var app = builder.Build();
@@ -96,6 +98,38 @@ static string? NormalizeOptional(string? value)
 
 static DateOnly? ParseDateOnly(string? value)
     => DateOnly.TryParse(value, out var date) ? date : null;
+
+static string BuildDatabaseConnectivityMessage(Exception ex, DatabaseOptions options)
+{
+    var host = string.IsNullOrWhiteSpace(options.Host) ? "configured host" : options.Host;
+    var port = options.Port <= 0 ? 5432 : options.Port;
+
+    if (ex is NpgsqlException npgEx)
+    {
+        if (npgEx.InnerException is SocketException socketEx)
+        {
+            return socketEx.SocketErrorCode switch
+            {
+                SocketError.ConnectionRefused => $"PostgreSQL is offline or refusing connections at {host}:{port}. Start the PostgreSQL/AGE service and retry.",
+                SocketError.HostNotFound => $"PostgreSQL host '{host}' could not be resolved. Check the Database.Host setting.",
+                SocketError.TimedOut => $"PostgreSQL at {host}:{port} timed out. Verify network access and that the service is running.",
+                _ => $"Unable to reach PostgreSQL at {host}:{port} ({socketEx.SocketErrorCode})."
+            };
+        }
+
+        if (npgEx.IsTransient)
+        {
+            return $"Temporary PostgreSQL connectivity issue at {host}:{port}. Retry after the database is online.";
+        }
+    }
+
+    if (ex is TimeoutException)
+    {
+        return $"PostgreSQL health check timed out while connecting to {host}:{port}.";
+    }
+
+    return $"PostgreSQL health check failed for {host}:{port}: {ex.Message}";
+}
 
 static IReadOnlyList<string> ParseTags(string? value)
 {
@@ -1055,9 +1089,9 @@ app.MapPost("/api/query/assist", (QueryAssistantRequest request, QueryAssistantS
     return Results.Ok(assistant.Suggest(request.Prompt));
 });
 
-app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, IHybridRetrievalRunner runner, CancellationToken cancellationToken) =>
 {
-    var response = await repository.ExecuteHybridRetrievalAsync(request, cancellationToken);
+    var response = await runner.ExecuteAsync(request, cancellationToken);
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
@@ -1504,7 +1538,7 @@ app.MapGet("/api/health/foundry", async (IFoundryInferenceClient foundry, Cancel
     }
 });
 
-app.MapGet("/api/health/db", async (IAgeDatabaseConnectionFactory connectionFactory, CancellationToken cancellationToken) =>
+app.MapGet("/api/health/db", async (IAgeDatabaseConnectionFactory connectionFactory, IOptions<DatabaseOptions> options, CancellationToken cancellationToken) =>
 {
     if (!connectionFactory.IsConfigured)
     {
@@ -1517,6 +1551,10 @@ app.MapGet("/api/health/db", async (IAgeDatabaseConnectionFactory connectionFact
         await using var command = new Npgsql.NpgsqlCommand("SELECT 1", connection);
         await command.ExecuteScalarAsync(cancellationToken);
         return Results.Ok(new { status = "ok" });
+    }
+    catch (NpgsqlException ex)
+    {
+        return Results.Problem(BuildDatabaseConnectivityMessage(ex, options.Value), statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception ex)
     {
@@ -1798,7 +1836,10 @@ app.MapGet("/api/health/age", async (IAgeDatabaseConnectionFactory connectionFac
     catch (Exception ex)
     {
         logger.LogError(ex, "AGE health check failed after {ElapsedMs}ms.", stopwatch.ElapsedMilliseconds);
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+        var detail = ex is NpgsqlException
+            ? BuildDatabaseConnectivityMessage(ex, options.Value)
+            : ex.Message;
+        return Results.Problem(detail, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 });
 

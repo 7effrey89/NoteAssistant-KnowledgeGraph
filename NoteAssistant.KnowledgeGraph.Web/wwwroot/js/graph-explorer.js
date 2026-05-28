@@ -21,10 +21,16 @@ const state = {
   degreeById: new Map(),
   colorByLabel: new Map(),
   selectedNode: null,
+  selectedNodes: new Set(),
+  deselectedRelatedNodes: new Set(),
   selectedEdge: null,
   hoveredNode: null,
+  hoveredLegendLabel: null,
+  selectedLegendLabel: null,
   inspectorHighlightedNode: null,
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
+  filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false },
+  filterOptions: { nodeTypes: [], edgeTypes: [] },
   settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50 },
   currentLayout: "random",
   currentWorkerLayout: null,
@@ -35,6 +41,8 @@ const state = {
   historyIndex: -1,
   isRestoringHistory: false,
   isQueryRunning: false,
+  isShiftKeyDown: false,
+  isCtrlKeyDown: false,
   latestQueryRequestId: 0,
   nodeDetailsCache: new Map(),
   latestNodeDetailsRequestId: 0
@@ -144,6 +152,21 @@ document.addEventListener("click", event => {
     if (dropdown?.open && !dropdown.contains(event.target)) dropdown.open = false;
   });
 });
+document.addEventListener("keydown", event => {
+  if (event.key === "Shift") state.isShiftKeyDown = true;
+  if (event.key === "Control") state.isCtrlKeyDown = true;
+  updateSelectionCursorState();
+});
+document.addEventListener("keyup", event => {
+  if (event.key === "Shift") state.isShiftKeyDown = false;
+  if (event.key === "Control") state.isCtrlKeyDown = false;
+  updateSelectionCursorState();
+});
+window.addEventListener("blur", () => {
+  state.isShiftKeyDown = false;
+  state.isCtrlKeyDown = false;
+  updateSelectionCursorState();
+});
 initInspectorResize();
 autosizeQueryInput();
 updateLayoutStatus();
@@ -229,7 +252,18 @@ async function refreshStatus() {
   setStatus(el.backendStatus, "checking", "Checking backend");
   try {
     const health = await fetch(`${backendBaseUrl}/api/health`);
-    setStatus(el.backendStatus, health.ok ? "online" : "warning", health.ok ? "Backend online" : `Backend ${health.status}`);
+    if (!health.ok) {
+      setStatus(el.backendStatus, "warning", `Backend warning (${health.status})`);
+    } else {
+      const ageHealth = await fetch(`${backendBaseUrl}/api/health/age`);
+      if (ageHealth.ok) {
+        setStatus(el.backendStatus, "online", "Backend + PostgreSQL/AGE online");
+      } else {
+        const payload = await ageHealth.json().catch(() => null);
+        const detail = payload?.detail || payload?.error || `status ${ageHealth.status}`;
+        setStatus(el.backendStatus, "warning", `Backend online; PostgreSQL/AGE unavailable: ${detail}`);
+      }
+    }
   } catch (error) {
     setStatus(el.backendStatus, "offline", `Backend offline: ${error.message}`);
   }
@@ -317,8 +351,14 @@ function loadGraph(nodes, edges) {
   state.rawEdges = edges.map(normalizeEdge).filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
   state.degreeById = calculateDegrees(state.rawNodes, state.rawEdges);
   state.colorByLabel = buildColorMap(state.rawNodes);
+  state.filterDefaultsInitialized = { nodeTypes: false, edgeTypes: false };
+  state.filterOptions = { nodeTypes: [], edgeTypes: [] };
   state.selectedNode = null;
+  state.selectedNodes = new Set();
+  state.deselectedRelatedNodes = new Set();
   state.selectedEdge = null;
+  state.hoveredLegendLabel = null;
+  state.selectedLegendLabel = null;
   state.inspectorHighlightedNode = null;
   state.history = [];
   state.historyIndex = -1;
@@ -386,6 +426,26 @@ function buildNodeAttributes(node) {
   const degree = state.degreeById.get(node.id) || 0;
   const size = calculateNodeSize(degree);
   return { x: 0, y: 0, size, label: node.title, color: state.colorByLabel.get(node.label) || palette[0], kgLabel: node.label, title: node.title, properties: node.properties, degree };
+}
+
+function colorWithAlpha(color, alpha) {
+  if (!color) return `rgba(37, 99, 235, ${alpha})`;
+  if (color.startsWith("#")) {
+    const hex = color.slice(1);
+    const normalized = hex.length === 3
+      ? hex.split("").map(ch => ch + ch).join("")
+      : hex;
+    if (normalized.length === 6) {
+      const red = Number.parseInt(normalized.slice(0, 2), 16);
+      const green = Number.parseInt(normalized.slice(2, 4), 16);
+      const blue = Number.parseInt(normalized.slice(4, 6), 16);
+      if (Number.isFinite(red) && Number.isFinite(green) && Number.isFinite(blue)) {
+        return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+      }
+    }
+  }
+
+  return color;
 }
 
 function calculateNodeSize(degree) {
@@ -557,20 +617,28 @@ function registerGraphEvents() {
   const renderer = state.renderer;
   if (!renderer) return;
 
-  renderer.on("clickNode", ({ node }) => {
-    selectNode(node, { center: false });
+  renderer.on("clickNode", event => {
+    selectNode(event.node, { center: false, mode: getNodeSelectionMode(event) });
   });
   renderer.on("clickEdge", ({ edge }) => {
     state.selectedEdge = edge;
     state.selectedNode = null;
+    state.selectedNodes.clear();
+    state.deselectedRelatedNodes.clear();
+    state.selectedLegendLabel = null;
     renderInspector({ type: "edge", id: edge });
+    updateLegendActiveState();
     refreshRenderer();
     recordGraphHistory();
   });
   renderer.on("clickStage", () => {
     state.selectedNode = null;
+    state.selectedNodes.clear();
+    state.deselectedRelatedNodes.clear();
     state.selectedEdge = null;
+    state.selectedLegendLabel = null;
     renderInspector(null);
+    updateLegendActiveState();
     refreshRenderer();
     recordGraphHistory();
   });
@@ -593,11 +661,15 @@ function enableNodeDragging(renderer) {
   renderer.on("downNode", event => {
     isDragging = true;
     draggedNode = event.node;
-    state.selectedNode = event.node;
-    state.selectedEdge = null;
+    if (getNodeSelectionMode(event) === "replace") {
+      state.selectedNode = event.node;
+      state.selectedNodes = new Set([event.node]);
+      state.deselectedRelatedNodes.clear();
+      state.selectedEdge = null;
+      renderInspector({ type: "node", id: draggedNode });
+    }
     el.sigmaContainer.classList.add("kg-dragging");
     renderer.getGraph().setNodeAttribute(draggedNode, "highlighted", true);
-    renderInspector({ type: "node", id: draggedNode });
   });
   renderer.getMouseCaptor().on("mousemovebody", event => {
     if (!isDragging || !draggedNode) return;
@@ -646,32 +718,55 @@ function nodeReducer(node, data) {
     reduced.hidden = true;
     return reduced;
   }
-  const isSelected = state.selectedNode === node;
+  const isSelected = isNodeSelected(node);
   const isHovered = state.hoveredNode === node;
-  const anchor = state.hoveredNode || state.selectedNode;
-  const isNeighbor = anchor && (anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
+  const activeLegendLabel = getActiveLegendLabel();
+  const matchesLegendHighlight = activeLegendLabel && data.kgLabel === activeLegendLabel;
+  const anchors = getActiveAnchorNodes();
+  const hasAnchors = anchors.length > 0;
+  const isNeighbor = hasAnchors && anchors.some(anchor => anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
+  const isDeselectedRelated = isNodeDeselectedFromNeighborhood(node) && !isSelected;
+  const isHighlightedNeighbor = isNeighbor && !isDeselectedRelated;
   const matchesSearch = state.filters.search && nodeMatchesSearch(node, data, state.filters.search);
-  if (state.settings.highlightNeighborhood && anchor && !isNeighbor) {
-    reduced.color = "#d5dce5";
+  const baseColor = data.color || palette[0];
+  if (state.settings.highlightNeighborhood && hasAnchors && !isHighlightedNeighbor) {
+    reduced.color = colorWithAlpha(baseColor, 0.14);
+    reduced.label = "";
+  }
+  if (state.settings.highlightNeighborhood && activeLegendLabel && !hasAnchors && !matchesLegendHighlight) {
+    reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
   if (matchesSearch) {
-    reduced.color = "#f59e0b";
+    reduced.color = baseColor;
+    reduced.label = data.label;
     reduced.size = Math.max(data.size + 4, 15);
     reduced.forceLabel = true;
+    reduced.highlighted = true;
   }
-  if (isHovered) {
+  if (isHovered && !isDeselectedRelated) {
+    reduced.label = data.label;
     reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   } else if (isSelected) {
-    reduced.color = "#111827";
+    reduced.color = baseColor;
+    reduced.label = data.label;
+    reduced.highlighted = true;
     reduced.size = data.size + 5;
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   }
-  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered) reduced.label = "";
+  if (matchesLegendHighlight) {
+    reduced.color = baseColor;
+    reduced.label = data.label;
+    reduced.highlighted = true;
+    reduced.size = data.size + 5;
+    reduced.forceLabel = true;
+    reduced.zIndex = 10;
+  }
+  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered && !matchesLegendHighlight) reduced.label = "";
   return reduced;
 }
 
@@ -683,14 +778,26 @@ function edgeReducer(edge, data) {
     reduced.hidden = true;
     return reduced;
   }
-  const anchor = state.hoveredNode || state.selectedNode;
+  const anchors = getActiveAnchorNodes();
+  const hasAnchors = anchors.length > 0;
+  const activeLegendLabel = getActiveLegendLabel();
+  const touchesDeselectedRelated = isNodeDeselectedFromNeighborhood(source) || isNodeDeselectedFromNeighborhood(target);
+  const touchesAnchor = hasAnchors && anchors.some(anchor => source === anchor || target === anchor);
+  const matchesLegendEndpoint = activeLegendLabel
+    && (state.graph.getNodeAttribute(source, "kgLabel") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgLabel") === activeLegendLabel);
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
-  } else if (state.settings.highlightNeighborhood && anchor && source !== anchor && target !== anchor) {
+  } else if (state.settings.highlightNeighborhood && hasAnchors && (!touchesAnchor || touchesDeselectedRelated)) {
     reduced.color = "#e2e8f0";
     reduced.label = "";
-  } else if (anchor && (source === anchor || target === anchor)) {
+  } else if (touchesAnchor) {
+    reduced.color = "#2563eb";
+    reduced.size = 2.6;
+  } else if (state.settings.highlightNeighborhood && activeLegendLabel && !matchesLegendEndpoint) {
+    reduced.color = "#e2e8f0";
+    reduced.label = "";
+  } else if (matchesLegendEndpoint) {
     reduced.color = "#2563eb";
     reduced.size = 2.6;
   }
@@ -699,8 +806,10 @@ function edgeReducer(edge, data) {
 }
 
 function isNodeHidden(node, data) {
-  if (state.selectedNode === node || state.hoveredNode === node) return false;
-  if (state.filters.nodeTypes.length && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
+  if (isNodeSelected(node) || state.hoveredNode === node) return false;
+  const activeLegendLabel = getActiveLegendLabel();
+  if (activeLegendLabel && data.kgLabel === activeLegendLabel) return false;
+  if (state.colorByLabel.size && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
   if (state.filters.minDegree && (data.degree || 0) < state.filters.minDegree) return true;
   if (state.filters.search && !nodeMatchesSearch(node, data, state.filters.search)) {
     const hasMatchingNeighbor = state.rawEdges.some(edge => {
@@ -715,7 +824,7 @@ function isNodeHidden(node, data) {
 }
 
 function isEdgeHidden(data) {
-  return Boolean(state.filters.edgeTypes.length && !state.filters.edgeTypes.includes(data.relationship));
+  return Boolean(getAvailableEdgeTypes().length && !state.filters.edgeTypes.includes(data.relationship));
 }
 
 function nodeMatchesSearch(node, data, query) {
@@ -891,42 +1000,59 @@ function assignGridLayout(graph) {
 }
 
 function rebuildFilterOptions() {
+  const nodeTypes = uniqueSorted(state.rawNodes.map(node => node.label));
+  const edgeTypes = getAvailableEdgeTypes();
+  const hadAllNodeTypesSelected = hasAllValuesSelected(state.filterOptions.nodeTypes, state.filters.nodeTypes);
+  const hadAllEdgeTypesSelected = hasAllValuesSelected(state.filterOptions.edgeTypes, state.filters.edgeTypes);
+  if (!state.filterDefaultsInitialized.nodeTypes) {
+    state.filters.nodeTypes = [...nodeTypes];
+    state.filterDefaultsInitialized.nodeTypes = true;
+  } else if (hadAllNodeTypesSelected) {
+    state.filters.nodeTypes = [...nodeTypes];
+  }
+  if (!state.filterDefaultsInitialized.edgeTypes) {
+    state.filters.edgeTypes = [...edgeTypes];
+    state.filterDefaultsInitialized.edgeTypes = true;
+  } else if (hadAllEdgeTypesSelected) {
+    state.filters.edgeTypes = [...edgeTypes];
+  }
+  state.filterOptions = { nodeTypes: [...nodeTypes], edgeTypes: [...edgeTypes] };
   rebuildCheckboxDropdown({
     list: el.nodeTypeFilterList,
     summary: el.nodeTypeFilterSummary,
-    values: uniqueSorted(state.rawNodes.map(node => node.label)),
+    values: nodeTypes,
     selectedValues: state.filters.nodeTypes,
     onChange: selected => updateFilters({ nodeTypes: selected })
   });
   rebuildCheckboxDropdown({
     list: el.edgeTypeFilterList,
     summary: el.edgeTypeFilterSummary,
-    values: uniqueSorted(state.rawEdges.map(edge => edge.label)),
+    values: edgeTypes,
     selectedValues: state.filters.edgeTypes,
     onChange: selected => updateFilters({ edgeTypes: selected })
   });
+}
+
+function getAvailableEdgeTypes() {
+  return uniqueSorted(state.rawEdges.map(edge => edge.label));
+}
+
+function hasAllValuesSelected(values, selectedValues) {
+  return Boolean(values.length && selectedValues.length === values.length && values.every(value => selectedValues.includes(value)));
 }
 
 function rebuildCheckboxDropdown({ list, summary, values, selectedValues, onChange }) {
   if (!list || !summary) return;
   const selected = selectedValues.filter(value => values.includes(value));
   list.innerHTML = "";
-  list.appendChild(createCheckboxOption("All", "", selected.length === 0, checked => {
-    if (!checked) return;
-    list.querySelectorAll('input[data-filter-value]').forEach(input => { input.checked = false; });
-    updateCheckboxDropdownSummary(summary, []);
-    onChange([]);
-  }));
   values.forEach(value => {
     list.appendChild(createCheckboxOption(value, value, selected.includes(value), () => {
       const next = Array.from(list.querySelectorAll('input[data-filter-value]:checked')).map(input => input.dataset.filterValue);
-      const allCheckbox = list.querySelector('input:not([data-filter-value])');
-      if (allCheckbox) allCheckbox.checked = next.length === 0;
-      updateCheckboxDropdownSummary(summary, next);
+      updateCheckboxDropdownSummary(summary, next, values.length);
       onChange(next);
     }));
   });
-  updateCheckboxDropdownSummary(summary, selected);
+  updateCheckboxDropdownSummary(summary, selected, values.length);
   if (selected.length !== selectedValues.length) onChange(selected);
 }
 
@@ -946,10 +1072,15 @@ function createCheckboxOption(labelText, value, checked, onChange) {
   return label;
 }
 
-function updateCheckboxDropdownSummary(summary, selected) {
+function updateCheckboxDropdownSummary(summary, selected, totalCount) {
+  if (totalCount > 0 && selected.length === totalCount) {
+    summary.textContent = "All selected";
+    summary.title = selected.join(", ");
+    return;
+  }
   if (!selected.length) {
-    summary.textContent = "All";
-    summary.title = "All";
+    summary.textContent = "None selected";
+    summary.title = "None selected";
     return;
   }
   summary.textContent = selected.length === 1 ? selected[0] : `${selected.length} selected`;
@@ -970,12 +1101,12 @@ function updateSearchResults() {
 
 function renderSearchResults(results) {
   el.searchResults.innerHTML = "";
-  if (!state.rawNodes.length) {
-    el.searchResults.textContent = "Run a query to search graph nodes.";
+  el.searchResults.hidden = !state.filters.search;
+  if (!state.filters.search) {
     return;
   }
-  if (!state.filters.search) {
-    el.searchResults.textContent = "Type to filter and highlight nodes.";
+  if (!state.rawNodes.length) {
+    el.searchResults.textContent = "Run a query to search graph nodes.";
     return;
   }
   if (!results.length) {
@@ -994,14 +1125,97 @@ function renderSearchResults(results) {
   el.searchResults.appendChild(fragment);
 }
 
+function isShiftPressed(event) {
+  return Boolean(
+    state.isShiftKeyDown
+    || event?.event?.original?.shiftKey
+    || event?.event?.originalEvent?.shiftKey
+    || event?.event?.shiftKey
+    || event?.original?.shiftKey
+    || event?.originalEvent?.shiftKey
+  );
+}
+
+function isCtrlPressed(event) {
+  return Boolean(
+    state.isCtrlKeyDown
+    || event?.event?.original?.ctrlKey
+    || event?.event?.originalEvent?.ctrlKey
+    || event?.event?.ctrlKey
+    || event?.original?.ctrlKey
+    || event?.originalEvent?.ctrlKey
+  );
+}
+
+function getNodeSelectionMode(event) {
+  if (isCtrlPressed(event)) return "remove";
+  if (isShiftPressed(event)) return "add";
+  return "replace";
+}
+
+function updateSelectionCursorState() {
+  if (!el.sigmaContainer) return;
+  el.sigmaContainer.classList.toggle("kg-select-add", state.isShiftKeyDown && !state.isCtrlKeyDown);
+  el.sigmaContainer.classList.toggle("kg-select-remove", state.isCtrlKeyDown);
+}
+
+function isNodeSelected(node) {
+  return state.selectedNodes?.has(node) || state.selectedNode === node;
+}
+
+function isNodeDeselectedFromNeighborhood(node) {
+  return Boolean(state.deselectedRelatedNodes?.has(node));
+}
+
+function getSelectedNodeIds() {
+  const selected = Array.from(state.selectedNodes || []).filter(node => state.graph?.hasNode(node));
+  if (state.selectedNode && state.graph?.hasNode(state.selectedNode) && !selected.includes(state.selectedNode)) {
+    selected.push(state.selectedNode);
+  }
+  return selected;
+}
+
+function getActiveAnchorNodes() {
+  const selected = getSelectedNodeIds();
+  if (state.hoveredNode && state.graph?.hasNode(state.hoveredNode) && (!isNodeDeselectedFromNeighborhood(state.hoveredNode) || !selected.length)) {
+    return [state.hoveredNode];
+  }
+  return selected;
+}
+
 function selectNode(node, options = {}) {
   if (!state.graph?.hasNode(node)) return;
   clearInspectorHoverState();
-  state.selectedNode = node;
+  const mode = options.mode || (options.additive ? "add" : "replace");
+  if (mode === "add") {
+    state.deselectedRelatedNodes.delete(node);
+    if (!state.selectedNodes.size && state.selectedNode && state.graph.hasNode(state.selectedNode)) {
+      state.selectedNodes.add(state.selectedNode);
+    }
+    if (!state.selectedNodes.has(node)) {
+      state.selectedNodes.add(node);
+    }
+    state.selectedNode = node;
+  } else if (mode === "remove") {
+    if (!state.selectedNodes.size && state.selectedNode && state.graph.hasNode(state.selectedNode)) {
+      state.selectedNodes.add(state.selectedNode);
+    }
+    state.selectedNodes.delete(node);
+    if (getSelectedNodeIds().length || state.graph.neighbors(node).some(neighbor => isNodeSelected(neighbor))) {
+      state.deselectedRelatedNodes.add(node);
+    }
+    state.selectedNode = state.selectedNode === node ? Array.from(state.selectedNodes).at(-1) || null : state.selectedNode;
+  } else {
+    state.selectedNodes = new Set([node]);
+    state.deselectedRelatedNodes.clear();
+    state.selectedNode = node;
+  }
   state.selectedEdge = null;
-  renderInspector({ type: "node", id: node });
+  state.selectedLegendLabel = null;
+  renderInspector(state.selectedNode ? { type: "node", id: state.selectedNode } : null);
+  updateLegendActiveState();
   refreshRenderer();
-  if (options.center !== false) requestAnimationFrame(() => centerNode(node));
+  if (options.center !== false && state.selectedNode) requestAnimationFrame(() => centerNode(state.selectedNode));
   setTimeout(() => recordGraphHistory(), options.center === false ? 0 : 360);
 }
 
@@ -1027,8 +1241,10 @@ function fitGraph() {
 }
 
 function centerSelectedOrFit() {
-  if (state.selectedNode && state.graph?.hasNode(state.selectedNode)) {
-    centerNode(state.selectedNode);
+  const selected = getSelectedNodeIds();
+  const nodeToCenter = state.selectedNode && state.graph?.hasNode(state.selectedNode) ? state.selectedNode : selected[0];
+  if (nodeToCenter) {
+    centerNode(nodeToCenter);
     setTimeout(() => recordGraphHistory(), 330);
     return;
   }
@@ -1071,7 +1287,10 @@ function createGraphHistorySnapshot() {
   if (!cameraState) return null;
   return {
     selectedNode: state.selectedNode,
+    selectedNodes: getSelectedNodeIds(),
+    deselectedRelatedNodes: Array.from(state.deselectedRelatedNodes || []).filter(node => state.graph?.hasNode(node)),
     selectedEdge: state.selectedEdge,
+    selectedLegendLabel: state.selectedLegendLabel,
     camera: {
       x: roundCameraValue(cameraState.x),
       y: roundCameraValue(cameraState.y),
@@ -1091,13 +1310,18 @@ function navigateGraphHistory(direction) {
 function restoreGraphHistory(snapshot) {
   if (!snapshot || !state.renderer) return;
   state.isRestoringHistory = true;
-  state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : null;
+  state.selectedNodes = new Set((snapshot.selectedNodes || []).filter(node => state.graph?.hasNode(node)));
+  state.deselectedRelatedNodes = new Set((snapshot.deselectedRelatedNodes || []).filter(node => state.graph?.hasNode(node)));
+  state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : Array.from(state.selectedNodes).at(-1) || null;
+  if (state.selectedNode) state.selectedNodes.add(state.selectedNode);
   state.selectedEdge = snapshot.selectedEdge && state.graph?.hasEdge(snapshot.selectedEdge) ? snapshot.selectedEdge : null;
+  state.selectedLegendLabel = snapshot.selectedLegendLabel && state.colorByLabel.has(snapshot.selectedLegendLabel) ? snapshot.selectedLegendLabel : null;
 
   if (state.selectedNode) renderInspector({ type: "node", id: state.selectedNode });
   else if (state.selectedEdge) renderInspector({ type: "edge", id: state.selectedEdge });
   else renderInspector(null);
 
+  updateLegendActiveState();
   refreshRenderer();
   state.renderer.getCamera().animate(snapshot.camera, { duration: 220 });
   setTimeout(() => {
@@ -1114,11 +1338,19 @@ function updateHistoryButtons() {
 
 function sameHistorySnapshot(left, right) {
   return left.selectedNode === right.selectedNode
+    && sameStringArray(left.selectedNodes || [], right.selectedNodes || [])
+    && sameStringArray(left.deselectedRelatedNodes || [], right.deselectedRelatedNodes || [])
     && left.selectedEdge === right.selectedEdge
+    && (left.selectedLegendLabel || null) === (right.selectedLegendLabel || null)
     && left.camera.x === right.camera.x
     && left.camera.y === right.camera.y
     && left.camera.ratio === right.camera.ratio
     && left.camera.angle === right.camera.angle;
+}
+
+function sameStringArray(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 function roundCameraValue(value) {
@@ -1469,11 +1701,64 @@ function renderPropertyTable(properties) {
 function renderLegend() {
   el.legend.innerHTML = "";
   for (const [label, color] of state.colorByLabel.entries()) {
-    const item = document.createElement("span");
+    const item = document.createElement("button");
+    item.type = "button";
     item.className = "kg-legend-item";
+    item.dataset.kgLabel = label;
+    item.setAttribute("aria-pressed", state.selectedLegendLabel === label ? "true" : "false");
+    item.title = `Highlight ${label} nodes`;
     item.innerHTML = `<span style="background:${color}"></span>${escapeHtml(label)}`;
+    item.addEventListener("mouseenter", () => setLegendHover(label));
+    item.addEventListener("mouseleave", () => clearLegendHover(label));
+    item.addEventListener("focus", () => setLegendHover(label));
+    item.addEventListener("blur", () => clearLegendHover(label));
+    item.addEventListener("click", () => toggleLegendSelection(label));
     el.legend.appendChild(item);
   }
+  updateLegendActiveState();
+}
+
+function getActiveLegendLabel() {
+  return state.hoveredLegendLabel || state.selectedLegendLabel;
+}
+
+function setLegendHover(label) {
+  if (state.hoveredLegendLabel === label) return;
+  state.hoveredLegendLabel = label;
+  updateLegendActiveState();
+  refreshRenderer();
+}
+
+function clearLegendHover(label) {
+  if (state.hoveredLegendLabel !== label) return;
+  state.hoveredLegendLabel = null;
+  updateLegendActiveState();
+  refreshRenderer();
+}
+
+function toggleLegendSelection(label) {
+  clearInspectorHoverState();
+  state.selectedLegendLabel = state.selectedLegendLabel === label ? null : label;
+  state.selectedNode = null;
+  state.selectedNodes.clear();
+  state.deselectedRelatedNodes.clear();
+  state.selectedEdge = null;
+  renderInspector(null);
+  updateLegendActiveState();
+  refreshRenderer();
+  recordGraphHistory();
+}
+
+function updateLegendActiveState() {
+  if (!el.legend) return;
+  const activeLegendLabel = getActiveLegendLabel();
+  el.legend.querySelectorAll(".kg-legend-item").forEach(item => {
+    const label = item.dataset.kgLabel || "";
+    const isSelected = state.selectedLegendLabel === label;
+    item.classList.toggle("is-active", activeLegendLabel === label);
+    item.classList.toggle("is-selected", isSelected);
+    item.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  });
 }
 
 function renderStats() {

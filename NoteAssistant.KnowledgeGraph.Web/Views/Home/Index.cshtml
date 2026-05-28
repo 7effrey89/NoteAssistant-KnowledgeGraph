@@ -542,9 +542,20 @@
                 </div>
                 <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
                     <label class="form-label mb-0" for="hybridModeSelect">Mode</label>
+                    <button
+                        class="btn btn-sm btn-outline-secondary rounded-circle p-0"
+                        id="hybridModeInfoBtn"
+                        type="button"
+                        aria-label="How to choose Hybrid GraphRAG mode"
+                        title="Mode guide"
+                        style="width:1.4rem;height:1.4rem;line-height:1.2rem;">
+                        i
+                    </button>
                     <select class="form-select form-select-sm" id="hybridModeSelect" style="max-width: 220px;">
                         <option value="auto" selected>Auto</option>
-                        <option value="hybrid">Local / Hybrid</option>
+                        <option value="local">Local / Entity-first</option>
+                        <option value="light">Light / Parallel-friendly</option>
+                        <option value="path">Path / Multi-hop</option>
                         <option value="global">Global / Temporal</option>
                     </select>
                 </div>
@@ -789,6 +800,7 @@
         const communityFinalProfileDetails = document.getElementById('communityFinalProfileDetails');
         const communityFinalProfileJson = document.getElementById('communityFinalProfileJson');
         const hybridModeSelect = document.getElementById('hybridModeSelect');
+        const hybridModeInfoBtn = document.getElementById('hybridModeInfoBtn');
         const graphCheckBtn = document.getElementById('graphCheckBtn');
         const resetDbBtn = document.getElementById('resetDbBtn');
         const initScriptBtn = document.getElementById('initScriptBtn');
@@ -810,6 +822,33 @@
         const graphSettingsToggleBtn = document.getElementById('graphSettingsToggleBtn');
         const querySidebarToggleBtn = document.getElementById('querySidebarToggleBtn');
 
+        if (hybridModeInfoBtn && window.bootstrap?.Popover) {
+            const modeGuideHtml = [
+                '<div class="small">',
+                '<div class="fw-semibold mb-1">Which mode should I choose?</div>',
+                '<div><strong>Auto</strong>: Router chooses for you based on intent.</div>',
+                '<div class="text-muted mb-1">Use when unsure.</div>',
+                '<div><strong>Local / Entity-first</strong>: Focused retrieval around matched entities.</div>',
+                '<div class="text-muted mb-1">Ideal: direct fact lookup about specific customers, products, or people.</div>',
+                '<div><strong>Light / Parallel-friendly</strong>: Entity branch + global branch in parallel, then merge/rerank.</div>',
+                '<div class="text-muted mb-1">Ideal: broad summaries, status snapshots, and mixed-signal questions.</div>',
+                '<div><strong>Path / Multi-hop</strong>: Prioritizes relationship chains and path evidence grounding.</div>',
+                '<div class="text-muted mb-1">Ideal: "how/why" questions involving indirect influence or dependency chains.</div>',
+                '<div><strong>Global / Temporal</strong>: Community summaries first, timeline second, answer third.</div>',
+                '<div class="text-muted mb-1">This is not entity-first lookup. It starts from community summaries, then uses the timeline as supporting context.</div>',
+                '<div class="text-muted">Ideal: trends over time, cross-account themes, portfolio-level changes, and “what changed?” questions.</div>',
+                '</div>'
+            ].join('');
+
+            new bootstrap.Popover(hybridModeInfoBtn, {
+                trigger: 'hover focus',
+                placement: 'right',
+                html: true,
+                sanitize: false,
+                content: modeGuideHtml
+            });
+        }
+
         uploadBtn.addEventListener('click', () => uploadFile(false));
         uploadCacheBtn.addEventListener('click', () => uploadFile(true));
         selectAllDocsBtn.addEventListener('click', selectAllUploadedDocuments);
@@ -828,7 +867,7 @@
         initGraphBtn.addEventListener('click', initGraph);
         assistBtn.addEventListener('click', assistQuery);
         runQueryBtn.addEventListener('click', runQuery);
-        runHybridBtn.addEventListener('click', runHybridRetrieval);
+        runHybridBtn.addEventListener('click', () => runHybridRetrieval(false));
         buildCommunitiesBtn.addEventListener('click', buildCommunities);
         document.querySelectorAll('.community-config-input').forEach(input => {
             input.addEventListener('input', updateCommunityConfigOutput);
@@ -1664,14 +1703,22 @@
             setBackendStatus('warning', 'Checking backend...');
             try {
                 const response = await fetch(`${backendBaseUrl}/api/health`);
-                if (response.ok) {
-                    setBackendStatus('online', 'Backend online');
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => null);
+                    const detail = payload?.detail || payload?.error;
+                    setBackendStatus('warning', detail ? `Backend warning: ${detail}` : `Backend warning (status ${response.status}).`);
                     return;
                 }
 
-                const payload = await response.json().catch(() => null);
-                const detail = payload?.detail || payload?.error;
-                setBackendStatus('warning', detail ? `Backend online: ${detail}` : `Backend online (status ${response.status}).`);
+                const age = await fetch(`${backendBaseUrl}/api/health/age`);
+                if (age.ok) {
+                    setBackendStatus('online', 'Backend + PostgreSQL/AGE online');
+                    return;
+                }
+
+                const agePayload = await age.json().catch(() => null);
+                const ageDetail = agePayload?.detail || agePayload?.error || `status ${age.status}`;
+                setBackendStatus('warning', `Backend online; PostgreSQL/AGE unavailable: ${ageDetail}`);
             } catch (err) {
                 setBackendStatus('offline', `Backend offline: ${err.message}`);
             }
@@ -3198,6 +3245,7 @@
         }
 
         async function runHybridRetrieval(isClarification = false) {
+            isClarification = isClarification === true;
             const question = document.getElementById('hybridQuestion').value.trim();
             if (!question) {
                 document.getElementById('hybridError').innerText = 'Question is required.';
@@ -3207,6 +3255,9 @@
             const selectedMode = hybridModeSelect.value;
             const isAutoMode = selectedMode === 'auto';
             const autoModeReason = isAutoMode ? describeAutoModeDecision(question) : '';
+            const backendRetrievalMode = selectedMode === 'global'
+                ? 'auto'
+                : selectedMode;
             const autoRoutesToGlobal = isAutoMode && shouldUseGlobalMode(question);
             if (!isClarification && (selectedMode === 'global' || autoRoutesToGlobal)) {
                 const initialSteps = [];
@@ -3214,7 +3265,7 @@
                     initialSteps.push({
                         title: 'Intent router (Auto mode)',
                         variant: 'purpose',
-                        purpose: 'Use deterministic keyword intent routing to choose Local / Hybrid or Global / Temporal before retrieval starts.',
+                        purpose: 'Use deterministic keyword intent routing to choose Global / Temporal vs backend-routed local retrieval before retrieval starts.',
                         inputPayloadTitle: 'Intent router rules (deterministic)',
                         inputPayload: buildAutoRouterExplanation(question)
                     });
@@ -3251,6 +3302,7 @@
                     limit: 10,
                     includeTrace,
                     includeAnswer,
+                    retrievalMode: backendRetrievalMode,
                     clarificationAttempts: hybridClarificationAttempts,
                     clarificationResponse: isClarification ? (window.lastClarificationResponse || '') : ''
                 })
@@ -3278,6 +3330,10 @@
             const matchStep = getTraceStep(trace, 'entity-match');
             const expansionStep = getTraceStep(trace, 'graph-expansion');
             const relationshipsStep = getTraceStep(trace, 'graph-relationships');
+            const modeRouterStep = getTraceStep(trace, 'mode-router');
+            const pathFocusStep = getTraceStep(trace, 'path-focus');
+            const pathEvidenceChunksStep = getTraceStep(trace, 'path-evidence-chunks');
+            const chunkProvenanceStep = getTraceStep(trace, 'chunk-provenance');
             const embeddingStep = getTraceStep(trace, 'embedding');
             const vectorStep = getTraceStep(trace, 'vector-search');
             const fallbackStep = getTraceStep(trace, 'entity-fallback');
@@ -3293,20 +3349,26 @@
                 };
             }
 
-            function buildSqlBubble(title, detail, indent = true) {
-                const sql = parseSqlSections(detail);
-                if (sql) {
-                    return {
-                        title,
-                        indent,
-                        bodyHtml: buildSqlToggleHtml(sql.parameterized, sql.executable)
-                    };
-                }
+            function buildSqlBubble(title, detail, indent = true, resultset = '') {
                 return {
                     title,
                     indent,
-                    bodyHtml: `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`
+                    bodyHtml: buildSqlBodyHtml(detail, resultset)
                 };
+            }
+
+            function buildSqlBodyHtml(detail, resultset = '') {
+                const sql = parseSqlSections(detail);
+                if (sql) {
+                    return buildSqlToggleHtml(sql.parameterized, sql.executable, resultset);
+                }
+
+                return `<pre class="sql-toggle-view">${escapeHtml(detail || '(trace disabled)')}</pre>`;
+            }
+
+            function formatHybridChunkLines(chunks) {
+                const lines = (chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex} source:${c.source || 'n/a'}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
+                return lines.length === 0 ? '(none)' : lines.join('\n');
             }
 
             // Phase 0: User question (only on initial call, not on clarification resubmits)
@@ -3318,14 +3380,59 @@
                 mapItems.push({
                     title: 'Intent router (Auto mode)',
                     variant: 'purpose',
-                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs Local / Hybrid before retrieval starts.',
+                    purpose: 'Deterministic keyword routing chooses Global / Temporal vs backend-routed local retrieval before retrieval starts.',
                     inputPayloadTitle: 'Intent router rules (deterministic)',
                     inputPayload: buildAutoRouterExplanation(question)
                 });
                 mapItems.push({
                     title: 'Mode selected (Auto)',
                     indent: true,
-                    body: `Auto mode chose: Local / Hybrid GraphRAG.\nReason: ${autoModeReason}`
+                    body: `Auto mode chose: backend-routed local retrieval.\nReason: ${autoModeReason}`
+                });
+            }
+
+            if (payload.resolvedRetrievalMode) {
+                mapItems.push({
+                    title: selectedMode === 'global' ? 'Global mode routing' : 'Backend retrieval mode',
+                    indent: true,
+                    body: selectedMode === 'global'
+                        ? `Selected mode: Global / Temporal\nGlobal path: community summaries -> timeline -> LLM\nBackend request: ${backendRetrievalMode}\nResolved backend route: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
+                        : `Selected mode: ${selectedMode}\nSent to backend: ${backendRetrievalMode}\nResolved: ${payload.resolvedRetrievalMode}${payload.resolvedTraversalHops != null ? `\nTraversal hops: ${payload.resolvedTraversalHops}` : ''}${payload.retrievalModeRationale ? `\nRationale: ${payload.retrievalModeRationale}` : ''}`
+                });
+            }
+            if (payload.chunkSourceBreakdown && payload.chunkSourceBreakdown.length) {
+                const breakdown = [...payload.chunkSourceBreakdown].sort((a, b) => {
+                    const countDiff = (b.count || 0) - (a.count || 0);
+                    if (countDiff !== 0) return countDiff;
+                    return String(a.source || '').localeCompare(String(b.source || ''));
+                });
+                const totalChunkCount = breakdown.reduce((sum, item) => sum + (item.count || 0), 0);
+                const breakdownLines = breakdown.map(item => {
+                    const pct = Number.isFinite(item.percentage)
+                        ? Number(item.percentage).toFixed(1)
+                        : (totalChunkCount > 0 ? ((item.count / totalChunkCount) * 100).toFixed(1) : '0.0');
+                    return `${item.source}: ${item.count} (${pct}%)`;
+                });
+                mapItems.push({
+                    title: 'Chunk source breakdown',
+                    indent: true,
+                    body: breakdownLines.join('\n')
+                });
+            }
+            if (includeTrace && modeRouterStep?.detail) {
+                mapItems.push({
+                    title: 'Mode router trace',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(modeRouterStep.detail, 1000)
+                });
+            }
+            if (includeTrace && chunkProvenanceStep?.detail) {
+                mapItems.push({
+                    title: 'Chunk provenance trace',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(chunkProvenanceStep.detail, 800)
                 });
             }
 
@@ -3388,7 +3495,10 @@
 
             if (matchStep || (payload.matchedEntities && payload.matchedEntities.length)) {
                 const matchDetail = includeTrace && matchStep?.detail ? matchStep.detail : '(trace disabled)';
-                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true));
+                const matchedEntityResultset = (payload.matchedEntities || []).length
+                    ? (payload.matchedEntities || []).join('\n')
+                    : '(none)';
+                mapItems.push(buildSqlBubble('Graph Entity matching', matchDetail, true, matchedEntityResultset));
                 mapItems.push({
                     title: 'Entity match output',
                     indent: true,
@@ -3412,12 +3522,10 @@
                 purpose: 'Traverse the knowledge graph from matched entities to discover related entities to broaden retrieval.'
             });
             const expansionDetail = includeTrace && expansionStep?.detail ? expansionStep.detail : '(trace disabled)';
-            mapItems.push({
-                title: 'Graph expansion query',
-                indent: true,
-                scroll: true,
-                body: truncateText(expansionDetail, 1200)
-            });
+            const expandedEntitiesResultset = (payload.graphEntities || []).length
+                ? (payload.graphEntities || []).join('\n')
+                : '(none)';
+            mapItems.push(buildSqlBubble('Graph expansion query', expansionDetail, true, expandedEntitiesResultset));
             mapItems.push({
                 title: 'Graph-expanded entities',
                 indent: true,
@@ -3442,12 +3550,56 @@
                 const text = r.sourceText ? `\n  evidence: ${truncateText(r.sourceText, 220)}` : '';
                 return `${r.source} -[${r.relationship}]-> ${r.target} (doc:${doc} chunk:${chunk})${text}`;
             });
+            const relationshipResultset = relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n');
             mapItems.push({
                 title: 'Graph relationship output',
                 indent: true,
                 scroll: true,
-                body: relationshipLines.length === 0 ? '(none)' : relationshipLines.join('\n')
+                body: relationshipResultset
             });
+            if (includeTrace && pathFocusStep?.detail) {
+                mapItems.push({
+                    title: 'Path relationship prioritization',
+                    variant: 'purpose',
+                    purpose: 'Narrow broad graph relationship results down to the most relevant multi-hop paths before chunk grounding.',
+                    configPayloadTitle: 'Deterministic rule (expand)',
+                    configPayload: [
+                        'Top K:',
+                        '- K = clamp(request.limit * 4, 1, 50)',
+                        '',
+                        'Sort priority (ascending/descending by key):',
+                        '1) relationship type bucket:',
+                        '   - non-CO_MENTIONED_WITH first',
+                        '   - CO_MENTIONED_WITH later',
+                        '2) has source evidence text (non-empty first)',
+                        '3) documentId descending (newer/higher id first)',
+                        '4) chunkIndex descending',
+                        '',
+                        'Notes:',
+                        '- source evidence text is defined as: COALESCE(relationships.evidence, chunks.content) AS source_text.',
+                        '- This means relationship evidence is preferred, with chunk content used as fallback.'
+                    ].join('\n')
+                });
+                mapItems.push({
+                    title: 'Prioritized path relationships',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(pathFocusStep.detail, 1200)
+                });
+            }
+            if (includeTrace && pathEvidenceChunksStep?.detail) {
+                mapItems.push({
+                    title: 'Path evidence chunk grounding',
+                    variant: 'purpose',
+                    purpose: 'Ground the selected path relationships in supporting source chunks before the final retrieval merge.'
+                });
+                mapItems.push({
+                    title: 'Path-grounded supporting chunks',
+                    indent: true,
+                    scroll: true,
+                    body: truncateText(pathEvidenceChunksStep.detail, 1200)
+                });
+            }
 
             // Phase 5: Question Embedding ---------------------------------
             mapItems.push({
@@ -3474,25 +3626,45 @@
 
             // Phase 6: Hybrid Chunk Retrieval -----------------------------
             const vectorDetail = includeTrace && vectorStep?.detail ? vectorStep.detail : '(trace disabled)';
-            const vectorSql = parseSqlSections(vectorDetail);
-            const vectorBubble = {
-                title: 'Hybrid Chunk Retrieval',
-                variant: 'purpose',
-                purpose: 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
-            };
-            if (vectorSql) {
-                vectorBubble.bodyHtml = buildSqlToggleHtml(vectorSql.parameterized, vectorSql.executable);
+            const allChunkResultset = formatHybridChunkLines(payload.chunks || []);
+            const lightVectorDetail = parseLightModeChunkSearchDetail(vectorDetail);
+            if (payload.resolvedRetrievalMode === 'light' && lightVectorDetail) {
+                const entityBranchChunks = (payload.chunks || []).filter(c => String(c.source || '').startsWith('entity-'));
+                const globalBranchChunks = (payload.chunks || []).filter(c => String(c.source || '').startsWith('global-'));
+                mapItems.push({
+                    title: 'Parallel chunk retrieval',
+                    variant: 'purpose',
+                    purpose: lightVectorDetail.intro || 'Run entity-scoped and global retrieval in parallel, then merge and rerank the combined results.'
+                });
+                mapItems.push({
+                    title: 'Entity-scoped retrieval branch',
+                    indent: true,
+                    bodyHtml: buildSqlBodyHtml(lightVectorDetail.entityDetail, formatHybridChunkLines(entityBranchChunks))
+                });
+                mapItems.push({
+                    title: 'Global retrieval branch',
+                    indent: true,
+                    bodyHtml: buildSqlBodyHtml(lightVectorDetail.globalDetail, formatHybridChunkLines(globalBranchChunks))
+                });
             } else {
-                vectorBubble.bodyHtml = `<pre class="sql-toggle-view">${escapeHtml(vectorDetail)}</pre>`;
+                const vectorBubble = {
+                    title: payload.resolvedRetrievalMode === 'path'
+                        ? 'Entity-scoped chunk retrieval after path grounding'
+                        : 'Entity-scoped hybrid chunk retrieval',
+                    variant: 'purpose',
+                    purpose: payload.resolvedRetrievalMode === 'path'
+                        ? 'After path-focused graph grounding, rank entity-relevant chunks with vector similarity and keyword search, then merge the rankings.'
+                        : 'Rank graph-relevant chunks with vector similarity and keyword search, then combine both rankings with reciprocal rank fusion.'
+                };
+                vectorBubble.bodyHtml = buildSqlBodyHtml(vectorDetail, allChunkResultset);
+                mapItems.push(vectorBubble);
             }
-            mapItems.push(vectorBubble);
 
-            const chunkLines = (payload.chunks || []).map(c => `[doc:${c.documentId} chunk:${c.chunkIndex}] ${c.content} (distance: ${c.distance ?? 'n/a'}, vectorRank: ${c.vectorRank ?? 'n/a'}, keywordRank: ${c.keywordRank ?? 'n/a'}, score: ${c.score ?? 'n/a'})`);
             mapItems.push({
                 title: 'Hybrid Retrieval Output',
                 indent: true,
                 scroll: true,
-                body: chunkLines.length === 0 ? '(none)' : chunkLines.join('\n')
+                body: allChunkResultset
             });
 
             // Phase 7: Answer Agent ---------------------------------------
@@ -3532,7 +3704,7 @@
                 return `Matched global/temporal intent keyword "${match[0]}".`;
             }
 
-            return 'No global or temporal intent keyword matched, so entity-focused Local/Hybrid retrieval was selected.';
+            return 'No global or temporal intent keyword matched, so backend local routing was selected (auto resolves local/light/path).';
         }
 
         function buildAutoRouterExplanation(question) {
@@ -3543,7 +3715,7 @@
                 `Question: ${question}`,
                 'Rule set:',
                 '- If any global/temporal keyword is present -> Global / Temporal GraphRAG',
-                '- Otherwise -> Local / Hybrid GraphRAG',
+                '- Otherwise -> Backend local router (auto resolves local/light/path)',
                 'Keywords checked:',
                 'theme, themes, pattern, patterns, trend, trends, across, overall, summary, summarize, top <number>, changed, timeline, over time, before, after, recent, chronolog*',
                 `Matched keyword: ${matchedKeyword}`
@@ -4342,16 +4514,74 @@
             return end >= 0 ? sql.slice(start, end + 1).trim() : sql.slice(start).trim();
         }
 
+        function buildGlobalCommunityRetrievalLogic(question, limit, communities) {
+            const candidateLines = (communities || []).map(c => {
+                const distance = c.distance === null || c.distance === undefined ? 'n/a' : Number(c.distance).toFixed(4);
+                const span = `${c.startDate || 'unknown'} to ${c.endDate || 'unknown'}`;
+                return `- Community ${c.id}: ${c.title}\n  distance: ${distance}\n  entities: ${c.entityCount ?? 'n/a'}; relationships: ${c.relationshipCount ?? 'n/a'}; span: ${span}`;
+            });
+            return [
+                'Retrieval logic used for Global / Temporal community summaries:',
+                '',
+                `1. Create an embedding for the user question: ${question}`,
+                '2. Search only persisted rows in the communities table where embedding IS NOT NULL.',
+                '3. Score each community summary embedding with vector cosine distance using pgvector: embedding <=> query_vector.',
+                '4. Sort ascending by distance. Lower distance means more similar to the question.',
+                `5. Return the top ${limit} communities and pass their summaries into the global prompt context.`,
+                '',
+                'Executable query shape:',
+                'SELECT id, title, summary, embedding <=> CAST(@@query_vector AS vector) AS distance, entity_count, relationship_count, start_date, end_date',
+                'FROM communities',
+                'WHERE embedding IS NOT NULL',
+                'ORDER BY embedding <=> CAST(@@query_vector AS vector)',
+                'LIMIT @@limit;',
+                '',
+                'Selected communities in this run:',
+                candidateLines.length ? candidateLines.join('\n') : '(none - the communities table has no embedded summaries to rank)'
+            ].join('\n');
+        }
+
+        function buildTemporalTimelineSelectionLogic(limit, timeline) {
+            const selectedLines = (timeline || []).map(d => {
+                const date = d.documentDate || 'undated';
+                const type = d.documentType || 'unknown';
+                const tags = d.tags ? `; tags: ${d.tags}` : '';
+                return `- ${date}: ${d.title}\n  type: ${type}${tags}`;
+            });
+
+            return [
+                'Selection logic used for temporal timeline context:',
+                '',
+                '1. Read documents from the documents table, ordered by document_date and title.',
+                '2. For rows without document_date, try to parse a date from the document title using the pattern DD-MM-YY.',
+                '3. Keep only documents that have a usable date after either database lookup or title parsing.',
+                '4. Sort the remaining documents chronologically, then by title for stable ordering.',
+                `5. Return the first ${limit} dated documents as supporting temporal context.`,
+                '',
+                'Executable query shape:',
+                'SELECT id, title, document_date, document_type, tags::text',
+                'FROM documents',
+                'ORDER BY document_date NULLS LAST, title',
+                'LIMIT 200;',
+                '',
+                'Important: this is not vector similarity search. The timeline is selected by date availability and chronological order, then used as supporting context beside the community summaries.',
+                '',
+                'Selected timeline documents in this run:',
+                selectedLines.length ? selectedLines.join('\n') : '(none - no dated documents were available)'
+            ].join('\n');
+        }
+
         async function runGlobalGraphRag(question, initialSteps = null) {
             const hybridStatus = document.getElementById('hybridStatus');
             const includeTrace = document.getElementById('hybridTraceToggle').checked;
             const includeAnswer = document.getElementById('hybridAnswerToggle').checked;
+            const communityLimit = 6;
+            const timelineLimit = 20;
             document.getElementById('hybridError').innerText = '';
             if (Array.isArray(initialSteps) && initialSteps.length > 0) {
                 renderProcessMap(initialSteps, false);
-                appendProcessMap([{ title: 'Global / Temporal question received', body: question }]);
             } else {
-                renderProcessMap([{ title: 'Global / Temporal question received', body: question }], false);
+                renderProcessMap([], false);
             }
             setButtonLoading(runHybridBtn, true, 'Running...');
             setInlineStatus(hybridStatus, 'Running global GraphRAG...', 'text-muted');
@@ -4360,7 +4590,7 @@
                 const response = await fetch(`${backendBaseUrl}/api/retrieval/global`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: question, limit: 6, includeTrace, includeAnswer })
+                    body: JSON.stringify({ query: question, limit: communityLimit, includeTrace, includeAnswer })
                 });
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
@@ -4368,17 +4598,67 @@
                 }
 
                 const items = [];
-                if (payload.trace?.steps) {
-                    payload.trace.steps.forEach(step => items.push({
+                items.push({
+                    title: 'Global / Temporal GraphRAG',
+                    variant: 'purpose',
+                    purpose: 'This mode is community-first, then time-aware. It does not start with entity matching or graph expansion.'
+                });
+                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
+                const hasCommunitySummaries = communityLines.length > 0;
+                items.push({
+                    title: 'Community-first retrieval',
+                    variant: 'purpose',
+                    purpose: 'Retrieve the most relevant community summaries from the graph as the primary evidence layer for broad, cross-document reasoning.',
+                    inputPayloadTitle: 'How relevant communities are selected',
+                    inputPayload: buildGlobalCommunityRetrievalLogic(question, communityLimit, payload.communities || [])
+                });
+                const communityTraceStepNames = new Set(['global-question', 'global-embedding', 'community-retrieval']);
+                const communityTraceSteps = (payload.trace?.steps || []).filter(step => communityTraceStepNames.has(step.name));
+                if (communityTraceSteps.length) {
+                    communityTraceSteps.forEach(step => items.push({
                         title: step.summary || step.name,
                         scroll: true,
                         body: step.detail || ''
                     }));
                 }
-                const communityLines = (payload.communities || []).map(c => `Community ${c.id}: ${c.title}\n${c.summary}`);
-                items.push({ title: 'Community summary output', indent: true, scroll: true, body: communityLines.length ? communityLines.join('\n\n') : '(none - build communities first)' });
+                items.push({
+                    title: 'Community summary output',
+                    indent: true,
+                    scroll: true,
+                    body: hasCommunitySummaries ? communityLines.join('\n\n') : '(none - build communities first)'
+                });
                 const timelineLines = (payload.timeline || []).map(d => `${d.documentDate || 'undated'}: ${d.title}`);
-                items.push({ title: 'Temporal timeline output', indent: true, scroll: true, body: timelineLines.length ? timelineLines.join('\n') : '(none)' });
+                if (!hasCommunitySummaries && timelineLines.length > 0) {
+                    items.push({
+                        title: 'Global evidence is incomplete',
+                        variant: 'purpose',
+                        purpose: 'No community summaries were found, so this run can still use dated documents as temporal context, but it is missing the primary global evidence layer. Run Build Communities to enable community-summary retrieval.'
+                    });
+                }
+                items.push({
+                    title: 'Temporal timeline retrieval',
+                    variant: 'purpose',
+                    purpose: 'Collect dated documents in order as supporting temporal context so the model can reason about change, sequence, and recency.',
+                    inputPayloadTitle: 'How temporal documents are selected',
+                    inputPayload: buildTemporalTimelineSelectionLogic(timelineLimit, payload.timeline || [])
+                });
+                items.push({
+                    title: 'Temporal timeline output',
+                    indent: true,
+                    scroll: true,
+                    body: timelineLines.length ? timelineLines.join('\n') : '(none)'
+                });
+                items.push({
+                    title: 'Global prompt assembly',
+                    variant: 'purpose',
+                    purpose: 'Combine community summaries and timeline evidence into a single global prompt context before answering.'
+                });
+                items.push({
+                    title: 'Global GraphRAG answer context input',
+                    indent: true,
+                    scroll: true,
+                    body: payload.promptContext || '(no prompt context returned)'
+                });
                 if (includeAnswer) {
                     items.push({ title: 'Global GraphRAG answer', indent: true, scroll: true, body: payload.answer || '(no answer returned)' });
                 }
@@ -4708,17 +4988,55 @@
             return { parameterized, executable };
         }
 
-        function buildSqlToggleHtml(parameterizedSql, executableSql) {
+        function parseLightModeChunkSearchDetail(value) {
+            if (!value) {
+                return null;
+            }
+
+            const entityHeader = 'Entity branch:';
+            const globalHeader = 'Global branch:';
+            const entityIndex = value.indexOf(entityHeader);
+            const globalIndex = value.indexOf(globalHeader);
+            if (entityIndex === -1 || globalIndex === -1 || globalIndex <= entityIndex) {
+                return null;
+            }
+
+            const intro = value.slice(0, entityIndex).trim();
+            const entityDetail = value
+                .slice(entityIndex + entityHeader.length, globalIndex)
+                .trim();
+            const globalDetail = value
+                .slice(globalIndex + globalHeader.length)
+                .trim();
+
+            return {
+                intro,
+                entityDetail,
+                globalDetail
+            };
+        }
+
+        function buildSqlToggleHtml(parameterizedSql, executableSql, resultsetText = '') {
             const parameterized = escapeHtml(parameterizedSql);
             const executable = escapeHtml(executableSql);
+            const hasResultset = typeof resultsetText === 'string' && resultsetText.trim().length > 0;
+            const resultset = escapeHtml(hasResultset ? resultsetText : '(none)');
+            const resultButton = hasResultset
+                ? '<button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="result">Result</button>'
+                : '';
+            const resultView = hasResultset
+                ? `<pre class="sql-toggle-view sql-toggle-view-result d-none">${resultset}</pre>`
+                : '';
             return `
                 <div class="sql-toggle" data-view="parameterized">
                     <div class="btn-group btn-group-sm sql-toggle-buttons" role="group">
                         <button type="button" class="btn btn-outline-secondary sql-toggle-btn active" data-view="parameterized">Parameterized</button>
                         <button type="button" class="btn btn-outline-secondary sql-toggle-btn" data-view="executable">Executable</button>
+                        ${resultButton}
                     </div>
                     <pre class="sql-toggle-view sql-toggle-view-parameterized">${parameterized}</pre>
                     <pre class="sql-toggle-view sql-toggle-view-executable d-none">${executable}</pre>
+                    ${resultView}
                 </div>`;
         }
 

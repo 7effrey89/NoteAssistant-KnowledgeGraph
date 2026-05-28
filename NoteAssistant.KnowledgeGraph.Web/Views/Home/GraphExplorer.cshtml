@@ -40,18 +40,19 @@ LIMIT 150</textarea>
                 <div class="kg-section-title">Explore</div>
                 <label class="form-label" for="kgSearchInput">Search nodes</label>
                 <input class="form-control form-control-sm mb-2" id="kgSearchInput" placeholder="Name, label, property" />
+                <div class="kg-search-results" id="kgSearchResults" hidden></div>
                 <div class="kg-control-grid">
                     <div>
                         <div class="form-label" id="kgNodeTypeFilterLabel">Node label</div>
                         <details class="kg-checkbox-dropdown" id="kgNodeTypeFilter">
-                            <summary id="kgNodeTypeFilterSummary" aria-labelledby="kgNodeTypeFilterLabel kgNodeTypeFilterSummary">All</summary>
+                            <summary id="kgNodeTypeFilterSummary" aria-labelledby="kgNodeTypeFilterLabel kgNodeTypeFilterSummary">All selected</summary>
                             <div class="kg-checkbox-dropdown-menu" id="kgNodeTypeFilterList" role="group" aria-labelledby="kgNodeTypeFilterLabel"></div>
                         </details>
                     </div>
                     <div>
                         <div class="form-label" id="kgEdgeTypeFilterLabel">Relationship</div>
                         <details class="kg-checkbox-dropdown" id="kgEdgeTypeFilter">
-                            <summary id="kgEdgeTypeFilterSummary" aria-labelledby="kgEdgeTypeFilterLabel kgEdgeTypeFilterSummary">All</summary>
+                            <summary id="kgEdgeTypeFilterSummary" aria-labelledby="kgEdgeTypeFilterLabel kgEdgeTypeFilterSummary">All selected</summary>
                             <div class="kg-checkbox-dropdown-menu" id="kgEdgeTypeFilterList" role="group" aria-labelledby="kgEdgeTypeFilterLabel"></div>
                         </details>
                     </div>
@@ -94,7 +95,6 @@ LIMIT 150</textarea>
                         <label class="form-check-label" for="kgNeighborToggle">Highlight neighborhood</label>
                     </div>
                 </div>
-                <div class="kg-search-results" id="kgSearchResults">Run a query to search graph nodes.</div>
             </section>
 
             <section class="kg-control-section">
@@ -135,6 +135,10 @@ LIMIT 150</textarea>
                     <div class="kg-camera-rail" aria-hidden="true"><span></span></div>
                     <button class="kg-canvas-control" id="kgCanvasZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">-</button>
                     <button class="kg-canvas-control" id="kgCanvasCenterBtn" type="button" title="Center selected" aria-label="Center selected">o</button>
+                </div>
+                <div class="kg-selection-help" aria-label="Graph selection shortcuts">
+                    <div><kbd>Shift</kbd><span>Hold to multi-select nodes</span></div>
+                    <div><kbd>Ctrl</kbd><span>Hold to deselect selection</span></div>
                 </div>
                 <div class="kg-empty-state" id="kgEmptyState">Run a Cypher query to render an interactive Sigma graph.</div>
             </div>
