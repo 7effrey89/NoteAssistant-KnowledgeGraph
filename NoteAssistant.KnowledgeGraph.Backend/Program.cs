@@ -1106,6 +1106,12 @@ app.MapPost("/api/communities/build", async (HttpContext httpContext, int? paral
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapGet("/api/communities/memberships", async (AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.GetCommunityGraphMembershipsAsync(cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/communities/build/stream", async (HttpContext httpContext, int? parallelism, AgeGraphRepository repository, CommunityProfileStore profileStore, CancellationToken cancellationToken) =>
 {
     var request = await ResolveCommunityBuildRequestAsync(httpContext, parallelism, profileStore, cancellationToken);

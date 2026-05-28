@@ -354,6 +354,55 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
     }
 
+    public async Task<CommunityGraphMembershipResponse> GetCommunityGraphMembershipsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new CommunityGraphMembershipResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureCommunityTablesAsync(connection, cancellationToken);
+
+            const string sql = """
+                               SELECT c.id,
+                                      c.title,
+                                      c.entity_count,
+                                      c.relationship_count,
+                                      e.id,
+                                      e.label,
+                                      e.name
+                               FROM communities c
+                               JOIN community_members cm ON cm.community_id = c.id
+                               JOIN entities e ON e.id = cm.entity_id
+                               ORDER BY c.id, e.label, e.name;
+                               """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            var memberships = new List<CommunityGraphMembershipDto>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                memberships.Add(new CommunityGraphMembershipDto(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2),
+                    reader.GetInt32(3),
+                    reader.GetInt64(4),
+                    reader.GetString(5),
+                    reader.GetString(6)));
+            }
+
+            return new CommunityGraphMembershipResponse(true, null, memberships);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load graph community memberships.");
+            return new CommunityGraphMembershipResponse(false, ex.Message, []);
+        }
+    }
+
     public async Task<HybridRetrievalResponse> ExecuteHybridRetrievalAsync(HybridRetrievalRequest request, CancellationToken cancellationToken)
     {
         var (resolvedMode, modeRationale) = ResolveRetrievalMode(request.Query, request.RetrievalMode);

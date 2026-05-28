@@ -137,6 +137,20 @@ public sealed record CommunityBuildRequest(
     int Parallelism = 1,
     CommunityDetectionOptions? CommunityDetection = null);
 
+public sealed record CommunityGraphMembershipDto(
+    long CommunityId,
+    string CommunityTitle,
+    int CommunityEntityCount,
+    int CommunityRelationshipCount,
+    long EntityId,
+    string EntityLabel,
+    string EntityName);
+
+public sealed record CommunityGraphMembershipResponse(
+    bool Success,
+    string? Error,
+    IReadOnlyList<CommunityGraphMembershipDto> Memberships);
+
 public sealed record CommunityDetectionOptions(
     string Algorithm = "LeidenCpm",
     bool Directed = false,

@@ -77,6 +77,10 @@ LIMIT 150</textarea>
                         <input class="form-check-input" type="checkbox" id="kgNodeNamesInsideToggle" />
                         <label class="form-check-label" for="kgNodeNamesInsideToggle">Names inside nodes</label>
                     </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="kgCommunityColorsToggle" />
+                        <label class="form-check-label" for="kgCommunityColorsToggle">Community colors</label>
+                    </div>
                     <div>
                         <label class="form-label" for="kgLabelDensitySlider">Label density</label>
                         <input class="form-range" id="kgLabelDensitySlider" type="range" min="0" max="100" value="50" title="0=more abbreviated, 100=full text" />
@@ -115,6 +119,19 @@ LIMIT 150</textarea>
                     <span id="kgLayoutStatusText"><strong>Current:</strong> none</span>
                     <button class="kg-worker-toggle" id="kgWorkerLayoutToggleBtn" type="button" disabled>Start</button>
                 </div>
+                <details class="kg-force-controls" open>
+                    <summary>Forces</summary>
+                    <div class="kg-force-control-grid">
+                        <label for="kgNodeScaleSlider"><span>Node scale</span><output id="kgNodeScaleValue">65%</output></label>
+                        <input class="form-range" id="kgNodeScaleSlider" type="range" min="35" max="110" value="65" />
+                        <label for="kgSpacingSlider"><span>Spacing</span><output id="kgSpacingValue">135%</output></label>
+                        <input class="form-range" id="kgSpacingSlider" type="range" min="70" max="240" value="135" />
+                        <label for="kgCenterPullSlider"><span>Center pull</span><output id="kgCenterPullValue">30%</output></label>
+                        <input class="form-range" id="kgCenterPullSlider" type="range" min="0" max="120" value="30" />
+                        <label for="kgLinkPullSlider"><span>Link pull</span><output id="kgLinkPullValue">55%</output></label>
+                        <input class="form-range" id="kgLinkPullSlider" type="range" min="10" max="120" value="55" />
+                    </div>
+                </details>
             </section>
         </aside>
 
@@ -130,11 +147,19 @@ LIMIT 150</textarea>
                     <button class="kg-canvas-control" id="kgHistoryForwardBtn" type="button" title="Forward" aria-label="Forward" disabled>&rarr;</button>
                 </div>
                 <div class="kg-canvas-camera" aria-label="Graph camera controls">
-                    <button class="kg-canvas-control" id="kgCanvasFitBtn" type="button" title="Fit all" aria-label="Fit all">[]</button>
-                    <button class="kg-canvas-control" id="kgCanvasZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+                    <button class="kg-canvas-control" id="kgCanvasFitBtn" type="button" title="Fit all" aria-label="Fit all">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><path d="M9 4 4 9M15 4l5 5M9 20l-5-5M15 20l5-5"/></svg>
+                    </button>
+                    <button class="kg-canvas-control" id="kgCanvasZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M10.5 7.5v6M7.5 10.5h6M15.5 15.5 21 21"/></svg>
+                    </button>
                     <div class="kg-camera-rail" aria-hidden="true"><span></span></div>
-                    <button class="kg-canvas-control" id="kgCanvasZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">-</button>
-                    <button class="kg-canvas-control" id="kgCanvasCenterBtn" type="button" title="Center selected" aria-label="Center selected">o</button>
+                    <button class="kg-canvas-control" id="kgCanvasZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M7.5 10.5h6M15.5 15.5 21 21"/></svg>
+                    </button>
+                    <button class="kg-canvas-control" id="kgCanvasCenterBtn" type="button" title="Center selected" aria-label="Center selected">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.4"/></svg>
+                    </button>
                 </div>
                 <div class="kg-selection-help" aria-label="Graph selection shortcuts">
                     <div><kbd>Shift</kbd><span>Hold to multi-select nodes</span></div>

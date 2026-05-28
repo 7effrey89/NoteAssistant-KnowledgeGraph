@@ -9,6 +9,7 @@ import NoverlapLayout from "https://esm.sh/graphology-layout-noverlap@0.4.2/work
 
 const backendBaseUrl = window.noteAssistantGraphExplorer?.backendBaseUrl || "http://localhost:5070";
 const palette = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#0891b2", "#ca8a04", "#db2777", "#4f46e5", "#0f766e", "#ea580c"];
+const communityPalette = ["#0f766e", "#7c3aed", "#dc2626", "#2563eb", "#b45309", "#be185d", "#047857", "#4f46e5", "#0891b2", "#a16207", "#6d28d9", "#15803d"];
 const inspectorWidthStorageKey = "noteAssistantGraphExplorer.inspectorWidth";
 const inspectorMinWidth = 260;
 const inspectorMaxWidth = 640;
@@ -20,6 +21,11 @@ const state = {
   rawEdges: [],
   degreeById: new Map(),
   colorByLabel: new Map(),
+  communityByEntityId: new Map(),
+  communityByEntityKey: new Map(),
+  colorByCommunityId: new Map(),
+  communityMembershipsLoaded: false,
+  communityMembershipsLoading: false,
   selectedNode: null,
   selectedNodes: new Set(),
   deselectedRelatedNodes: new Set(),
@@ -31,7 +37,7 @@ const state = {
   filters: { search: "", nodeTypes: [], edgeTypes: [], minDegree: 0 },
   filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false },
   filterOptions: { nodeTypes: [], edgeTypes: [] },
-  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50 },
+  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50, colorMode: "label", forceControls: { nodeScale: 65, spacing: 135, centerPull: 30, linkPull: 55 } },
   currentLayout: "random",
   currentWorkerLayout: null,
   lastWorkerLayout: null,
@@ -69,6 +75,7 @@ const el = {
   sizeModeSelect: document.getElementById("kgSizeModeSelect"),
   labelsToggle: document.getElementById("kgLabelsToggle"),
   nodeNamesInsideToggle: document.getElementById("kgNodeNamesInsideToggle"),
+  communityColorsToggle: document.getElementById("kgCommunityColorsToggle"),
   labelDensitySlider: document.getElementById("kgLabelDensitySlider"),
   edgeLabelsToggle: document.getElementById("kgEdgeLabelsToggle"),
   curvedEdgesToggle: document.getElementById("kgCurvedEdgesToggle"),
@@ -77,6 +84,14 @@ const el = {
   layoutStatus: document.getElementById("kgLayoutStatus"),
   layoutStatusText: document.getElementById("kgLayoutStatusText"),
   workerLayoutToggleBtn: document.getElementById("kgWorkerLayoutToggleBtn"),
+  nodeScaleSlider: document.getElementById("kgNodeScaleSlider"),
+  nodeScaleValue: document.getElementById("kgNodeScaleValue"),
+  spacingSlider: document.getElementById("kgSpacingSlider"),
+  spacingValue: document.getElementById("kgSpacingValue"),
+  centerPullSlider: document.getElementById("kgCenterPullSlider"),
+  centerPullValue: document.getElementById("kgCenterPullValue"),
+  linkPullSlider: document.getElementById("kgLinkPullSlider"),
+  linkPullValue: document.getElementById("kgLinkPullValue"),
   historyBackBtn: document.getElementById("kgHistoryBackBtn"),
   historyForwardBtn: document.getElementById("kgHistoryForwardBtn"),
   canvasZoomInBtn: document.getElementById("kgCanvasZoomInBtn"),
@@ -115,6 +130,7 @@ el.nodeNamesInsideToggle.addEventListener("change", () => {
   state.settings.nodeNamesInside = el.nodeNamesInsideToggle.checked;
   updateRendererSettings();
 });
+el.communityColorsToggle?.addEventListener("change", () => setCommunityColorMode(el.communityColorsToggle.checked));
 if (el.labelDensitySlider) {
   el.labelDensitySlider.addEventListener("input", () => {
     state.settings.labelDensity = Number(el.labelDensitySlider.value) || 50;
@@ -141,6 +157,10 @@ el.canvasZoomOutBtn.addEventListener("click", () => zoomBy(1.35));
 el.canvasFitBtn.addEventListener("click", fitGraph);
 el.canvasCenterBtn.addEventListener("click", centerSelectedOrFit);
 el.workerLayoutToggleBtn?.addEventListener("click", toggleCurrentWorkerLayout);
+const restartWorkerLayoutDebounced = debounce(() => restartCurrentWorkerLayout(), 220);
+[el.nodeScaleSlider, el.spacingSlider, el.centerPullSlider, el.linkPullSlider].forEach(input => {
+  input?.addEventListener("input", () => updateForceControlSettings({ restartWorker: true }));
+});
 document.querySelectorAll("[data-kg-layout]").forEach(button => {
   button.addEventListener("click", () => setLayout(button.dataset.kgLayout || "random"));
 });
@@ -167,8 +187,10 @@ window.addEventListener("blur", () => {
   state.isCtrlKeyDown = false;
   updateSelectionCursorState();
 });
+window.addEventListener("resize", debounce(() => updateNodeSizesForViewport(), 150));
 initInspectorResize();
 autosizeQueryInput();
+updateForceControlOutputs();
 updateLayoutStatus();
 
 await refreshStatus();
@@ -370,7 +392,19 @@ function loadGraph(nodes, edges) {
 }
 
 function rebuildGraph() {
-  stopWorkerLayout({ clearLast: true });
+  const workerLayoutToRestart = state.currentWorkerLayout && state.layoutWorker?.isRunning?.()
+    ? state.currentWorkerLayout
+    : null;
+  const fallbackToRandom = isWorkerLayout(state.currentLayout) && !workerLayoutToRestart;
+  const layoutForRebuild = workerLayoutToRestart || fallbackToRandom ? "random" : state.currentLayout;
+
+  stopWorkerLayout({ clearLast: !workerLayoutToRestart });
+  if (fallbackToRandom) {
+    state.currentLayout = "random";
+    document.querySelectorAll("[data-kg-layout]").forEach(button => button.classList.toggle("active", button.dataset.kgLayout === "random"));
+    document.querySelectorAll("[data-kg-worker-layout]").forEach(button => button.classList.remove("active"));
+  }
+
   if (state.renderer) {
     state.renderer.kill();
     state.renderer = null;
@@ -386,7 +420,7 @@ function rebuildGraph() {
   state.rawEdges.forEach(edge => graph.addDirectedEdgeWithKey(edge.id, edge.source, edge.target, buildEdgeAttributes(edge)));
 
   state.graph = graph;
-  applyLayout(state.currentLayout, false);
+  applyLayout(layoutForRebuild, false);
   if (!graph.order) {
     el.emptyState.hidden = false;
     el.exportBtn.disabled = true;
@@ -404,6 +438,9 @@ function rebuildGraph() {
   renderStats();
   updateSearchResults();
   setTimeout(() => {
+    if (workerLayoutToRestart && state.graph?.order && state.renderer) {
+      startWorkerLayout(workerLayoutToRestart);
+    }
     state.renderer?.getCamera().animatedReset({ duration: 250 });
     setTimeout(() => recordGraphHistory({ replace: true }), 280);
   }, 0);
@@ -425,7 +462,36 @@ function normalizeEdge(edge, index) {
 function buildNodeAttributes(node) {
   const degree = state.degreeById.get(node.id) || 0;
   const size = calculateNodeSize(degree);
-  return { x: 0, y: 0, size, label: node.title, color: state.colorByLabel.get(node.label) || palette[0], kgLabel: node.label, title: node.title, properties: node.properties, degree };
+  const community = getNodeCommunity(node);
+  const colorGroup = state.settings.colorMode === "community" && community ? `community:${community.communityId}` : `label:${node.label}`;
+  const colorGroupLabel = state.settings.colorMode === "community" && community ? `Community ${community.communityId}: ${community.communityTitle}` : node.label;
+  const color = state.settings.colorMode === "community" && community
+    ? state.colorByCommunityId.get(String(community.communityId)) || communityPalette[0]
+    : state.colorByLabel.get(node.label) || palette[0];
+  const properties = community
+    ? {
+      ...node.properties,
+      community_id: String(community.communityId),
+      community_title: community.communityTitle,
+      community_entity_count: String(community.communityEntityCount ?? ""),
+      community_relationship_count: String(community.communityRelationshipCount ?? "")
+    }
+    : node.properties;
+  return {
+    x: 0,
+    y: 0,
+    size,
+    label: node.title,
+    color,
+    kgLabel: node.label,
+    kgCommunityId: community ? String(community.communityId) : null,
+    kgCommunityTitle: community?.communityTitle || null,
+    kgColorGroup: colorGroup,
+    kgColorGroupLabel: colorGroupLabel,
+    title: node.title,
+    properties,
+    degree
+  };
 }
 
 function colorWithAlpha(color, alpha) {
@@ -449,13 +515,85 @@ function colorWithAlpha(color, alpha) {
 }
 
 function calculateNodeSize(degree) {
-  const baseSizeInside = state.settings.nodeNamesInside ? 14 : 7;
-  const maxSizeInside = state.settings.nodeNamesInside ? 28 : 18;
-  return state.settings.sizeMode === "degree" ? baseSizeInside + Math.min(maxSizeInside - baseSizeInside, degree * 2.4) : baseSizeInside + 3;
+  const densityScale = getGraphDensityScale();
+  const nodeScale = getForceControlMultiplier("nodeScale");
+  const baseSize = (state.settings.nodeNamesInside ? 12 : 5.8) * densityScale * nodeScale;
+  const maxSize = (state.settings.nodeNamesInside ? 23 : 13.5) * densityScale * nodeScale;
+  const minimumSize = state.settings.nodeNamesInside ? 5.5 : 2.4;
+  const scaledBase = Math.max(minimumSize, baseSize);
+  const scaledMax = Math.max(scaledBase + 1.8, maxSize);
+  const degreeStep = 1.55 * densityScale * nodeScale;
+  return state.settings.sizeMode === "degree"
+    ? scaledBase + Math.min(scaledMax - scaledBase, degree * degreeStep)
+    : Math.min(scaledMax, scaledBase + 3 * densityScale);
+}
+
+function getGraphDensityScale() {
+  const nodeCount = Math.max(state.rawNodes.length || state.graph?.order || 1, 1);
+  const rect = el.sigmaContainer?.getBoundingClientRect?.();
+  const area = Math.max((rect?.width || 900) * (rect?.height || 620), 1);
+  const targetAreaPerNode = state.settings.nodeNamesInside ? 5200 : 3600;
+  const scale = Math.sqrt(area / (nodeCount * targetAreaPerNode));
+  return Math.max(0.3, Math.min(1, scale));
+}
+
+function updateNodeSizesForViewport() {
+  if (!state.graph?.order) return;
+  state.graph.forEachNode((node, attributes) => {
+    state.graph.setNodeAttribute(node, "size", calculateNodeSize(attributes.degree || 0));
+  });
+  state.graph.forEachEdge(edge => {
+    state.graph.setEdgeAttribute(edge, "size", calculateEdgeSize());
+  });
+  refreshRenderer();
+}
+
+function updateForceControlSettings(options = {}) {
+  state.settings.forceControls = {
+    nodeScale: readSliderValue(el.nodeScaleSlider, state.settings.forceControls.nodeScale),
+    spacing: readSliderValue(el.spacingSlider, state.settings.forceControls.spacing),
+    centerPull: readSliderValue(el.centerPullSlider, state.settings.forceControls.centerPull),
+    linkPull: readSliderValue(el.linkPullSlider, state.settings.forceControls.linkPull)
+  };
+  updateForceControlOutputs();
+  updateNodeSizesForViewport();
+  if (options.restartWorker) {
+    restartWorkerLayoutDebounced();
+  }
+}
+
+function readSliderValue(input, fallback) {
+  const value = Number(input?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function updateForceControlOutputs() {
+  const controls = state.settings.forceControls;
+  if (el.nodeScaleValue) el.nodeScaleValue.value = `${controls.nodeScale}%`;
+  if (el.spacingValue) el.spacingValue.value = `${controls.spacing}%`;
+  if (el.centerPullValue) el.centerPullValue.value = `${controls.centerPull}%`;
+  if (el.linkPullValue) el.linkPullValue.value = `${controls.linkPull}%`;
+}
+
+function getForceControlMultiplier(key) {
+  const value = Number(state.settings.forceControls?.[key]);
+  return (Number.isFinite(value) ? value : 100) / 100;
+}
+
+function restartCurrentWorkerLayout() {
+  if (!state.currentWorkerLayout || !state.layoutWorker?.isRunning?.()) return;
+  const layout = state.currentWorkerLayout;
+  stopWorkerLayout({ preserveCurrent: true });
+  startWorkerLayout(layout);
 }
 
 function buildEdgeAttributes(edge) {
-  return { size: 1.3, type: getEdgeType(), label: edge.label, color: "#94a3b8", relationship: edge.label, properties: edge.properties };
+  return { size: calculateEdgeSize(), type: getEdgeType(), label: edge.label, color: "#94a3b8", relationship: edge.label, properties: edge.properties };
+}
+
+function calculateEdgeSize() {
+  const densityScale = getGraphDensityScale();
+  return Math.max(0.55, Math.min(1.3, 1.3 * densityScale));
 }
 
 function buildSigmaSettings() {
@@ -552,6 +690,7 @@ function renderAdaptiveNodeLabel(context, data) {
   if (!data.label) return;
 
   const radius = Math.max(6, data.size || 0);
+  if (shouldSuppressPassiveLabel(data, radius)) return;
   const density = state.settings.labelDensity || 50;
   const displayLabel = stripEntityTypePrefix(data.label);
   const TINY_THRESHOLD = 12;
@@ -606,6 +745,18 @@ function renderAdaptiveNodeLabel(context, data) {
   }
 
   context.restore();
+}
+
+function shouldSuppressPassiveLabel(data, radius) {
+  if (!state.settings.showLabels) return true;
+  if (data.forceLabel || data.highlighted) return false;
+  const nodeCount = state.graph?.order || state.rawNodes.length || 0;
+  if (nodeCount < 180) return false;
+  const densityScale = getGraphDensityScale();
+  const degree = Number(data.degree || 0);
+  if (densityScale < 0.58 && degree < 4) return true;
+  if (densityScale < 0.72 && radius < 7.5 && degree < 6) return true;
+  return false;
 }
 
 function fitCanvasText(context, text, maxWidth) {
@@ -705,6 +856,124 @@ function updateRendererSettings() {
   updateReducers();
 }
 
+async function setCommunityColorMode(enabled) {
+  if (!enabled) {
+    state.settings.colorMode = "label";
+    state.hoveredLegendLabel = null;
+    state.selectedLegendLabel = null;
+    applyColorModeToExistingGraph();
+    setQueryMessage(state.rawNodes.length ? "Coloring nodes by label." : "Run a query to render graph nodes.", "muted");
+    return;
+  }
+
+  try {
+    await loadCommunityMemberships();
+    state.settings.colorMode = "community";
+    state.hoveredLegendLabel = null;
+    state.selectedLegendLabel = null;
+    applyColorModeToExistingGraph();
+    const matchedCount = state.rawNodes.filter(node => getNodeCommunity(node)).length;
+    setQueryMessage(`Community colors enabled (${matchedCount} visible nodes matched to communities).`, matchedCount ? "success" : "muted");
+  } catch (error) {
+    state.settings.colorMode = "label";
+    if (el.communityColorsToggle) el.communityColorsToggle.checked = false;
+    applyColorModeToExistingGraph();
+    setQueryMessage(`Community colors unavailable: ${error.message}`, "error");
+  }
+}
+
+function applyColorModeToExistingGraph() {
+  if (!state.graph?.order) {
+    if (state.rawNodes.length) rebuildGraph();
+    return;
+  }
+
+  state.rawNodes.forEach(node => {
+    if (!state.graph.hasNode(node.id)) return;
+    const attributes = buildNodeAttributes(node);
+    state.graph.mergeNodeAttributes(node.id, {
+      color: attributes.color,
+      kgCommunityId: attributes.kgCommunityId,
+      kgCommunityTitle: attributes.kgCommunityTitle,
+      kgColorGroup: attributes.kgColorGroup,
+      kgColorGroupLabel: attributes.kgColorGroupLabel,
+      properties: attributes.properties,
+      size: attributes.size
+    });
+  });
+
+  renderLegend();
+  renderStats();
+  updateSearchResults();
+  updateReducers();
+
+  if (state.selectedNode && state.graph.hasNode(state.selectedNode)) {
+    renderInspector({ type: "node", id: state.selectedNode }, { details: state.nodeDetailsCache.get(state.selectedNode), skipDetailsLoad: true });
+  } else if (state.selectedEdge && state.graph.hasEdge(state.selectedEdge)) {
+    renderInspector({ type: "edge", id: state.selectedEdge });
+  }
+}
+
+async function loadCommunityMemberships() {
+  if (state.communityMembershipsLoaded || state.communityMembershipsLoading) return;
+  state.communityMembershipsLoading = true;
+  try {
+    const response = await fetch(`${backendBaseUrl}/api/communities/memberships`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.success === false) {
+      throw new Error(payload?.error || payload?.detail || `status ${response.status}`);
+    }
+
+    buildCommunityIndexes(payload?.memberships || []);
+    state.communityMembershipsLoaded = true;
+  } finally {
+    state.communityMembershipsLoading = false;
+  }
+}
+
+function buildCommunityIndexes(memberships) {
+  state.communityByEntityId = new Map();
+  state.communityByEntityKey = new Map();
+  memberships.forEach(item => {
+    const community = {
+      communityId: item.communityId,
+      communityTitle: item.communityTitle || `Community ${item.communityId}`,
+      communityEntityCount: item.communityEntityCount,
+      communityRelationshipCount: item.communityRelationshipCount,
+      entityId: item.entityId,
+      entityLabel: item.entityLabel,
+      entityName: item.entityName
+    };
+    state.communityByEntityId.set(String(item.entityId), community);
+    state.communityByEntityKey.set(buildEntityCommunityKey(item.entityLabel, item.entityName), community);
+  });
+
+  const communityIds = uniqueSorted(memberships.map(item => String(item.communityId)));
+  state.colorByCommunityId = new Map(communityIds.map((id, index) => [id, communityPalette[index % communityPalette.length]]));
+}
+
+function getNodeCommunity(node) {
+  if (!node || state.settings.colorMode !== "community") return null;
+  const properties = node.properties || {};
+  if (node.label !== "Document" && node.label !== "Chunk") {
+    const idMatch = state.communityByEntityId.get(String(properties.id ?? ""));
+    if (idMatch) return idMatch;
+  }
+
+  const name = properties.name || extractNameFromTitle(node.label, node.title);
+  return state.communityByEntityKey.get(buildEntityCommunityKey(node.label, name)) || null;
+}
+
+function buildEntityCommunityKey(label, name) {
+  return `${String(label || "").trim().toLowerCase()}\u001f${String(name || "").trim().toLowerCase()}`;
+}
+
+function extractNameFromTitle(label, title) {
+  const text = String(title || "").trim();
+  const prefix = `${label}:`;
+  return text.startsWith(prefix) ? text.slice(prefix.length).trim() : text;
+}
+
 function updateReducers() {
   if (!state.renderer || !state.graph) return;
   state.renderer.setSetting("nodeReducer", nodeReducer);
@@ -721,7 +990,8 @@ function nodeReducer(node, data) {
   const isSelected = isNodeSelected(node);
   const isHovered = state.hoveredNode === node;
   const activeLegendLabel = getActiveLegendLabel();
-  const matchesLegendHighlight = activeLegendLabel && data.kgLabel === activeLegendLabel;
+  const matchesLegendHighlight = activeLegendLabel && data.kgColorGroup === activeLegendLabel;
+  const isLegendNeighbor = activeLegendLabel && isNodeAdjacentToLegendGroup(node, activeLegendLabel);
   const anchors = getActiveAnchorNodes();
   const hasAnchors = anchors.length > 0;
   const isNeighbor = hasAnchors && anchors.some(anchor => anchor === node || state.graph.hasEdge(anchor, node) || state.graph.hasEdge(node, anchor));
@@ -733,9 +1003,14 @@ function nodeReducer(node, data) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
   }
-  if (state.settings.highlightNeighborhood && activeLegendLabel && !hasAnchors && !matchesLegendHighlight) {
+  if (state.settings.highlightNeighborhood && activeLegendLabel && !hasAnchors && !matchesLegendHighlight && !isLegendNeighbor) {
     reduced.color = colorWithAlpha(baseColor, 0.14);
     reduced.label = "";
+  }
+  if (isLegendNeighbor && !matchesLegendHighlight) {
+    reduced.color = baseColor;
+    reduced.label = data.label;
+    reduced.size = data.size + 2;
   }
   if (matchesSearch) {
     reduced.color = baseColor;
@@ -766,7 +1041,7 @@ function nodeReducer(node, data) {
     reduced.forceLabel = true;
     reduced.zIndex = 10;
   }
-  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered && !matchesLegendHighlight) reduced.label = "";
+  if (!state.settings.showLabels && !matchesSearch && !isSelected && !isHovered && !matchesLegendHighlight && !isLegendNeighbor) reduced.label = "";
   return reduced;
 }
 
@@ -784,7 +1059,7 @@ function edgeReducer(edge, data) {
   const touchesDeselectedRelated = isNodeDeselectedFromNeighborhood(source) || isNodeDeselectedFromNeighborhood(target);
   const touchesAnchor = hasAnchors && anchors.some(anchor => source === anchor || target === anchor);
   const matchesLegendEndpoint = activeLegendLabel
-    && (state.graph.getNodeAttribute(source, "kgLabel") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgLabel") === activeLegendLabel);
+    && (state.graph.getNodeAttribute(source, "kgColorGroup") === activeLegendLabel || state.graph.getNodeAttribute(target, "kgColorGroup") === activeLegendLabel);
   if (state.selectedEdge === edge) {
     reduced.color = "#111827";
     reduced.size = 4;
@@ -808,9 +1083,10 @@ function edgeReducer(edge, data) {
 function isNodeHidden(node, data) {
   if (isNodeSelected(node) || state.hoveredNode === node) return false;
   const activeLegendLabel = getActiveLegendLabel();
-  if (activeLegendLabel && data.kgLabel === activeLegendLabel) return false;
+  if (activeLegendLabel && data.kgColorGroup === activeLegendLabel) return false;
   if (state.colorByLabel.size && !state.filters.nodeTypes.includes(data.kgLabel)) return true;
   if (state.filters.minDegree && (data.degree || 0) < state.filters.minDegree) return true;
+  if (activeLegendLabel && !isNodeAdjacentToLegendGroup(node, activeLegendLabel)) return true;
   if (state.filters.search && !nodeMatchesSearch(node, data, state.filters.search)) {
     const hasMatchingNeighbor = state.rawEdges.some(edge => {
       if (edge.source !== node && edge.target !== node) return false;
@@ -821,6 +1097,16 @@ function isNodeHidden(node, data) {
     if (!hasMatchingNeighbor) return true;
   }
   return false;
+}
+
+function isNodeAdjacentToLegendGroup(node, groupId) {
+  if (!state.graph?.hasNode(node) || !groupId) return false;
+  let related = false;
+  state.graph.forEachNode((candidate, attributes) => {
+    if (related || attributes.kgColorGroup !== groupId) return;
+    related = candidate === node || state.graph.hasEdge(candidate, node) || state.graph.hasEdge(node, candidate);
+  });
+  return related;
 }
 
 function isEdgeHidden(data) {
@@ -846,15 +1132,25 @@ function setLayout(layout, animate = true) {
 
 function applyLayout(layout, animate) {
   if (!state.graph || !state.graph.order) return;
-  if (layout === "circular") circular.assign(state.graph, { scale: Math.max(1, state.graph.order / 6) });
-  if (layout === "random") random.assign(state.graph, { scale: Math.max(1, state.graph.order / 5) });
-  if (layout === "circlepack") circlepack.assign(state.graph, { hierarchyAttributes: ["kgLabel"], center: 0, scale: Math.max(1, state.graph.order / 4) });
+  const spread = getLayoutSpreadScale();
+  if (layout === "circular") circular.assign(state.graph, { scale: Math.max(1, (state.graph.order / 6) * spread) });
+  if (layout === "random") random.assign(state.graph, { scale: Math.max(1, (state.graph.order / 5) * spread) });
+  if (layout === "circlepack") circlepack.assign(state.graph, { hierarchyAttributes: ["kgLabel"], center: 0, scale: Math.max(1, (state.graph.order / 4) * spread) });
   if (layout === "grid") assignGridLayout(state.graph);
   if (layout === "force") {
-    random.assign(state.graph, { scale: Math.max(1, state.graph.order / 4) });
-    forceAtlas2.assign(state.graph, { iterations: state.graph.order < 80 ? 180 : 90, settings: { gravity: 0.8, scalingRatio: 12, slowDown: 8, barnesHutOptimize: state.graph.order > 80 } });
+    random.assign(state.graph, { scale: Math.max(1, (state.graph.order / 4) * spread) });
+    forceAtlas2.assign(state.graph, { iterations: state.graph.order < 80 ? 180 : 120, settings: { gravity: 0.35 * getForceControlMultiplier("centerPull"), scalingRatio: 18 * spread, slowDown: 10, barnesHutOptimize: state.graph.order > 80 } });
   }
   if (animate && state.renderer) state.renderer.getCamera().animatedReset({ duration: 250 });
+}
+
+function getLayoutSpreadScale() {
+  const nodeCount = state.graph?.order || state.rawNodes.length || 1;
+  const densityScale = getGraphDensityScale();
+  const countPressure = Math.min(1.8, Math.sqrt(nodeCount / 120));
+  const viewportPressure = 1 / Math.max(0.55, densityScale);
+  const spacing = getForceControlMultiplier("spacing");
+  return Math.max(0.7, Math.min(3.4, countPressure * viewportPressure * spacing));
 }
 
 function toggleWorkerLayout(layout) {
@@ -930,16 +1226,20 @@ function getWorkerLayoutConstructor(layout) {
 }
 
 function getWorkerLayoutOptions(layout) {
+  const spread = getLayoutSpreadScale();
+  const centerPull = getForceControlMultiplier("centerPull");
+  const repel = getForceControlMultiplier("spacing");
+  const linkPull = getForceControlMultiplier("linkPull");
   if (layout === "force") {
-    return { settings: { attraction: 0.0006, repulsion: 0.12, gravity: 0.0002 } };
+    return { settings: { attraction: 0.00028 * linkPull, repulsion: 0.22 * spread * repel, gravity: 0.00006 * centerPull } };
   }
 
   if (layout === "forceatlas2") {
-    return { settings: { gravity: 0.8, scalingRatio: 12, slowDown: 8, barnesHutOptimize: state.graph.order > 80 } };
+    return { settings: { gravity: 0.32 * centerPull, scalingRatio: 22 * spread * repel, slowDown: 10, barnesHutOptimize: state.graph.order > 80 } };
   }
 
   if (layout === "noverlap") {
-    return { settings: { margin: 6, ratio: 1.2, expansion: 1.1 } };
+    return { settings: { margin: 12 * spread * repel, ratio: 1.65, expansion: 1.35 } };
   }
 
   return {};
@@ -1315,7 +1615,7 @@ function restoreGraphHistory(snapshot) {
   state.selectedNode = snapshot.selectedNode && state.graph?.hasNode(snapshot.selectedNode) ? snapshot.selectedNode : Array.from(state.selectedNodes).at(-1) || null;
   if (state.selectedNode) state.selectedNodes.add(state.selectedNode);
   state.selectedEdge = snapshot.selectedEdge && state.graph?.hasEdge(snapshot.selectedEdge) ? snapshot.selectedEdge : null;
-  state.selectedLegendLabel = snapshot.selectedLegendLabel && state.colorByLabel.has(snapshot.selectedLegendLabel) ? snapshot.selectedLegendLabel : null;
+  state.selectedLegendLabel = snapshot.selectedLegendLabel && hasLegendGroup(snapshot.selectedLegendLabel) ? snapshot.selectedLegendLabel : null;
 
   if (state.selectedNode) renderInspector({ type: "node", id: state.selectedNode });
   else if (state.selectedEdge) renderInspector({ type: "edge", id: state.selectedEdge });
@@ -1700,22 +2000,46 @@ function renderPropertyTable(properties) {
 
 function renderLegend() {
   el.legend.innerHTML = "";
-  for (const [label, color] of state.colorByLabel.entries()) {
+  for (const group of getLegendGroups()) {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "kg-legend-item";
-    item.dataset.kgLabel = label;
-    item.setAttribute("aria-pressed", state.selectedLegendLabel === label ? "true" : "false");
-    item.title = `Highlight ${label} nodes`;
-    item.innerHTML = `<span style="background:${color}"></span>${escapeHtml(label)}`;
-    item.addEventListener("mouseenter", () => setLegendHover(label));
-    item.addEventListener("mouseleave", () => clearLegendHover(label));
-    item.addEventListener("focus", () => setLegendHover(label));
-    item.addEventListener("blur", () => clearLegendHover(label));
-    item.addEventListener("click", () => toggleLegendSelection(label));
+    item.className = `kg-legend-item${group.isCommunity ? " kg-legend-community" : ""}`;
+    item.dataset.kgLabel = group.id;
+    item.setAttribute("aria-pressed", state.selectedLegendLabel === group.id ? "true" : "false");
+    item.title = `Highlight ${group.label} nodes`;
+    item.innerHTML = `<span class="kg-legend-swatch" style="background:${group.color}"></span><span class="kg-legend-label">${escapeHtml(group.label)}</span><span class="kg-legend-short">${escapeHtml(group.shortLabel || group.label)}</span>`;
+    item.addEventListener("mouseenter", () => setLegendHover(group.id));
+    item.addEventListener("mouseleave", () => clearLegendHover(group.id));
+    item.addEventListener("focus", () => setLegendHover(group.id));
+    item.addEventListener("blur", () => clearLegendHover(group.id));
+    item.addEventListener("click", () => toggleLegendSelection(group.id));
     el.legend.appendChild(item);
   }
   updateLegendActiveState();
+}
+
+function getLegendGroups() {
+  if (!state.graph) {
+    return Array.from(state.colorByLabel.entries()).map(([label, color]) => ({ id: `label:${label}`, label, color }));
+  }
+
+  const groups = new Map();
+  state.graph.forEachNode((node, data) => {
+    if (!data.kgColorGroup || groups.has(data.kgColorGroup)) return;
+    groups.set(data.kgColorGroup, {
+      id: data.kgColorGroup,
+      label: data.kgColorGroupLabel || data.kgLabel || data.kgColorGroup,
+      shortLabel: data.kgCommunityId ? `C${data.kgCommunityId}` : data.kgLabel || data.kgColorGroup,
+      isCommunity: Boolean(data.kgCommunityId),
+      color: data.color || palette[0]
+    });
+  });
+
+  return Array.from(groups.values()).sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function hasLegendGroup(groupId) {
+  return getLegendGroups().some(group => group.id === groupId);
 }
 
 function getActiveLegendLabel() {
@@ -1765,7 +2089,10 @@ function renderStats() {
   const visibleNodes = getVisibleNodeCount();
   const visibleEdges = getVisibleEdgeCount();
   const density = state.rawNodes.length > 1 ? (state.rawEdges.length / (state.rawNodes.length * (state.rawNodes.length - 1))).toFixed(3) : "0.000";
-  el.stats.innerHTML = `<span>${state.rawNodes.length} nodes</span><span>${state.rawEdges.length} edges</span><span>${visibleNodes} visible nodes</span><span>${visibleEdges} visible edges</span><span>density ${density}</span>`;
+  const communityStat = state.settings.colorMode === "community" && state.graph
+    ? `<span>${new Set(state.rawNodes.map(node => getNodeCommunity(node)?.communityId).filter(Boolean)).size} communities</span>`
+    : "";
+  el.stats.innerHTML = `<span>${state.rawNodes.length} nodes</span><span>${state.rawEdges.length} edges</span><span>${visibleNodes} visible nodes</span><span>${visibleEdges} visible edges</span>${communityStat}<span>density ${density}</span>`;
 }
 
 function getVisibleNodeCount() {
@@ -1835,4 +2162,12 @@ function formatValue(value) {
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function debounce(callback, delayMs) {
+  let timeoutId = null;
+  return (...args) => {
+    window.clearTimeout(timeoutId);
+    timeoutId = window.setTimeout(() => callback(...args), delayMs);
+  };
 }
