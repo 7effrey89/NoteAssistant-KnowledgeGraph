@@ -109,11 +109,11 @@ LIMIT 150</textarea>
                     <button class="kg-layout-choice" data-kg-layout="circular" type="button"><strong>Circular</strong><span>Nodes arranged in a circle</span></button>
                     <button class="kg-layout-choice" data-kg-layout="circlepack" type="button"><strong>Circle Pack</strong><span>Hierarchical circle packing</span></button>
                 </div>
-                <div class="kg-layout-group-title kg-layout-group-title-spaced">Worker Layouts (Continuous)</div>
+                <div class="kg-layout-group-title kg-layout-group-title-spaced">Force Layouts (Auto-settle)</div>
                 <div class="kg-layout-stack kg-layout-buttons">
-                    <button class="kg-layout-choice" data-kg-worker-layout="force" type="button"><strong>Force</strong><span>Force-directed layout (worker)</span></button>
-                    <button class="kg-layout-choice" data-kg-worker-layout="forceatlas2" type="button"><strong>ForceAtlas2</strong><span>Advanced force-directed (worker)</span></button>
-                    <button class="kg-layout-choice" data-kg-worker-layout="noverlap" type="button"><strong>No Overlap</strong><span>Prevents node overlap (worker)</span></button>
+                    <button class="kg-layout-choice" data-kg-worker-layout="force" type="button"><strong>Force</strong><span>Spread nodes, then freeze</span></button>
+                    <button class="kg-layout-choice" data-kg-worker-layout="forceatlas2" type="button"><strong>ForceAtlas2</strong><span>Advanced spread, then freeze</span></button>
+                    <button class="kg-layout-choice" data-kg-worker-layout="noverlap" type="button"><strong>No Overlap</strong><span>Separate overlaps, then freeze</span></button>
                 </div>
                 <div class="kg-layout-status" id="kgLayoutStatus">
                     <span id="kgLayoutStatusText"><strong>Current:</strong> none</span>
@@ -122,13 +122,13 @@ LIMIT 150</textarea>
                 <details class="kg-force-controls" open>
                     <summary>Forces</summary>
                     <div class="kg-force-control-grid">
-                        <label for="kgNodeScaleSlider"><span>Node scale</span><output id="kgNodeScaleValue">65%</output></label>
+                        <label for="kgNodeScaleSlider"><span>Node scale <span class="kg-force-info" title="Changes rendered node radius immediately. Lower it when dense graphs look like overlapping bubbles; raise it for sparse graphs.">i</span></span><output id="kgNodeScaleValue">65%</output></label>
                         <input class="form-range" id="kgNodeScaleSlider" type="range" min="35" max="110" value="65" />
-                        <label for="kgSpacingSlider"><span>Spacing</span><output id="kgSpacingValue">135%</output></label>
+                        <label for="kgSpacingSlider"><span>Spacing <span class="kg-force-info" title="Repel force. Higher values push nodes and clusters farther apart during Force or ForceAtlas2 settling.">i</span></span><output id="kgSpacingValue">135%</output></label>
                         <input class="form-range" id="kgSpacingSlider" type="range" min="70" max="240" value="135" />
-                        <label for="kgCenterPullSlider"><span>Center pull</span><output id="kgCenterPullValue">30%</output></label>
+                        <label for="kgCenterPullSlider"><span>Center pull <span class="kg-force-info" title="Centre force. Higher values pull the whole graph back toward the middle; lower values let clusters drift outward and spread.">i</span></span><output id="kgCenterPullValue">30%</output></label>
                         <input class="form-range" id="kgCenterPullSlider" type="range" min="0" max="120" value="30" />
-                        <label for="kgLinkPullSlider"><span>Link pull</span><output id="kgLinkPullValue">55%</output></label>
+                        <label for="kgLinkPullSlider"><span>Link pull <span class="kg-force-info" title="Link force. Higher values keep connected nodes closer together; lower values loosen links so clusters can separate.">i</span></span><output id="kgLinkPullValue">55%</output></label>
                         <input class="form-range" id="kgLinkPullSlider" type="range" min="10" max="120" value="55" />
                     </div>
                 </details>
@@ -153,7 +153,7 @@ LIMIT 150</textarea>
                     <button class="kg-canvas-control" id="kgCanvasZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">
                         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M10.5 7.5v6M7.5 10.5h6M15.5 15.5 21 21"/></svg>
                     </button>
-                    <div class="kg-camera-rail" aria-hidden="true"><span></span></div>
+                        <div class="kg-camera-rail" aria-hidden="true"><span></span></div>
                     <button class="kg-canvas-control" id="kgCanvasZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">
                         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M7.5 10.5h6M15.5 15.5 21 21"/></svg>
                     </button>

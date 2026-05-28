@@ -42,6 +42,7 @@ const state = {
   currentWorkerLayout: null,
   lastWorkerLayout: null,
   layoutWorker: null,
+  layoutSettleTimer: null,
   lastPayload: null,
   history: [],
   historyIndex: -1,
@@ -580,11 +581,31 @@ function getForceControlMultiplier(key) {
   return (Number.isFinite(value) ? value : 100) / 100;
 }
 
+function getForceControlPower(key, min, max, fallback = 100) {
+  const value = Number(state.settings.forceControls?.[key]);
+  const normalized = Math.max(0, Math.min(1, (Number.isFinite(value) ? value : fallback) / 100));
+  return min * Math.pow(max / min, normalized);
+}
+
 function restartCurrentWorkerLayout() {
-  if (!state.currentWorkerLayout || !state.layoutWorker?.isRunning?.()) return;
-  const layout = state.currentWorkerLayout;
-  stopWorkerLayout({ preserveCurrent: true });
+  if (!state.graph?.order) return;
+  const layout = getSelectedWorkerLayout();
+  if (!layout) {
+    setQueryMessage("Choose Force, ForceAtlas2, or No Overlap to apply spacing, center pull, and link pull.", "muted");
+    return;
+  }
+
+  if (state.layoutWorker?.isRunning?.()) {
+    stopWorkerLayout({ preserveCurrent: true });
+  }
+
   startWorkerLayout(layout);
+}
+
+function getSelectedWorkerLayout() {
+  if (state.currentWorkerLayout) return state.currentWorkerLayout;
+  if (state.lastWorkerLayout) return state.lastWorkerLayout;
+  return isWorkerLayout(state.currentLayout) ? state.currentLayout : null;
 }
 
 function buildEdgeAttributes(edge) {
@@ -1149,7 +1170,7 @@ function getLayoutSpreadScale() {
   const densityScale = getGraphDensityScale();
   const countPressure = Math.min(1.8, Math.sqrt(nodeCount / 120));
   const viewportPressure = 1 / Math.max(0.55, densityScale);
-  const spacing = getForceControlMultiplier("spacing");
+  const spacing = getForceControlPower("spacing", 0.45, 4.5, 135);
   return Math.max(0.7, Math.min(3.4, countPressure * viewportPressure * spacing));
 }
 
@@ -1189,6 +1210,7 @@ function startWorkerLayout(layout) {
   try {
     state.layoutWorker = new WorkerCtor(state.graph, getWorkerLayoutOptions(layout));
     state.layoutWorker.start();
+    scheduleWorkerLayoutSettle(layout);
     updateLayoutStatus();
     refreshRenderer();
   } catch (error) {
@@ -1200,6 +1222,7 @@ function startWorkerLayout(layout) {
 }
 
 function stopWorkerLayout(options = {}) {
+  clearWorkerLayoutSettleTimer();
   if (state.layoutWorker) {
     state.layoutWorker.stop?.();
     state.layoutWorker.kill?.();
@@ -1212,6 +1235,32 @@ function stopWorkerLayout(options = {}) {
   if (options.clearLast) state.lastWorkerLayout = null;
   document.querySelectorAll("[data-kg-worker-layout]").forEach(button => button.classList.remove("active"));
   updateLayoutStatus();
+  if (options.autoSettled && state.lastWorkerLayout) {
+    setQueryMessage(`${getWorkerLayoutLabel(state.lastWorkerLayout)} layout settled and stopped. Move a force slider or press Start to settle it again.`, "muted");
+  }
+}
+
+function scheduleWorkerLayoutSettle(layout) {
+  clearWorkerLayoutSettleTimer();
+  const duration = getWorkerLayoutSettleDuration(layout);
+  state.layoutSettleTimer = window.setTimeout(() => {
+    if (state.currentWorkerLayout !== layout || !state.layoutWorker?.isRunning?.()) return;
+    stopWorkerLayout({ autoSettled: true });
+    recordGraphHistory();
+  }, duration);
+}
+
+function clearWorkerLayoutSettleTimer() {
+  if (!state.layoutSettleTimer) return;
+  window.clearTimeout(state.layoutSettleTimer);
+  state.layoutSettleTimer = null;
+}
+
+function getWorkerLayoutSettleDuration(layout) {
+  const nodeCount = state.graph?.order || state.rawNodes.length || 0;
+  if (layout === "noverlap") return Math.min(4800, Math.max(2200, 1600 + nodeCount * 8));
+  if (layout === "force") return Math.min(7200, Math.max(3600, 2600 + nodeCount * 12));
+  return Math.min(8200, Math.max(4200, 3200 + nodeCount * 12));
 }
 
 function isWorkerLayout(layout) {
@@ -1227,15 +1276,15 @@ function getWorkerLayoutConstructor(layout) {
 
 function getWorkerLayoutOptions(layout) {
   const spread = getLayoutSpreadScale();
-  const centerPull = getForceControlMultiplier("centerPull");
-  const repel = getForceControlMultiplier("spacing");
-  const linkPull = getForceControlMultiplier("linkPull");
+  const centerPull = getForceControlPower("centerPull", 0.02, 3.2, 30);
+  const repel = getForceControlPower("spacing", 0.45, 4.5, 135);
+  const linkPull = getForceControlPower("linkPull", 0.12, 3.8, 55);
   if (layout === "force") {
-    return { settings: { attraction: 0.00028 * linkPull, repulsion: 0.22 * spread * repel, gravity: 0.00006 * centerPull } };
+    return { settings: { attraction: 0.0002 * linkPull, repulsion: 0.28 * spread * repel, gravity: 0.00005 * centerPull } };
   }
 
   if (layout === "forceatlas2") {
-    return { settings: { gravity: 0.32 * centerPull, scalingRatio: 22 * spread * repel, slowDown: 10, barnesHutOptimize: state.graph.order > 80 } };
+    return { settings: { gravity: 0.28 * centerPull, scalingRatio: (26 * spread * repel) / Math.sqrt(linkPull), edgeWeightInfluence: Math.min(2, Math.max(0, linkPull - 0.3)), slowDown: 10, barnesHutOptimize: state.graph.order > 80 } };
   }
 
   if (layout === "noverlap") {
@@ -1256,7 +1305,7 @@ function hasFinitePositions(graph) {
 function updateLayoutStatus() {
   if (!el.layoutStatusText) return;
   if (state.currentWorkerLayout && state.layoutWorker?.isRunning?.()) {
-    el.layoutStatusText.innerHTML = `<strong>Current:</strong> <span class="kg-layout-running">${escapeHtml(getWorkerLayoutLabel(state.currentWorkerLayout))} is running</span>`;
+    el.layoutStatusText.innerHTML = `<strong>Current:</strong> <span class="kg-layout-running">${escapeHtml(getWorkerLayoutLabel(state.currentWorkerLayout))} is settling</span>`;
     updateWorkerLayoutToggle(true, state.currentWorkerLayout);
     return;
   }
@@ -1278,7 +1327,7 @@ function updateWorkerLayoutToggle(isRunning, layout) {
   el.workerLayoutToggleBtn.classList.toggle("running", isRunning);
   el.workerLayoutToggleBtn.setAttribute("aria-pressed", isRunning ? "true" : "false");
   el.workerLayoutToggleBtn.title = layout
-    ? `${isRunning ? "Stop" : "Start"} ${getWorkerLayoutLabel(layout)} worker layout`
+    ? `${isRunning ? "Stop" : "Start"} ${getWorkerLayoutLabel(layout)} layout settling`
     : "Choose a worker layout first";
 }
 
