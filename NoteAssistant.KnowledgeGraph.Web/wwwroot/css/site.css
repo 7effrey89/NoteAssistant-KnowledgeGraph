@@ -1904,11 +1904,15 @@ body.kg-inspector-resizing {
   justify-content: center;
 }
 
-.db-mgn-selection-header input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  cursor: pointer;
+.db-mgn-selection-header .db-mgn-icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.db-mgn-more-btn.has-selection {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #0f766e;
 }
 
 .db-mgn-selection-dialog {
