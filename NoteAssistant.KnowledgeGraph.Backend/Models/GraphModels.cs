@@ -137,6 +137,8 @@ public sealed record QueryAssistantRequest(string Prompt);
 
 public sealed record QueryAssistantResponse(string SuggestedCypher, string Explanation);
 
+public sealed record TranscriptSummaryResponse(bool Success, string? Error, string SummaryMarkdown, string SuggestedFileName, int FileCount, int CharacterCount, string? OutputPath = null);
+
 public sealed record HybridRetrievalRequest(
     string Query,
     int MaxHops = 2,

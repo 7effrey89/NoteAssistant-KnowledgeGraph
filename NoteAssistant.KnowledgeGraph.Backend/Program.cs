@@ -146,6 +146,30 @@ static IReadOnlyList<string> ParseTags(string? value)
         .ToArray();
 }
 
+static string SanitizeFileName(string value)
+{
+    var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+    var safe = string.Concat(value.Select(ch => invalid.Contains(ch) ? '-' : ch)).Trim();
+    return string.IsNullOrWhiteSpace(safe) ? "meeting-summary" : safe;
+}
+
+static string GetLeafFolderName(string? pathOrName)
+{
+    if (string.IsNullOrWhiteSpace(pathOrName))
+    {
+        return string.Empty;
+    }
+
+    var trimmed = pathOrName.Trim().Trim('"').TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    if (string.IsNullOrWhiteSpace(trimmed))
+    {
+        return string.Empty;
+    }
+
+    var fileName = Path.GetFileName(trimmed);
+    return string.IsNullOrWhiteSpace(fileName) ? trimmed : fileName;
+}
+
 static DocumentMetadata ParseMetadata(IFormCollection form)
 {
     var documentType = NormalizeOptional(form["documentType"].ToString());
@@ -958,6 +982,111 @@ SELECT json_build_object(
         results
     });
 });
+
+app.MapPost("/api/noteassistant/summarize-transcript", async (HttpRequest request, IFoundryInferenceClient foundry, IHostEnvironment environment, CancellationToken cancellationToken) =>
+{
+    if (!foundry.IsConfigured)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "Foundry is not configured.", string.Empty, string.Empty, 0, 0));
+    }
+
+    if (!request.HasFormContentType)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "Upload one or more transcript text files as multipart/form-data.", string.Empty, string.Empty, 0, 0));
+    }
+
+    var form = await request.ReadFormAsync(cancellationToken);
+    var files = form.Files
+        .Where(file => file.Length > 0)
+        .OrderBy(file => file.FileName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (files.Count == 0)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "At least one transcript text file is required.", string.Empty, string.Empty, 0, 0));
+    }
+
+    var outputFolderPath = form["outputFolderPath"].ToString().Trim().Trim('"');
+    if (string.IsNullOrWhiteSpace(outputFolderPath))
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "Output folder path is required.", string.Empty, string.Empty, files.Count, 0));
+    }
+
+    var originalFolderPath = form["originalFolderPath"].ToString().Trim().Trim('"');
+    if (string.IsNullOrWhiteSpace(originalFolderPath))
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "Original transcript folder path or name is required. Fill in the field so the summary can be named correctly.", string.Empty, string.Empty, files.Count, 0));
+    }
+
+    string fullOutputFolderPath;
+    try
+    {
+        fullOutputFolderPath = Path.GetFullPath(outputFolderPath);
+        Directory.CreateDirectory(fullOutputFolderPath);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, $"Could not access output folder: {ex.Message}", string.Empty, string.Empty, files.Count, 0));
+    }
+
+    var unsupportedFile = files.FirstOrDefault(file =>
+    {
+        var extension = Path.GetExtension(file.FileName);
+        return !extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
+               && !extension.Equals(".md", StringComparison.OrdinalIgnoreCase);
+    });
+    if (unsupportedFile is not null)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, $"Unsupported transcript file type: {unsupportedFile.FileName}. Use .txt or .md files.", string.Empty, string.Empty, files.Count, 0));
+    }
+
+    var transcript = new StringBuilder();
+    foreach (var file in files)
+    {
+        await using var stream = file.OpenReadStream();
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var text = await reader.ReadToEndAsync(cancellationToken);
+        transcript.AppendLine($"--- Transcript chunk: {Path.GetFileName(file.FileName)} ---");
+        transcript.AppendLine(text.Trim());
+        transcript.AppendLine();
+    }
+
+    var transcriptText = transcript.ToString().Trim();
+    if (string.IsNullOrWhiteSpace(transcriptText))
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, "Transcript files were empty.", string.Empty, string.Empty, files.Count, 0));
+    }
+
+    var promptPath = Path.Combine(environment.ContentRootPath, "prompt_template", "noteassistantTranscriptSummarizerAgent_SystemPrompt.txt");
+    var systemPrompt = File.Exists(promptPath)
+        ? await File.ReadAllTextAsync(promptPath, cancellationToken)
+        : "You are the NoteAssistant Transcript Summarizer Agent. Summarize the transcript with traceable timestamp references.";
+
+    var completion = await foundry.CompletePromptAsync(
+        systemPrompt,
+        $"Transcript files: {files.Count}\n\n{transcriptText}",
+        "NoteAssistant Transcript Summarizer Agent",
+        "summarize-transcript",
+        cancellationToken);
+
+    var originalFolderName = GetLeafFolderName(originalFolderPath);
+    var safeStem = SanitizeFileName(string.IsNullOrWhiteSpace(originalFolderName) ? "meeting-summary" : originalFolderName);
+
+    var summaryMarkdown = completion.Content.Trim();
+    var suggestedFileName = $"{safeStem}_summary_v2.md";
+    var outputPath = Path.Combine(fullOutputFolderPath, suggestedFileName);
+    try
+    {
+        await File.WriteAllTextAsync(outputPath, summaryMarkdown, Encoding.UTF8, cancellationToken);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new TranscriptSummaryResponse(false, $"Could not write summary file: {ex.Message}", summaryMarkdown, suggestedFileName, files.Count, transcriptText.Length));
+    }
+
+    return Results.Ok(new TranscriptSummaryResponse(true, null, summaryMarkdown, suggestedFileName, files.Count, transcriptText.Length, outputPath));
+})
+.DisableAntiforgery();
 
 app.MapPost("/api/documents/{documentId:long}/ingest", async (long documentId, IngestionStore store, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {

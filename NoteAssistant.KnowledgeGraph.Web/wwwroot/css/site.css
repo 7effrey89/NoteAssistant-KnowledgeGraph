@@ -593,6 +593,22 @@ body {
   overflow-x: auto;
 }
 
+.noteassistant-page .na-file-list {
+  display: grid;
+  gap: 6px;
+  min-height: 76px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.noteassistant-page .na-summary-preview {
+  min-height: 520px;
+  resize: vertical;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .na-results-table {
   min-width: 1320px;
 }
