@@ -18,9 +18,9 @@
         <section class="db-mgn-panel" aria-label="Upload entity image">
             <div class="kg-section-title">Upload</div>
             <form id="entityImageUploadForm" class="db-mgn-upload-form" enctype="multipart/form-data">
-                <label class="form-label" for="entityImageFile">Image file</label>
-                <input class="form-control" id="entityImageFile" name="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" />
-                <button class="btn btn-success" type="submit">Upload image</button>
+                <label class="form-label" for="entityImageFile">Image files</label>
+                <input class="form-control" id="entityImageFile" name="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" multiple />
+                <button class="btn btn-success" type="submit">Upload images</button>
             </form>
             <div class="db-mgn-message" id="entityImageUploadMessage"></div>
 
@@ -58,6 +58,7 @@
                     <button class="btn btn-outline-secondary btn-sm" id="selectVisibleEntitiesBtn" type="button">Select visible</button>
                     <button class="btn btn-outline-secondary btn-sm" id="deselectVisibleEntitiesBtn" type="button">Deselect visible</button>
                     <button class="btn btn-outline-secondary btn-sm" id="selectMissingVisualBtn" type="button">Select missing visual</button>
+                    <button class="btn btn-primary btn-sm" id="assignSelectedVisualBtn" type="button">Assign selected visual to checked</button>
                 </div>
             </dialog>
             <div class="db-mgn-action-group" aria-label="AI suggestion actions">

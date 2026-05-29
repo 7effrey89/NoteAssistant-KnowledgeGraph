@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Organization" fill="none">
+  <rect width="64" height="64" rx="14" fill="#EEF2FF"/>
+  <rect x="24" y="10" width="16" height="12" rx="3" fill="#FFFFFF" stroke="#4F46E5" stroke-width="3"/>
+  <rect x="10" y="42" width="16" height="12" rx="3" fill="#FFFFFF" stroke="#4F46E5" stroke-width="3"/>
+  <rect x="24" y="42" width="16" height="12" rx="3" fill="#FFFFFF" stroke="#4F46E5" stroke-width="3"/>
+  <rect x="38" y="42" width="16" height="12" rx="3" fill="#FFFFFF" stroke="#4F46E5" stroke-width="3"/>
+  <path d="M32 22v10M18 42V32h28v10M32 32v10" stroke="#3730A3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

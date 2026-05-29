@@ -28,6 +28,7 @@ const el = {
   selectVisibleBtn: document.getElementById("selectVisibleEntitiesBtn"),
   deselectVisibleBtn: document.getElementById("deselectVisibleEntitiesBtn"),
   selectMissingBtn: document.getElementById("selectMissingVisualBtn"),
+  assignSelectedVisualBtn: document.getElementById("assignSelectedVisualBtn"),
   parallelismInput: document.getElementById("entityVisualParallelismInput"),
   suggestBtn: document.getElementById("suggestVisualBtn"),
   applySuggestionsBtn: document.getElementById("applySuggestedVisualBtn")
@@ -46,6 +47,7 @@ el.visualMode?.addEventListener("change", () => {
 el.selectVisibleBtn?.addEventListener("click", () => selectEntities(getVisibleEntities().map(entity => entity.id)));
 el.deselectVisibleBtn?.addEventListener("click", () => deselectEntities(getVisibleEntities().map(entity => entity.id)));
 el.selectMissingBtn?.addEventListener("click", () => selectEntities(getVisibleEntities().filter(entity => !getAssignedUrl(entity, getVisualMode())).map(entity => entity.id)));
+el.assignSelectedVisualBtn?.addEventListener("click", assignSelectedVisualToChecked);
 el.suggestBtn?.addEventListener("click", suggestVisuals);
 el.applySuggestionsBtn?.addEventListener("click", applySuggestions);
 
@@ -84,30 +86,36 @@ async function loadEntities() {
 
 async function uploadImage(event) {
   event.preventDefault();
-  const file = el.imageFile?.files?.[0];
-  if (!file) {
-    setUploadMessage("Choose an image file first.", "error");
+  const files = [...(el.imageFile?.files || [])];
+  if (!files.length) {
+    setUploadMessage("Choose one or more image files first.", "error");
     return;
   }
 
-  const formData = new FormData();
-  formData.append("file", file);
-  setUploadMessage("Uploading...", "muted");
-  const response = await fetch("/Home/UploadEntityImage", {
-    method: "POST",
-    body: formData
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    setUploadMessage(payload?.error || `Upload failed (${response.status}).`, "error");
-    return;
+  setUploadMessage(`Uploading ${files.length} image${files.length === 1 ? "" : "s"}...`, "muted");
+  const uploadedFiles = [];
+  for (const file of files) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/Home/UploadEntityImage", {
+      method: "POST",
+      body: formData
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      setUploadMessage(payload?.error || `Upload failed for ${file.name} (${response.status}).`, "error");
+      return;
+    }
+
+    await upsertAsset(payload.fileName, payload.url, "");
+    uploadedFiles.push(payload);
   }
 
-  await upsertAsset(payload.fileName, payload.url, "");
-  setUploadMessage(`Uploaded ${payload.fileName}. Add a description below so suggestions can use it.`, "success");
+  setUploadMessage(`Uploaded ${uploadedFiles.length} image${uploadedFiles.length === 1 ? "" : "s"}. Add descriptions below so suggestions can use them.`, "success");
   el.imageFile.value = "";
   await loadImages();
-  const uploaded = state.images.find(image => image.url === payload.url) || payload;
+  const lastUploaded = uploadedFiles[uploadedFiles.length - 1];
+  const uploaded = state.images.find(image => image.url === lastUploaded.url) || lastUploaded;
   selectImage(uploaded);
 }
 
@@ -254,7 +262,7 @@ function renderEntities() {
   table.className = "db-mgn-entity-table";
   table.innerHTML = `
     <div class="db-mgn-entity-table-header" role="row">
-      <div class="db-mgn-selection-header"><input type="checkbox" data-selection-menu aria-label="Selection options" title="Selection options" /></div>
+      <div class="db-mgn-selection-header"><button class="db-mgn-icon-btn db-mgn-more-btn" type="button" data-selection-menu aria-label="Selection options" title="Selection options">${iconSvg("more")}</button></div>
       <div>Visual</div>
       <div>Entity Name</div>
       <div>Description</div>
@@ -262,7 +270,6 @@ function renderEntities() {
     </div>`;
   const selectionMenu = table.querySelector("[data-selection-menu]");
   selectionMenu.addEventListener("click", event => {
-    event.preventDefault();
     openSelectionDialog(selectionMenu);
   });
   updateSelectionMenuState(selectionMenu, filtered);
@@ -344,6 +351,30 @@ async function clearAllVisuals(entity) {
   await updateVisual(entity.id, "pictogram", null);
 }
 
+async function assignSelectedVisualToChecked() {
+  const mode = getVisualMode();
+  const checkedEntities = getVisibleEntities().filter(entity => state.selectedEntityIds.has(entity.id));
+  if (!state.selectedImageUrl) {
+    setStatus("Select an image first");
+    closeSelectionDialog();
+    return;
+  }
+
+  if (!checkedEntities.length) {
+    setStatus("Check one or more visible entities first");
+    closeSelectionDialog();
+    return;
+  }
+
+  closeSelectionDialog();
+  setStatus(`Assigning ${mode} to ${checkedEntities.length} checked ${checkedEntities.length === 1 ? "entity" : "entities"}`);
+  for (const entity of checkedEntities) {
+    await updateVisual(entity.id, mode, state.selectedImageUrl, { render: false });
+  }
+  renderEntities();
+  setStatus(`Assigned ${mode} to ${checkedEntities.length} checked ${checkedEntities.length === 1 ? "entity" : "entities"}`);
+}
+
 async function updateVisual(entityId, mode, url, options = {}) {
   setStatus("Saving");
   const response = await fetch(`${backendBaseUrl}/api/entities/visual`, {
@@ -399,11 +430,14 @@ function closeSelectionDialog() {
   else el.selectionDialog.removeAttribute("open");
 }
 
-function updateSelectionMenuState(input, visibleEntities) {
+function updateSelectionMenuState(button, visibleEntities) {
   const visibleIds = visibleEntities.map(entity => entity.id);
   const selectedCount = visibleIds.filter(id => state.selectedEntityIds.has(id)).length;
-  input.checked = visibleIds.length > 0 && selectedCount === visibleIds.length;
-  input.indeterminate = selectedCount > 0 && selectedCount < visibleIds.length;
+  button.classList.toggle("has-selection", selectedCount > 0);
+  button.title = selectedCount > 0
+    ? `Selection options (${selectedCount} visible selected)`
+    : "Selection options";
+  button.setAttribute("aria-label", button.title);
 }
 
 async function suggestVisuals(entityIdsOverride = null) {
@@ -496,5 +530,6 @@ function iconSvg(name) {
   if (name === "save") return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-7h8v7"/></svg>';
   if (name === "eraser") return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 21-4-4 9.5-9.5 4 4L7 21Z"/><path d="m14 5 5 5M7 21h13M11.5 17.5 6.5 12.5"/></svg>';
   if (name === "trash") return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m6 6 1 15h10l1-15"/><path d="M10 11v6M14 11v6"/></svg>';
+  if (name === "more") return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>';
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="M8.5 9.5h7M8.5 14.5h7M12 7v10"/></svg>';
 }
