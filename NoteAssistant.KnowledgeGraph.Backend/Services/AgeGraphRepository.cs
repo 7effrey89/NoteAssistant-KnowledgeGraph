@@ -340,6 +340,56 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
     }
 
+    public async Task<(bool Success, string? Error)> ValidateReadOnlyCypherAsync(string cypher, string graphName, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return (false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).");
+        }
+
+        if (string.IsNullOrWhiteSpace(cypher))
+        {
+            return (false, "Cypher query text is required.");
+        }
+
+        var normalized = cypher.Trim();
+        if (!IsReadOnlyCypher(normalized))
+        {
+            return (false, "Only read-only Cypher is allowed (MATCH/OPTIONAL MATCH/WITH/UNWIND/RETURN/ORDER BY/LIMIT/SKIP/WHERE).");
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            var validationQuery = ForceLimit(normalized, 1);
+            var (cypherQuery, columnDefinition) = NormalizeCypherQuery(validationQuery);
+            var sql = BuildCypherSql(graphName, cypherQuery, columnDefinition);
+            await using var command = new NpgsqlCommand(sql, connection)
+            {
+                CommandType = CommandType.Text
+            };
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                // Reading one row is enough to force AGE parse/planning/execution without scanning more than needed.
+            }
+
+            return (true, null);
+        }
+        catch (PostgresException pgEx)
+        {
+            var validationError = BuildPostgresValidationError(pgEx);
+            logger.LogWarning("Suggested Cypher validation failed: {ValidationError}", validationError);
+            return (false, validationError);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Suggested Cypher validation failed: {ValidationError}", ex.Message);
+            return (false, ex.Message);
+        }
+    }
+
     public async Task<GraphNodeDetailsResponse> GetNodeDetailsAsync(GraphNodeDetailsRequest request, CancellationToken cancellationToken)
     {
         if (!IsConfigured)
@@ -2805,6 +2855,33 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
             : string.Join(", ", columnNames.Select(name => $"{name}::text AS {name}"));
 
         return $"SELECT {selectList} FROM ag_catalog.cypher('{safeGraph}', ${tag}$ {cypherQuery} ${tag}$) AS ({columns});";
+    }
+
+    private static string ForceLimit(string cypherQuery, int limit)
+    {
+        var trimmed = cypherQuery.Trim();
+        if (Regex.IsMatch(trimmed, @"\bLIMIT\s+\d+\s*$", RegexOptions.IgnoreCase))
+        {
+            return Regex.Replace(trimmed, @"\bLIMIT\s+\d+\s*$", $"LIMIT {limit}", RegexOptions.IgnoreCase);
+        }
+
+        return $"{trimmed}\nLIMIT {limit}";
+    }
+
+    private static string BuildPostgresValidationError(PostgresException pgEx)
+    {
+        var parts = new List<string> { pgEx.MessageText };
+        if (!string.IsNullOrWhiteSpace(pgEx.SqlState))
+        {
+            parts.Add($"SqlState {pgEx.SqlState}");
+        }
+
+        if (pgEx.Position > 0)
+        {
+            parts.Add($"position {pgEx.Position}");
+        }
+
+        return string.Join("; ", parts);
     }
 
     private static List<string> ExtractColumnNames(string columnDefinition)

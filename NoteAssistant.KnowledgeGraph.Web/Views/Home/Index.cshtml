@@ -2999,32 +2999,40 @@
 
         async function assistQuery() {
             const prompt = document.getElementById('assistantPrompt').value.trim();
+            const assistButton = document.getElementById('assistBtn');
+            const originalButtonHtml = assistButton.innerHTML;
             if (!prompt) {
                 document.getElementById('assistExplanation').innerText = 'Enter a prompt to get a suggested query.';
                 return;
             }
 
-            let response;
             try {
-                response = await fetch(`${backendBaseUrl}/api/query/assist`, {
+                assistButton.disabled = true;
+                assistButton.classList.add('is-loading');
+                assistButton.innerHTML = '<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Suggesting...</span>';
+                const response = await fetch(`${backendBaseUrl}/api/query/assist`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ prompt })
                 });
+
+                let payload = null;
+                try { payload = await response.json(); } catch { payload = null; }
+                if (!response.ok) {
+                    document.getElementById('assistExplanation').innerText = (payload && payload.error) || 'Assistant failed.';
+                    return;
+                }
+
+                document.getElementById('queryInput').value = payload.suggestedCypher;
+                document.getElementById('assistExplanation').innerText = payload.explanation;
             } catch (err) {
                 document.getElementById('assistExplanation').innerText = `Assistant request failed: ${err.message}`;
                 return;
+            } finally {
+                assistButton.disabled = false;
+                assistButton.classList.remove('is-loading');
+                assistButton.innerHTML = originalButtonHtml;
             }
-
-            let payload = null;
-            try { payload = await response.json(); } catch { payload = null; }
-            if (!response.ok) {
-                document.getElementById('assistExplanation').innerText = (payload && payload.error) || 'Assistant failed.';
-                return;
-            }
-
-            document.getElementById('queryInput').value = payload.suggestedCypher;
-            document.getElementById('assistExplanation').innerText = payload.explanation;
         }
 
         async function runQuery() {

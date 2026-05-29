@@ -58,4 +58,27 @@ public sealed class QueryAssistantServiceTests
 
         Assert.Contains("LIMIT 25", response.SuggestedCypher, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void TryParseLlmResponse_ParsesStrictJson()
+    {
+        var parsed = QueryAssistantService.TryParseLlmResponse(
+            "{\"suggestedCypher\":\"MATCH (n) RETURN n LIMIT 10\",\"explanation\":\"Shows nodes.\"}",
+            out var response);
+
+        Assert.True(parsed);
+        Assert.Equal("MATCH (n) RETURN n LIMIT 10", response.SuggestedCypher);
+        Assert.Equal("Shows nodes.", response.Explanation);
+    }
+
+    [Fact]
+    public void TryParseLlmResponse_ParsesFencedJson()
+    {
+        var parsed = QueryAssistantService.TryParseLlmResponse(
+            "```json\n{\"suggestedCypher\":\"MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 50\",\"explanation\":\"Shows relationships.\"}\n```",
+            out var response);
+
+        Assert.True(parsed);
+        Assert.Contains("RETURN n, r, m", response.SuggestedCypher, StringComparison.OrdinalIgnoreCase);
+    }
 }

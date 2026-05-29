@@ -45,7 +45,7 @@ const state = {
   filters: { search: "", nodeTypes: [], edgeTypes: [], communities: [], minDegree: 0 },
   filterDefaultsInitialized: { nodeTypes: false, edgeTypes: false, communities: false },
   filterOptions: { nodeTypes: [], edgeTypes: [], communities: [] },
-  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, curvedEdges: true, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50, colorMode: "label", forceControls: { nodeScale: 65, spacing: 135, centerPull: 30, linkPull: 55 } },
+  settings: { showLabels: true, showEdgeLabels: true, nodeNamesInside: false, highlightNeighborhood: true, sizeMode: "degree", labelDensity: 50, colorMode: "label", forceControls: { nodeScale: 65, spacing: 135, centerPull: 30, linkPull: 55 } },
   currentLayout: "random",
   currentWorkerLayout: null,
   lastWorkerLayout: null,
@@ -89,7 +89,6 @@ const el = {
   nodeNamesInsideToggle: document.getElementById("kgNodeNamesInsideToggle"),
   labelDensitySlider: document.getElementById("kgLabelDensitySlider"),
   edgeLabelsToggle: document.getElementById("kgEdgeLabelsToggle"),
-  curvedEdgesToggle: document.getElementById("kgCurvedEdgesToggle"),
   neighborToggle: document.getElementById("kgNeighborToggle"),
   searchResults: document.getElementById("kgSearchResults"),
   layoutStatus: document.getElementById("kgLayoutStatus"),
@@ -157,11 +156,6 @@ if (el.labelDensitySlider) {
 }
 el.edgeLabelsToggle.addEventListener("change", () => {
   state.settings.showEdgeLabels = el.edgeLabelsToggle.checked;
-  updateRendererSettings();
-});
-el.curvedEdgesToggle.addEventListener("change", () => {
-  state.settings.curvedEdges = el.curvedEdgesToggle.checked;
-  updateEdgeShapeAttributes();
   updateRendererSettings();
 });
 el.neighborToggle.addEventListener("change", () => {
@@ -676,7 +670,7 @@ function buildSigmaSettings() {
 }
 
 function getEdgeType() {
-  return state.settings.curvedEdges ? "curvedArrow" : "arrow";
+  return "curvedArrow";
 }
 
 function updateEdgeShapeAttributes() {

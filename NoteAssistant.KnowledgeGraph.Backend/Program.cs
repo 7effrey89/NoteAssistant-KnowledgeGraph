@@ -1133,14 +1133,21 @@ app.MapPost("/api/entities/visual-suggestions", async (EntityVisualSuggestionReq
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
-app.MapPost("/api/query/assist", (QueryAssistantRequest request, QueryAssistantService assistant) =>
+app.MapPost("/api/query/assist", async (QueryAssistantRequest request, QueryAssistantService assistant, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Prompt))
     {
         return Results.BadRequest(new { error = "Prompt is required." });
     }
 
-    return Results.Ok(assistant.Suggest(request.Prompt));
+    try
+    {
+        return Results.Ok(await assistant.SuggestAsync(request.Prompt, cancellationToken));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapPost("/api/retrieval/hybrid", async (HybridRetrievalRequest request, IHybridRetrievalRunner runner, CancellationToken cancellationToken) =>

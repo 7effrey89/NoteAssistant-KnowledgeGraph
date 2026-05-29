@@ -700,7 +700,15 @@ body {
 }
 
 .assistant-prompt-group .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   justify-self: stretch;
+}
+
+.assistant-prompt-group .btn.is-loading {
+  cursor: wait;
 }
 
 .query-workbench-main {
