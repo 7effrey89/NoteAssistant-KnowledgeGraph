@@ -1121,6 +1121,12 @@ app.MapPost("/api/entity-visual-assets/description", async (UpdateEntityVisualAs
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapPost("/api/entity-visual-assets/delete", async (DeleteEntityVisualAssetRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
+{
+    var response = await repository.DeleteEntityVisualAssetAsync(request, cancellationToken);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/entities/visual-suggestions", async (EntityVisualSuggestionRequest request, AgeGraphRepository repository, CancellationToken cancellationToken) =>
 {
     var response = await repository.SuggestEntityVisualsAsync(request, cancellationToken);

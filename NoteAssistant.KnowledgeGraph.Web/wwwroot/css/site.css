@@ -1604,13 +1604,15 @@ body.kg-inspector-resizing {
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 8px;
   max-height: calc(100vh - 390px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .db-mgn-image-item {
   display: grid;
   gap: 6px;
   min-width: 0;
+  box-sizing: border-box;
   padding: 8px;
   border: 1px solid #dbe3ef;
   border-radius: 7px;
@@ -1714,6 +1716,7 @@ body.kg-inspector-resizing {
   gap: 6px;
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1732,15 +1735,39 @@ body.kg-inspector-resizing {
 .db-mgn-image-item label {
   display: grid;
   gap: 3px;
+  min-width: 0;
   color: #475569;
   font-size: 0.74rem;
   font-weight: 700;
+}
+
+.db-mgn-image-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.db-mgn-image-actions .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.db-mgn-image-actions .db-mgn-icon-btn {
+  flex: 0 0 30px;
 }
 
 .db-mgn-image-item textarea,
 .db-mgn-entity-main textarea {
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   resize: vertical;
   border: 1px solid #dbe3ef;
   border-radius: 6px;
@@ -1756,6 +1783,12 @@ body.kg-inspector-resizing {
   flex-wrap: wrap;
   gap: 6px;
   margin: 10px 0;
+}
+
+.db-mgn-tabs {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #dbe3ef;
 }
 
 .db-mgn-action-group {
@@ -1821,6 +1854,262 @@ body.kg-inspector-resizing {
 .db-mgn-suggestion {
   color: #1d4ed8 !important;
   font-weight: 650;
+}
+
+.db-mgn-entity-table {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.db-mgn-entity-table-header,
+.db-mgn-entity-row {
+  display: grid;
+  grid-template-columns: 34px 150px minmax(140px, 1fr) minmax(240px, 1.45fr) minmax(190px, 0.95fr);
+  gap: 0;
+  align-items: stretch;
+}
+
+.db-mgn-entity-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.db-mgn-entity-table-header > div,
+.db-mgn-entity-row > * {
+  min-width: 0;
+  padding: 8px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #eef2f7;
+}
+
+.db-mgn-entity-table-header > div:last-child,
+.db-mgn-entity-row > *:last-child {
+  border-right: 0;
+}
+
+.db-mgn-selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-mgn-selection-header input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.db-mgn-selection-dialog {
+  position: fixed;
+  width: min(360px, calc(100vw - 24px));
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+  color: #1f2937;
+}
+
+.db-mgn-selection-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.12);
+}
+
+.db-mgn-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.db-mgn-dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475569;
+  line-height: 1;
+}
+
+.db-mgn-dialog-close:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.db-mgn-entity-row {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+}
+
+.db-mgn-entity-row:hover {
+  background: #f8fbff;
+}
+
+.db-mgn-entity-preview {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  align-content: start;
+}
+
+.db-mgn-preview-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.db-mgn-entity-preview.has-suggestion .db-mgn-preview-frame {
+  width: 96px;
+  height: 96px;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.db-mgn-preview-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.db-mgn-preview-actions,
+.db-mgn-suggestion-actions {
+  display: flex;
+  gap: 5px;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+.db-mgn-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+}
+
+.db-mgn-icon-btn:hover {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.db-mgn-danger-btn {
+  color: #b91c1c;
+}
+
+.db-mgn-danger-btn:hover {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.db-mgn-icon-btn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.db-mgn-copilot-btn {
+  color: #1d4ed8;
+}
+
+.db-mgn-entity-name strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-mgn-entity-name em {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  font-style: italic;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-mgn-description-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
+}
+
+.db-mgn-url-cell {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.db-mgn-url-cell strong {
+  color: #334155;
+}
+
+.db-mgn-clear-btn {
+  display: inline-flex;
+  justify-content: center;
+  margin-top: 2px;
+  padding: 2px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.7rem;
+}
+
+.db-mgn-suggestion-note {
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
 }
 
 @media (max-width: 900px) {

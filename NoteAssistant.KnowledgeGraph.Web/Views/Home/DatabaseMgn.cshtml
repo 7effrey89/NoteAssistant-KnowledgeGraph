@@ -47,14 +47,19 @@
                 </div>
             </div>
             <div class="db-mgn-selected-image" id="selectedEntityImage">Select an uploaded image.</div>
-            <div class="db-mgn-action-group" aria-label="Selection actions">
-                <div class="db-mgn-action-title">Selection</div>
+            <dialog class="db-mgn-selection-dialog" id="entitySelectionDialog" aria-labelledby="entitySelectionDialogTitle">
+                <div class="db-mgn-dialog-header">
+                    <div class="db-mgn-action-title" id="entitySelectionDialogTitle">Selection</div>
+                    <form method="dialog">
+                        <button class="db-mgn-dialog-close" type="submit" aria-label="Close selection options">&times;</button>
+                    </form>
+                </div>
                 <div class="db-mgn-bulk-actions">
                     <button class="btn btn-outline-secondary btn-sm" id="selectVisibleEntitiesBtn" type="button">Select visible</button>
                     <button class="btn btn-outline-secondary btn-sm" id="deselectVisibleEntitiesBtn" type="button">Deselect visible</button>
                     <button class="btn btn-outline-secondary btn-sm" id="selectMissingVisualBtn" type="button">Select missing visual</button>
                 </div>
-            </div>
+            </dialog>
             <div class="db-mgn-action-group" aria-label="AI suggestion actions">
                 <div class="db-mgn-action-title">Entity Visual Agent</div>
                 <div class="db-mgn-ai-actions">

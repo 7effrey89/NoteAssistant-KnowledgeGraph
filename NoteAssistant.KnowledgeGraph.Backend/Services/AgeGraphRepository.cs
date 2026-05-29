@@ -684,6 +684,58 @@ public sealed class AgeGraphRepository(ILogger<AgeGraphRepository> logger, IFoun
         }
     }
 
+    public async Task<EntityVisualAssetsResponse> DeleteEntityVisualAssetAsync(DeleteEntityVisualAssetRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new EntityVisualAssetsResponse(false, "Database settings are not configured (ConnectionStrings:AgeDatabase or Database section).", []);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Url))
+        {
+            return new EntityVisualAssetsResponse(false, "Asset URL is required.", []);
+        }
+
+        try
+        {
+            await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+            await EnsureEntityVisualColumnsAsync(connection, cancellationToken);
+            await EnsureEntityVisualAssetTableAsync(connection, cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            var url = request.Url.Trim();
+
+            const string clearSql = """
+                                    UPDATE entities
+                                    SET image_url = CASE WHEN image_url = @url THEN NULL ELSE image_url END,
+                                        pictogram_url = CASE WHEN pictogram_url = @url THEN NULL ELSE pictogram_url END
+                                    WHERE image_url = @url OR pictogram_url = @url;
+                                    """;
+            await using (var clearCommand = new NpgsqlCommand(clearSql, connection, transaction))
+            {
+                clearCommand.Parameters.AddWithValue("url", url);
+                await clearCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            const string deleteSql = "DELETE FROM entity_visual_assets WHERE url = @url;";
+            await using (var deleteCommand = new NpgsqlCommand(deleteSql, connection, transaction))
+            {
+                deleteCommand.Parameters.AddWithValue("url", url);
+                await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            const string selectSql = "SELECT id, file_name, url, description, created_at, updated_at FROM entity_visual_assets ORDER BY file_name;";
+            await using var command = new NpgsqlCommand(selectSql, connection, transaction);
+            var assets = await ReadEntityVisualAssetsAsync(command, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new EntityVisualAssetsResponse(true, null, assets);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to delete entity visual asset.");
+            return new EntityVisualAssetsResponse(false, ex.Message, []);
+        }
+    }
+
     public async Task<EntityVisualSuggestionResponse> SuggestEntityVisualsAsync(EntityVisualSuggestionRequest request, CancellationToken cancellationToken)
     {
         if (!_foundry.IsConfigured)

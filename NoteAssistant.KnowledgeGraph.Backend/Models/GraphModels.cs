@@ -92,6 +92,8 @@ public sealed record UpsertEntityVisualAssetRequest(string FileName, string Url,
 
 public sealed record UpdateEntityVisualAssetDescriptionRequest(long AssetId, string? Description);
 
+public sealed record DeleteEntityVisualAssetRequest(string Url);
+
 public sealed record EntityVisualSuggestionRequest(string VisualKind, IReadOnlyList<long> EntityIds, int Parallelism = 1);
 
 public sealed record EntityVisualSuggestionDto(long EntityId, long AssetId, string Url, string Reason);

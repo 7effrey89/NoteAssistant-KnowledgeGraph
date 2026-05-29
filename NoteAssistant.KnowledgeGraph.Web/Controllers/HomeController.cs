@@ -1,10 +1,11 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using NoteAssistant.KnowledgeGraph.Web.Models;
 
 namespace NoteAssistant.KnowledgeGraph.Web.Controllers;
 
-public class HomeController(IConfiguration configuration) : Controller
+public class HomeController(IConfiguration configuration, IHttpClientFactory httpClientFactory) : Controller
 {
     private static readonly HashSet<string> AllowedEntityImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -102,6 +103,44 @@ public class HomeController(IConfiguration configuration) : Controller
         });
     }
 
+    [HttpPost]
+    public async Task<IActionResult> DeleteEntityImage([FromBody] DeleteEntityImageRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.Url))
+        {
+            return BadRequest(new { error = "File name and URL are required." });
+        }
+
+        var fileName = Path.GetFileName(request.FileName.Trim());
+        var extension = Path.GetExtension(fileName);
+        if (!AllowedEntityImageExtensions.Contains(extension))
+        {
+            return BadRequest(new { error = "Unsupported image type." });
+        }
+
+        var backendBaseUrl = configuration["Backend:BaseUrl"] ?? "http://localhost:5070";
+        using var httpClient = httpClientFactory.CreateClient();
+        var backendResponse = await httpClient.PostAsJsonAsync(
+            $"{backendBaseUrl.TrimEnd('/')}/api/entity-visual-assets/delete",
+            new { request.Url },
+            cancellationToken);
+        var backendPayload = await backendResponse.Content.ReadFromJsonAsync<object>(cancellationToken: cancellationToken);
+        if (!backendResponse.IsSuccessStatusCode)
+        {
+            return StatusCode((int)backendResponse.StatusCode, backendPayload ?? new { error = "Could not clear database references." });
+        }
+
+        var filePath = Path.Combine(GetEntityImageDirectory(), fileName);
+        var deleted = false;
+        if (System.IO.File.Exists(filePath))
+        {
+            System.IO.File.Delete(filePath);
+            deleted = true;
+        }
+
+        return Json(new { success = true, fileDeleted = deleted, backend = backendPayload });
+    }
+
     public IActionResult Privacy()
     {
         return View();
@@ -116,3 +155,5 @@ public class HomeController(IConfiguration configuration) : Controller
         return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
     }
 }
+
+public sealed record DeleteEntityImageRequest(string FileName, string Url);
